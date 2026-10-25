@@ -1,7 +1,7 @@
 # The `shoal` CLI
 
-`shoal` is the command-line client for Shoal. It ships with the engine (`pip install shoal` or
-`uv tool install ./engine`). Client commands talk to a server over the public API; `serve` and `worker` run one.
+`shoal` is the command-line client for Shoal. It ships with the engine: from a checkout, `uv tool install ./engine`
+or `pipx install ./engine` (it is not on PyPI yet). Client commands talk to a server over the public API; `serve` and `worker` run one.
 
 ## Connecting
 
