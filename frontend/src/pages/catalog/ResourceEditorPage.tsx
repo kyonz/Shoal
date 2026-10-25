@@ -416,7 +416,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
           <TabsTrigger value="yaml">
             <Code2 className="size-3.5" /> YAML
           </TabsTrigger>
-          {!isNew && !tenantScoped && (
+          {!isNew && (
             <TabsTrigger value="history">
               <History className="size-3.5" /> History
             </TabsTrigger>
@@ -498,7 +498,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
           {tab === "yaml" && <YamlTab kind={cfg.kind} draft={draft} schema={specSchema} ns={ns} isNew={isNew} readOnly={!canWrite} onChange={setDraft} />}
         </TabsContent>
 
-        {!isNew && !tenantScoped && (
+        {!isNew && (
           <TabsContent value="history" className="outline-none">
             {tab === "history" && (
               <HistoryTab
