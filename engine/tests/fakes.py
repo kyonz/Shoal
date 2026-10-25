@@ -21,6 +21,7 @@ class FakeGitHub:
     collaborators: dict[tuple[str, str], str] = field(default_factory=dict)
     labels: dict[tuple[str, int], list[str]] = field(default_factory=dict)
     statuses: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
+    check_runs: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)  # (repo, sha) -> check run
     assignees: dict[tuple[str, int], list[str]] = field(default_factory=dict)
     review_requests: dict[tuple[str, int], list[str]] = field(default_factory=dict)
     issues: list[dict[str, Any]] = field(default_factory=list)
@@ -44,7 +45,12 @@ class FakeGitHub:
         }
 
     def approve(self, repo: str, number: int, user: str = "reviewer") -> None:
-        self.reviews.setdefault((repo, number), []).append({"user": {"login": user}, "state": "APPROVED"})
+        head = self.pulls.get(repo, {}).get(number, {}).get("head", {}).get("sha")
+        self.reviews.setdefault((repo, number), []).append({"user": {"login": user}, "state": "APPROVED", "commit_id": head})
+
+    def push(self, repo: str, number: int, sha: str) -> None:
+        """New commits on the PR branch."""
+        self.pulls[repo][number]["head"]["sha"] = sha
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
@@ -93,11 +99,14 @@ class FakeGitHub:
         if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/pulls/(\d+)/merge", path):
             repo, number = m.group(1), int(m.group(2))
             pr = self.pulls[repo][number]
+            if body.get("sha") and body["sha"] != pr["head"]["sha"]:
+                return httpx.Response(409, json={"message": "Head branch was modified. Review and try the merge again."})
             pr.update(state="closed", merged=True)
             self.merges.append((repo, number, body.get("merge_method", "merge")))
             return httpx.Response(200, json={"merged": True, "sha": "merged-sha", "message": "Pull Request successfully merged"})
-        if re.fullmatch(r"/repos/[^/]+/[^/]+/commits/[^/]+/check-runs", path):
-            return httpx.Response(200, json={"total_count": 1, "check_runs": [{"status": "completed", "conclusion": "success"}]})
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/commits/([^/]+)/check-runs", path):
+            run = self.check_runs.get((m.group(1), m.group(2)), {"status": "completed", "conclusion": "success"})
+            return httpx.Response(200, json={"total_count": 1, "check_runs": [run]})
         if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/commits/([^/]+)/status", path):
             statuses = list(reversed(self.statuses.get((m.group(1), m.group(2)), [])))
             return httpx.Response(200, json={"state": "pending", "total_count": 0, "statuses": statuses})
