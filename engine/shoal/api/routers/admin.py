@@ -43,6 +43,38 @@ from shoal.store import tables as t
 router = APIRouter(prefix="/v1")
 
 
+# --------------------------------------------------------------------------- holding what you hand out
+
+
+async def _require_holds(ctx: Ctx, patterns: Any, namespace: str | None, refusal: str) -> None:
+    """Nobody can hand out permissions they do not hold themselves (where they would apply)."""
+    if ctx.principal.is_system_admin:
+        return
+    for perm in ALL_PERMISSIONS:
+        if granted(patterns, perm) and (namespace is None or perm not in TENANT_PERMISSIONS):
+            if not await ctx.engine.authz.allowed(ctx.principal, perm, namespace):
+                raise Forbidden(f"{refusal}: it includes '{perm}', which you do not hold")
+
+
+async def _require_holds_bindings(ctx: Ctx, bindings: Any, refusal: str) -> None:
+    roles = {r.name: r for r in await ctx.engine.directory.list_roles(ctx.tenant_id)}
+    for binding in bindings:
+        if (role := roles.get(binding.role)) is not None:
+            await _require_holds(ctx, role.permissions, binding.namespace, refusal)
+
+
+async def _require_outranks(ctx: Ctx, user: t.User, refusal: str) -> None:
+    """Managing someone (deactivating, deleting, changing their email, minting their keys) is
+    acting as them, so it needs every permission they hold."""
+    await _require_holds_bindings(ctx, await ctx.engine.directory.bindings_for(ctx.tenant_id, user.id), refusal)
+
+
+async def _require_group_change(ctx: Ctx, group_id: str) -> None:
+    """Changing who is in a group (or what it is called, which OIDC groups claims match) grants its roles."""
+    bindings = await ctx.engine.directory.list_bindings(ctx.tenant_id, subject_id=group_id)
+    await _require_holds_bindings(ctx, bindings, "you cannot change this group's members")
+
+
 # --------------------------------------------------------------------------- namespaces
 
 
@@ -140,6 +172,9 @@ async def get_user(user_id: str, ctx: CtxDep) -> Any:
 async def update_user(user_id: str, body: UserPatch, ctx: CtxDep) -> Any:
     await ctx.require("users:manage")
     values = body.model_dump(exclude_unset=True)
+    if values.get("active") is False and user_id == ctx.principal.user_id:
+        raise InvalidRequest("you cannot deactivate yourself")
+    await _require_outranks(ctx, await ctx.engine.directory.get_user(ctx.tenant_id, user_id), "you cannot manage this user")
     user = await ctx.engine.directory.update_user(ctx.tenant_id, user_id, **values)
     await ctx.audit("user.updated", user.username, changes=values)
     return await _user_out(ctx, user)
@@ -150,6 +185,7 @@ async def delete_user(user_id: str, ctx: CtxDep) -> None:
     await ctx.require("users:manage")
     if user_id == ctx.principal.user_id:
         raise InvalidRequest("you cannot delete yourself")
+    await _require_outranks(ctx, await ctx.engine.directory.get_user(ctx.tenant_id, user_id), "you cannot manage this user")
     await ctx.engine.directory.delete_user(ctx.tenant_id, user_id)
     await ctx.audit("user.deleted", user_id)
 
@@ -182,6 +218,7 @@ async def put_service_account(name: str, body: ServiceAccountIn, ctx: CtxDep, re
         await ctx.audit("service_account.created", name)
         response.status_code = 201
     else:
+        await _require_outranks(ctx, user, "you cannot manage this service account")
         user = await d.update_user(ctx.tenant_id, user.id, display_name=body.display_name or name, attributes=attributes)
     return _sa_out(user)
 
@@ -201,6 +238,7 @@ async def delete_service_account(name: str, ctx: CtxDep) -> None:
     user = await ctx.engine.directory.find_user(ctx.tenant_id, username=name, kind="service")
     if user is None:
         raise NotFound(f"service account '{name}' not found")
+    await _require_outranks(ctx, user, "you cannot manage this service account")
     await ctx.engine.directory.delete_user(ctx.tenant_id, user.id)
     await ctx.audit("service_account.deleted", name)
 
@@ -241,6 +279,7 @@ async def get_group(group_id: str, ctx: CtxDep) -> Any:
 @router.patch("/groups/{group_id}", tags=["groups"], response_model=GroupOut)
 async def update_group(group_id: str, body: GroupPatch, ctx: CtxDep) -> Any:
     await ctx.require("users:manage")
+    await _require_group_change(ctx, group_id)
     group = await ctx.engine.directory.update_group(ctx.tenant_id, group_id, **body.model_dump(exclude_unset=True))
     return await _group_out(ctx, group)
 
@@ -248,6 +287,7 @@ async def update_group(group_id: str, body: GroupPatch, ctx: CtxDep) -> Any:
 @router.put("/groups/{group_id}/members", tags=["groups"], response_model=GroupOut)
 async def set_group_members(group_id: str, body: GroupMembersIn, ctx: CtxDep) -> Any:
     await ctx.require("users:manage")
+    await _require_group_change(ctx, group_id)
     for user_id in body.members:
         await ctx.engine.directory.get_user(ctx.tenant_id, user_id)
     await ctx.engine.directory.set_group_members(ctx.tenant_id, group_id, body.members)
@@ -258,6 +298,7 @@ async def set_group_members(group_id: str, body: GroupMembersIn, ctx: CtxDep) ->
 @router.delete("/groups/{group_id}", status_code=204, tags=["groups"])
 async def delete_group(group_id: str, ctx: CtxDep) -> None:
     await ctx.require("users:manage")
+    await _require_group_change(ctx, group_id)
     await ctx.engine.directory.delete_group(ctx.tenant_id, group_id)
     await ctx.audit("group.deleted", group_id)
 
@@ -289,6 +330,7 @@ async def put_role(name: str, body: RoleIn, ctx: CtxDep, response: Response) -> 
         await ctx.engine.directory.get_role(ctx.tenant_id, name)
     except NotFound:
         response.status_code = 201
+    await _require_holds(ctx, body.permissions, None, f"you cannot give role '{name}' these permissions")
     role = await ctx.engine.directory.put_role(ctx.tenant_id, name, body.permissions, body.description)
     await ctx.audit("role.updated", name, permissions=body.permissions)
     return _role_out(role)
@@ -314,12 +356,7 @@ async def _can_grant(ctx: Ctx, role_name: str, namespace: str | None) -> None:
     else:
         await ctx.namespace(namespace, "members:manage")
     role = await ctx.engine.directory.get_role(ctx.tenant_id, role_name)
-    if ctx.principal.is_system_admin:
-        return
-    for perm in ALL_PERMISSIONS:
-        if granted(role.permissions, perm) and (namespace is None or perm not in TENANT_PERMISSIONS):
-            if not await ctx.engine.authz.allowed(ctx.principal, perm, namespace):
-                raise Forbidden(f"you cannot grant '{role_name}': it includes '{perm}', which you do not hold")
+    await _require_holds(ctx, role.permissions, namespace, f"you cannot grant '{role_name}'")
 
 
 @router.get("/role-bindings", tags=["roles"], response_model=list[RoleBindingOut])
@@ -391,6 +428,11 @@ async def put_oidc(name: str, body: OIDCProviderIn, ctx: CtxDep, response: Respo
     except NotFound:
         response.status_code = 201
     values = body.model_dump(exclude={"client_secret"})
+    if body.default_role:  # everyone who signs up gets it: the same as granting it
+        role = await ctx.engine.directory.get_role(ctx.tenant_id, body.default_role)
+        if body.default_namespace:
+            await ctx.engine.store.get_namespace(ctx.tenant_id, body.default_namespace)
+        await _require_holds(ctx, role.permissions, body.default_namespace, f"you cannot make '{body.default_role}' the default role")
     secret = body.client_secret if "client_secret" in body.model_fields_set else None
     row = await ctx.engine.oidc.configure(ctx.tenant_id, name, client_secret=secret, **values)
     await ctx.audit("oidc_provider.updated", name)
@@ -431,6 +473,7 @@ async def create_api_key(body: ApiKeyIn, ctx: CtxDep) -> Any:
         sa = await ctx.engine.directory.find_user(ctx.tenant_id, username=body.service_account, kind="service")
         if sa is None:
             raise NotFound(f"service account '{body.service_account}' not found")
+        await _require_outranks(ctx, sa, f"you cannot create keys for '{body.service_account}'")
         owner_id = sa.id
     if owner_id is None:
         raise InvalidRequest("the system admin token cannot own API keys; set 'service_account'")
