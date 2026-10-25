@@ -16,6 +16,12 @@ name: shoal
 
 x-shoal: &shoal
   image: ${SHOAL_IMAGE:-shoal:local}
+  # The API and workers share one image. Both declare the build so compose
+  # builds it locally instead of trying to pull shoal:local from a registry
+  # (the second build is a cache hit).
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
   restart: unless-stopped
   environment:
     SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@postgres:5432/shoal
@@ -54,9 +60,6 @@ services:
 
   api:
     <<: *shoal
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
     command: ["serve", "--no-worker"]
     ports:
       - "${SHOAL_PORT:-8080}:8080"

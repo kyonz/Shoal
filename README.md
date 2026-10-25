@@ -61,10 +61,19 @@ and runs those workflows durably, whether a run takes ten seconds or waits a wee
 Runs Postgres, the API server (with the web UI) and a worker.
 
 ```sh
-git clone https://github.com/kyonz/ai-workflow-manager.git shoal && cd shoal
+git clone https://github.com/kyonz/shoal.git && cd shoal
 cp deploy/.env.example deploy/.env       # then set a real value for every secret in it
 docker compose -f deploy/docker-compose.yaml --env-file deploy/.env up -d --build
-export $(grep ^SHOAL_ADMIN_TOKEN= deploy/.env)   # for the quickstart below
+```
+
+Load the admin token into your shell for the quickstart below:
+
+```sh
+export $(grep ^SHOAL_ADMIN_TOKEN= deploy/.env)                       # bash / zsh
+```
+
+```powershell
+$env:SHOAL_ADMIN_TOKEN = ((Select-String '^SHOAL_ADMIN_TOKEN=' deploy/.env).Line -split '=', 2)[1]   # PowerShell
 ```
 
 Open <http://localhost:8080>. To add workers, run
@@ -151,6 +160,8 @@ tenant's first API key:
 shoal --server http://localhost:8080 --token "$SHOAL_ADMIN_TOKEN" tenants create acme
 shoal login http://localhost:8080 --token <api-key>
 ```
+
+In PowerShell, pass the token as `--token $env:SHOAL_ADMIN_TOKEN`.
 
 You can now sign in to the web UI with the same key (**Use an API key instead**), or set up single
 sign-on under **Admin console › Sign-in & SCIM**.

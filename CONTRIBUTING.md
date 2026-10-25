@@ -5,7 +5,7 @@ environment and get a pull request merged.
 
 ## Ways to contribute
 
-- **Report a bug** or **request a feature** with the [issue templates](https://github.com/kyonz/ai-workflow-manager/issues/new/choose).
+- **Report a bug** or **request a feature** with the [issue templates](https://github.com/kyonz/shoal/issues/new/choose).
 - **Improve the docs.** Fixes to `docs/`, examples and READMEs are always welcome.
 - **Write an integration** with the SDK or the remote protocol ([guide](docs/integrations.md)). Many
   integrations can live in their own repository; open an issue first if you want one in core.

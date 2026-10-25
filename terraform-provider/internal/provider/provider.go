@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/kyonz/ai-workflow-manager/terraform-provider/internal/client"
+	"github.com/kyonz/shoal/terraform-provider/internal/client"
 )
 
 // DefaultNamespace is used for namespaced resources when neither the
@@ -50,7 +50,7 @@ func (p *shoalProvider) Metadata(_ context.Context, _ provider.MetadataRequest, 
 
 func (p *shoalProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manage [Shoal](https://github.com/kyonz/ai-workflow-manager) workflows, agents, integrations and access as code.",
+		MarkdownDescription: "Manage [Shoal](https://github.com/kyonz/shoal) workflows, agents, integrations and access as code.",
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
 				Optional:            true,

@@ -8,7 +8,7 @@ security reports seriously and appreciate responsible disclosure.
 **Please do not open a public issue, discussion or pull request for a security problem.**
 
 Report it privately through GitHub:
-[**Report a vulnerability**](https://github.com/kyonz/ai-workflow-manager/security/advisories/new).
+[**Report a vulnerability**](https://github.com/kyonz/shoal/security/advisories/new).
 
 Include as much as you can:
 

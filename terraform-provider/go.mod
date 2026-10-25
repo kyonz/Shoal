@@ -1,4 +1,4 @@
-module github.com/kyonz/ai-workflow-manager/terraform-provider
+module github.com/kyonz/shoal/terraform-provider
 
 go 1.25.8
 
