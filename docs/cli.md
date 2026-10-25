@@ -77,6 +77,7 @@ shoal campaigns get cmp_01...                                     # status and p
 shoal campaigns pause|resume|cancel|retry cmp_01...
 shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme --dry-run
 shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme
+shoal blueprints install-defaults --dry-run    # add Shoal's bundled blueprints (tenants created before they shipped)
 ```
 
 ## Secrets
@@ -128,6 +129,13 @@ Sources themselves are tenant-wide resources: `shoal apply` a `SkillSource` and
 SDK template (see [integrations.md](integrations.md)), and
 `shoal integrations check https://svc.internal --token $SHOAL_INTEGRATION_TOKEN` runs the contract
 checks against a running remote integration service in any language.
+
+`shoal integrations register NAME --url URL [--token-secret SECRET]` (a remote service) or
+`--package PACKAGE` (an installed one) registers an integration for your organisation; Shoal pulls
+its manifest so it can be connected like a built-in. `--scope org|namespace` narrows where its
+connections may live and `--allow-namespace NS` limits which namespaces see it (both repeatable).
+`shoal integrations list` shows what the current namespace can connect, and
+`shoal integrations refresh NAME` pulls a registered integration's manifest again.
 
 ## Running the server
 

@@ -5,6 +5,7 @@ import { agentExtension, cloudIdentityExtension, gatewayExtension, modelPolicyEx
 import { evalExtension } from "./evals/EvalExtension";
 import { evalPlatformExtension } from "./evals/Platforms";
 import { blueprintExtension } from "./blueprints/blueprintExtension";
+import { customIntegrationExtension } from "./customIntegrations";
 
 const EXT = {
   agents: agentExtension,
@@ -17,6 +18,7 @@ const EXT = {
   blueprints: blueprintExtension,
   "skill-sources": {},
   "eval-platforms": evalPlatformExtension,
+  "custom-integrations": customIntegrationExtension,
 };
 
 export type CatalogPlural = keyof typeof EXT;

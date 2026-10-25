@@ -276,12 +276,33 @@ class WaitStep(StepBase):
         return self
 
 
+class ApprovalNotify(Model):
+    """Also ask for the decision through an integration (e.g. Slack buttons); answers resolve the step."""
+
+    integration: str | None = Field(None, description="Integration key, e.g. 'slack' (or name a `connection`).")
+    connection: str | None = Field(None, description="Connection to use; defaults to the workflow's for the integration.")
+    to: str | None = Field(None, description="Where to ask: a channel ('#deploys', 'C0123') or a person ('U0123', an email). "
+                                             "Expressions allowed.")
+    with_: dict[str, Any] = Field(default_factory=dict, alias="with", description="Integration-specific options.")
+
+    @model_validator(mode="after")
+    def _target(self) -> ApprovalNotify:
+        if not (self.integration or self.connection):
+            raise ValueError("notify entries need an `integration` or a `connection`")
+        return self
+
+
 class ApprovalStep(StepBase):
-    """Human-in-the-loop gate resolved through the API or UI."""
+    """Human-in-the-loop gate resolved through the API, the UI or an integration (`notify`)."""
 
     type: Literal["approval"] = "approval"  # type: ignore[misc]
     message: str
-    approvers: list[str] = Field(default_factory=list)
+    approvers: list[str] = Field(
+        default_factory=list,
+        description="Who may decide, besides needing 'runs:approve': identity names, usernames, emails or "
+        "'group:<name>'. Empty: anyone with 'runs:approve'.",
+    )
+    notify: list[ApprovalNotify] = Field(default_factory=list, description="Ask through integrations too (Slack).")
     max_wait: Duration | None = None
     on_timeout: Literal["reject", "approve"] = "reject"
     on_reject: Literal["fail", "continue"] = Field(
@@ -563,6 +584,10 @@ class ConnectionSpec(Model):
         description="Connection fields each person supplies (default: the fields in `secrets`).",
     )
     oauth: OAuthSpec | None = Field(None, description="Lets people connect with OAuth instead of pasting a token.")
+    namespaces: list[str] = Field(
+        default_factory=list,
+        description="Organisation connections only (stored in `shared`): the namespaces that may use it (empty: all).",
+    )
 
     @model_validator(mode="after")
     def _personal_fields(self) -> ConnectionSpec:
@@ -582,6 +607,14 @@ class TriageSpec(Model):
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
 
 
+class TriggerRateLimit(Model):
+    """Fire at most ``max`` times per ``per``, overall or per ``key`` (e.g. per Slack user or channel)."""
+
+    max: int = Field(ge=1)
+    per: Duration
+    key: str | None = Field(None, description="Expression over `event`, e.g. '{{ event.user }}'; omitted, the whole trigger.")
+
+
 class TriggerSpec(Model):
     description: str | None = None
     workflow: str | None = Field(None, description="Workflow to start.")
@@ -597,6 +630,12 @@ class TriggerSpec(Model):
         "allow", description="'skip' does not fire while a run started by this trigger is still active."
     )
     filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
+    match: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured filters the connection's integration understands (Slack: channels, mentioned, "
+        "contains, regex, users, groups, threads, ...). See the integration's `trigger_filter_schema`.",
+    )
+    rate_limit: TriggerRateLimit | None = None
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
     triage: TriageSpec | None = None
@@ -848,6 +887,48 @@ class SkillSourceSpec(Model):
     def _no_clear_text_credentials(self) -> SkillSourceSpec:
         if bad := credential_fields(self.config):
             raise ValueError(f"config {bad} look like credentials; map them to secrets in `shared` under secrets")
+        return self
+
+
+ConnectionScope = Literal["org", "namespace"]
+
+
+class CustomIntegrationSpec(Model):
+    """An integration the organisation registers itself: a remote service speaking the Shoal
+    integration protocol (``url``) or an installed Python package (``package``). Shoal pulls its
+    manifest (connection settings, auth, actions, resources, events) so connecting to it works like
+    a built-in. Tenant-wide and managed by tenant admins; the token is a secret in ``shared``."""
+
+    source: Literal["remote", "package"] = Field(description="remote: an HTTP service; package: an installed Python package.")
+    title: str | None = Field(None, description="Display name (defaults to the manifest's).")
+    description: str | None = None
+    url: str | None = Field(None, description="remote: base URL of the integration service (https).")
+    token_secret: str | None = Field(None, description="remote: secret in `shared` holding the bearer token Shoal presents.")
+    timeout_seconds: float = Field(30.0, gt=0, le=300)
+    allow_insecure: bool = Field(False, description="remote: permit plain http to a non-loopback host.")
+    package: str | None = Field(
+        None,
+        description="package: the installed plugin (entry point name in `shoal.integrations`), its distribution "
+        "(e.g. shoal-linear), or `module:Class` when the server allows importing integration modules.",
+    )
+    connection_scopes: list[ConnectionScope] = Field(
+        default_factory=list,
+        description="Where connections may live: `org` (shared to namespaces) and/or `namespace` (one team's). "
+        "Empty: whatever the integration declares; otherwise narrows it.",
+    )
+    namespaces: list[str] = Field(default_factory=list, description="Namespaces that may see and connect it (empty: all).")
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _source_fields(self) -> CustomIntegrationSpec:
+        if self.source == "remote" and not self.url:
+            raise ValueError("source: remote needs `url`")
+        if self.source == "package" and not self.package:
+            raise ValueError("source: package needs `package`")
+        if self.source == "remote" and self.package:
+            raise ValueError("`package` only applies to source: package")
+        if self.source == "package" and (self.url or self.token_secret):
+            raise ValueError("`url` and `token_secret` only apply to source: remote")
         return self
 
 
@@ -1129,6 +1210,12 @@ class SkillSource(ResourceBase):
     plural: ClassVar[str] = "skill-sources"
 
 
+class CustomIntegration(ResourceBase):
+    kind: Literal["CustomIntegration"] = "CustomIntegration"
+    spec: CustomIntegrationSpec
+    plural: ClassVar[str] = "custom-integrations"
+
+
 AnyResource = Annotated[
     Workflow
     | Agent
@@ -1144,7 +1231,8 @@ AnyResource = Annotated[
     | Blueprint
     | Eval
     | SkillSource
-    | EvalPlatform,
+    | EvalPlatform
+    | CustomIntegration,
     Field(discriminator="kind"),
 ]
 
@@ -1152,7 +1240,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform, CustomIntegration,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

@@ -61,6 +61,11 @@ class Settings(BaseSettings):
         default_factory=list,
         description="Emails that become instance admins when they sign in (bootstrap; manage the rest in the admin console).",
     )
+    default_blueprints: bool = Field(
+        True,
+        description="Put the blueprints that ship with Shoal (GitHub PR review, Jira bugfix, Slack bot and approvals, "
+        "AWS report, quality eval, ...) in every new tenant's catalogue.",
+    )
     public_url: str = Field("http://localhost:8080", description="External base URL (webhook URLs, A2A cards).")
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     static_dir: str | None = Field(None, description="Serve the built frontend from this directory.")
@@ -68,6 +73,11 @@ class Settings(BaseSettings):
         default_factory=list,
         description="Operator-wide remote integrations (open integrations protocol) registered at start-up, "
         'e.g. SHOAL_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
+    )
+    integration_allow_imports: bool = Field(
+        False,
+        description="Let tenant admins register custom integrations as `module:Class` import paths. Off by default: "
+        "they can still register installed packages (shoal.integrations entry points) and remote services.",
     )
     integration_blocked_networks: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BLOCKED_NETWORKS),

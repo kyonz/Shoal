@@ -1,0 +1,146 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: github-pr-review
+  description: An agent reviews every pull request and records a merge check
+spec:
+  title: GitHub pull request review
+  summary: When a pull request is opened or updated, an agent reads the change, comments with a review and sets the
+    shoal/merge-check status to pass or fail.
+  version: 1.0.0
+  status: featured
+  author: Shoal
+  tags:
+  - github
+  - review
+  - agent
+  categories:
+  - engineering
+  readme: |
+    1. Adopt with a GitHub connection that can read the repositories and comment on pull requests.
+    2. Point a GitHub webhook (Pull requests) at the connection's webhook URL, for a repository or the whole org.
+    3. Open a pull request. The agent checks out the head, reviews the diff against the base, comments with what it
+       found and sets the `shoal/merge-check` commit status.
+
+    Draft pull requests are skipped until they are marked ready. Each new push is reviewed again.
+    Make the check required in branch protection (or turn on `require_merge_check` on the connection) to block merges
+    the reviewer fails. Edit the agent's instructions to teach it your conventions.
+  params:
+    github:
+      type: connection
+      integration: github
+      description: GitHub connection used to read the change, comment and set the status.
+    focus:
+      type: string
+      default: Correctness bugs, security problems, missing tests and breaking changes. Ignore style nits.
+      description: What the reviewer should look for.
+    model:
+      type: string
+      default: claude-opus-5-5
+      description: Model the reviewer uses.
+  resources:
+  - kind: Agent
+    metadata:
+      name: '{{ prefix }}pr-reviewer'
+    spec:
+      description: Reviews a pull request and decides whether it is safe to merge.
+      provider: anthropic
+      model: '{{ params.model }}'
+      instructions: |
+        You are a careful senior reviewer. Read the whole change and enough of the surrounding code to understand it.
+        Report only problems you can point to in the diff, each with the file and line. Do not push commits.
+
+        Focus: {{ params.focus }}
+      tools:
+      - shell
+      - read_file
+      - list_files
+      credentials:
+      - github
+      limits:
+        max_turns: 60
+        timeout: 30m
+        budget_usd: 5
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}pr-review'
+      description: Review a pull request, comment on it and set the merge check.
+    spec:
+      inputs:
+        repo:
+          type: string
+          description: owner/name of the repository
+        number:
+          type: integer
+          description: Pull request number
+      connections:
+        github: '{{ params.github }}'
+      defaults:
+        agent: '{{ prefix }}pr-reviewer'
+      steps:
+      - id: pr
+        type: action
+        action: github.get_pull_request
+        with:
+          repo: '{{ inputs.repo }}'
+          number: '{{ inputs.number }}'
+      - id: review
+        type: agent
+        needs:
+        - pr
+        prompt: |
+          Review pull request #{{ inputs.number }} in https://github.com/{{ inputs.repo }} ({{ steps.pr.output.url }}).
+
+          Clone the repository, fetch `pull/{{ inputs.number }}/head` and check out commit {{ steps.pr.output.head_sha }}.
+          Diff it against the merge base with the base branch and review the change.
+
+          Set `blocking` to true only for problems that should stop the merge.
+        outputs:
+          blocking:
+            type: boolean
+            description: True when a problem should stop the merge.
+          headline:
+            type: string
+            description: One line verdict, under 140 characters.
+          review:
+            type: string
+            description: The review in GitHub markdown, with file:line references.
+      - id: comment
+        type: action
+        action: github.add_comment
+        with:
+          repo: '{{ inputs.repo }}'
+          number: '{{ inputs.number }}'
+          body: |
+            **Shoal review:** {{ steps.review.output.headline }}
+
+            {{ steps.review.output.review }}
+
+            <sub>Run: {{ run.url }}</sub>
+      - id: check
+        type: action
+        needs:
+        - review
+        action: github.set_merge_check
+        with:
+          repo: '{{ inputs.repo }}'
+          number: '{{ inputs.number }}'
+          verdict: '{{ ''fail'' if steps.review.output.blocking else ''pass'' }}'
+          summary: '{{ steps.review.output.headline[:140] }}'
+          details_url: '{{ run.url }}'
+      outputs:
+        blocking: '{{ steps.review.output.blocking }}'
+        headline: '{{ steps.review.output.headline }}'
+  - kind: Trigger
+    metadata:
+      name: '{{ prefix }}pr-review'
+    spec:
+      workflow: '{{ prefix }}pr-review'
+      connection: '{{ params.github }}'
+      event: pull_request.*
+      filter: '{{ event.action in [''opened'', ''reopened'', ''synchronize'', ''ready_for_review''] and not event.pull_request.draft
+        }}'
+      inputs:
+        repo: '{{ event.repo }}'
+        number: '{{ event.number }}'
+      dedupe_key: '{{ event.repo }}#{{ event.number }}@{{ event.pull_request.head.sha }}'
