@@ -3471,6 +3471,11 @@ export interface components {
              * @description The UI route the user is on, for context.
              */
             page?: string | null;
+            /**
+             * Context
+             * @description What the user sees that the API can't show, e.g. a workflow open in the builder with unsaved edits.
+             */
+            context?: string | null;
         };
         /** ChatMessage */
         ChatMessage: {
@@ -3975,7 +3980,7 @@ export interface components {
             tenant: string;
             /**
              * Status
-             * @description pending (waiting for enrollment), active or revoked.
+             * @description pending (waiting for enrollment), active, revoked (by the hub) or left (by the member).
              */
             status: string;
             /** Connected */

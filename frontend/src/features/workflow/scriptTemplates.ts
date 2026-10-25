@@ -23,15 +23,18 @@ const items = inputs.items ?? [];
 
 setOutput("count", items.length);
 `,
-  shell: `# Scalar inputs arrive as $SHOAL_INPUT_<NAME>; all inputs as JSON in $SHOAL_INPUTS.
+  shell: `# Scalar inputs arrive as $SHOAL_INPUT_<NAME> (an input "text" is $SHOAL_INPUT_TEXT);
+# all inputs as JSON in the file named by $SHOAL_INPUTS.
 # Write a JSON object of outputs to $SHOAL_OUTPUTS.
-count=$(wc -l < "$SHOAL_INPUTS")
+count=$(printf '%s' "\${SHOAL_INPUT_TEXT:-}" | wc -w | tr -d ' ')
 printf '{"count": %s}' "$count" > "$SHOAL_OUTPUTS"
 `,
   bash: `set -euo pipefail
-# Scalar inputs arrive as $SHOAL_INPUT_<NAME>; all inputs as JSON in $SHOAL_INPUTS.
+# Scalar inputs arrive as $SHOAL_INPUT_<NAME> (an input "text" is $SHOAL_INPUT_TEXT);
+# all inputs as JSON in the file named by $SHOAL_INPUTS.
 # Write a JSON object of outputs to $SHOAL_OUTPUTS.
-printf '{"count": %s}' 0 > "$SHOAL_OUTPUTS"
+words=(\${SHOAL_INPUT_TEXT:-})
+printf '{"count": %s}' "\${#words[@]}" > "$SHOAL_OUTPUTS"
 `,
 };
 

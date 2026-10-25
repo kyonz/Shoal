@@ -377,7 +377,8 @@ async def test_blueprint_adoption_lifecycle(admin, api):
     r = await admin.post(adopt, json={"params": {"team": "a"}, "prefix": "z"})
     assert r.status_code == 403
 
-    assert (await admin.delete(url)).status_code == 204
+    gone = await admin.delete(url)
+    assert gone.status_code == 200 and gone.json() == {"removed": [{"kind": "Workflow", "name": "x-greet"}], "kept": []}
     assert (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).status_code == 404
     assert (await admin.get(url)).status_code == 404
     assert any(e["action"] == "blueprint.adopted" for e in (await admin.get("/v1/audit")).json()["items"])
@@ -430,6 +431,44 @@ async def test_blueprint_upgrade_edge_cases(engine, admin, api):
     assert (await admin.get("/v1/namespaces/team-a/workflows/c-greet")).status_code == 404
     r = await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "c"}, "prefix": "c"})
     assert r.status_code == 201, r.text
+
+    # removing reports what it left alone: a resource someone relabelled, and one already deleted
+    wave = (await admin.get("/v1/namespaces/team-a/workflows/c-wave")).json()
+    assert (await admin.put("/v1/namespaces/team-a/workflows/c-wave", json={"spec": wave["spec"]})).status_code == 200
+    assert (await admin.delete("/v1/namespaces/team-a/workflows/c-greet")).status_code == 204
+    gone = await admin.delete(f"/v1/namespaces/team-a/blueprint-adoptions/{r.json()['adoption']['id']}")
+    assert gone.status_code == 200 and gone.json()["removed"] == []
+    assert [(k["name"], k["reason"].split()[0]) for k in gone.json()["kept"]] == [("c-greet", "already"), ("c-wave", "no")]
+    assert (await admin.get("/v1/namespaces/team-a/workflows/c-wave")).status_code == 200
+
+
+async def test_adoption_permissions_follow_rendered_kinds_and_removals(admin, api):
+    assert (await admin.put("/v1/namespaces/team-a", json={})).status_code == 201
+    perms = ["blueprints:read", "blueprints:adopt", "workflows:read", "workflows:write", "skills:read", "skills:write"]
+    assert (await admin.put("/v1/roles/adopter", json={"permissions": perms})).status_code == 201
+    headers = {"Authorization": f"Bearer {await _key_for(admin, 'adopter', 'adopter', 'team-a')}"}
+
+    # the kind is a parameter: permissions are checked on what renders, not on the template
+    helper = {"spec": {"title": "Helper", "summary": "A skill or an agent", "status": "published",
+                       "params": {"kind": {"type": "choice", "options": ["Skill", "Agent"], "default": "Skill"}},
+                       "resources": [{"kind": "{{ params.kind }}", "metadata": {"name": "{{ prefix }}helper"},
+                                      "spec": {"description": "Helps", "instructions": "Help."}}]}}
+    assert (await admin.put("/v1/blueprints/helper", json=helper)).status_code == 201
+    adopt = "/v1/namespaces/team-a/blueprints/helper/adopt"
+    r = await api.post(adopt, json={"params": {"kind": "Agent"}, "dry_run": True}, headers=headers)
+    assert r.status_code == 403, r.text
+    assert (await api.post(adopt, json={"params": {}}, headers=headers)).status_code == 201
+
+    # an upgrade that drops a workflow needs workflows:delete
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 201
+    r = await api.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "a"}}, headers=headers)
+    assert r.status_code == 201, r.text
+    url = f"/v1/namespaces/team-a/blueprint-adoptions/{r.json()['adoption']['id']}"
+    v2 = json.loads(json.dumps(GREETER))
+    v2["spec"].update(version="2.0.0", resources=GREETER["spec"]["resources"][:1])
+    assert (await admin.put("/v1/blueprints/greeter", json=v2)).status_code == 200
+    assert (await api.put(url, json={"dry_run": True}, headers=headers)).status_code == 403
+    assert (await admin.put(url, json={})).status_code == 200
 
 
 async def test_featuring_a_blueprint_needs_feature_on_every_write_path(admin, api):
@@ -565,3 +604,13 @@ async def test_rerun_keeps_the_trigger_context(admin, api):
     rerun = (await admin.post(f"/v1/runs/{fired['run_id']}/rerun")).json()
     await engine.run_until_idle()
     assert (await admin.get(f"/v1/runs/{rerun['id']}")).json()["outputs"] == {"key": "PROJ-1"}
+
+
+async def test_tenant_wide_versions_can_be_read_one_at_a_time(admin):
+    url = "/v1/identities/ada"
+    assert (await admin.put(url, json={"spec": {"display_name": "Ada"}})).status_code == 201
+    assert (await admin.put(url, json={"spec": {"display_name": "Ada Lovelace"}})).status_code == 200
+    first = await admin.get(f"{url}/versions/1")
+    assert first.status_code == 200, first.text
+    assert first.json()["document"]["spec"]["display_name"] == "Ada"
+    assert (await admin.get(f"{url}/versions/9")).status_code == 404

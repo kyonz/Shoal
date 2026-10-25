@@ -84,7 +84,7 @@ const LOOKS: Record<string, Look> = {
   "agent.started": { icon: Bot, tone: "text-accent", title: (e) => `Agent ${str(e.data.agent)} started${e.data.model ? ` on ${str(e.data.model)}` : ""}` },
   "agent.finished": { icon: Bot, tone: "text-ok", title: (e) => `Agent ${str(e.data.agent)} finished` },
   "agent.tool_blocked": { icon: ShieldAlert, tone: "text-bad", title: (e) => `Blocked tool ${str(e.data.tool)}` },
-  "agent.action": { icon: Zap, tone: "text-accent", title: (e) => `Agent called ${str(e.data.action)}` },
+  "agent.action": { icon: Zap, tone: "text-accent", title: (e) => `Agent called ${str(e.data.action)}${e.data.connection ? ` on ${str(e.data.connection)}` : ""}` },
   "workflow.child_started": { icon: Play, tone: "text-info", title: (e) => `Started child run of ${str(e.data.workflow)}` },
 };
 

@@ -30,7 +30,13 @@ class IntegrationManager:
         return [type(i).catalog() for i in self.engine.registry.available("integrations").values()]
 
     async def connection(
-        self, tenant_id: str, name: str, *, initiator: dict[str, Any] | None = None, run_id: str | None = None
+        self,
+        tenant_id: str,
+        name: str,
+        *,
+        initiator: dict[str, Any] | None = None,
+        run_id: str | None = None,
+        step_id: str | None = None,
     ) -> ConnectionContext:
         row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
         resource = Connection.model_validate(row.document)
@@ -63,6 +69,7 @@ class IntegrationManager:
             integration=integration,
             initiator=initiator,
             run_id=run_id,
+            step_id=step_id,
             acting_as=acting_as,
         )
 
@@ -115,10 +122,11 @@ class IntegrationManager:
         connection: str | None = None,
         initiator: dict[str, Any] | None = None,
         run_id: str | None = None,
+        step_id: str | None = None,
     ) -> dict[str, Any]:
         integration_key, _, action_name = action.partition(".")
         name = await self.resolve_name(tenant_id, integration_key, connection)
-        ctx = await self.connection(tenant_id, name, initiator=initiator, run_id=run_id)
+        ctx = await self.connection(tenant_id, name, initiator=initiator, run_id=run_id, step_id=step_id)
         if ctx.integration.key != integration_key:
             raise InvalidRequest(f"connection '{name}' is a {ctx.integration.key} connection, not {integration_key}")
         return await ctx.integration.call_action(ctx, action_name, params)

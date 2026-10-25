@@ -99,8 +99,11 @@ class SkillSourceService:
             return await ctx.source.search(ctx, query, cursor, limit)
         return await ctx.source.list(ctx, cursor, limit)
 
-    async def fetch(self, tenant_id: str, namespace: str, name: str, skill_id: str, version: str | None = None) -> SkillBundle:
+    async def fetch(
+        self, tenant_id: str, namespace: str, name: str, skill_id: str, version: str | None = None, *, refresh: bool = False
+    ) -> SkillBundle:
         ctx = await self.context(tenant_id, await self._visible_source(tenant_id, namespace, name))
+        ctx.refresh = refresh
         return await ctx.source.fetch(ctx, skill_id, version)
 
     async def installed(self, tenant_id: str, namespace: str, source: str, skill_id: str) -> list[dict[str, Any]]:
@@ -145,7 +148,7 @@ class SkillSourceService:
         description = bundle.description or bundle.name
         skill = Skill.model_validate({
             "metadata": {"name": target, "description": description, "labels": labels},
-            "spec": {"description": description, "instructions": bundle.instructions, "files": bundle.files},
+            "spec": _bundle_spec(bundle),
         })
         written = skill.to_document()
         after = {"metadata": {"description": description, "labels": labels}, "spec": written["spec"]}
@@ -186,26 +189,48 @@ class SkillSourceService:
 
     async def imports(self, tenant_id: str, namespace: str, *, check: bool = False) -> list[dict[str, Any]]:
         """Imported skills in a namespace; with ``check``, ask each source for its current version."""
-        rows = await self.engine.store.list_resources(tenant_id, "Skill", namespace=namespace)
-        out = [_imported(r) for r in rows if LABEL_SOURCE in (r.document["metadata"].get("labels") or {})]
+        rows = [
+            r for r in await self.engine.store.list_resources(tenant_id, "Skill", namespace=namespace)
+            if LABEL_SOURCE in (r.document["metadata"].get("labels") or {})
+        ]
+        out = [_imported(r) for r in rows]
         if not check:
             return out
         latest: dict[tuple[str, str], SkillBundle | str] = {}
-        for item in out:
+        for item, row in zip(out, rows, strict=True):
             key = (item["source"], item["skill_id"])
             if key not in latest:
                 try:
-                    latest[key] = await self.fetch(tenant_id, namespace, *key)
+                    latest[key] = await self.fetch(tenant_id, namespace, *key, refresh=True)
                 except (SkillSourceError, NotFound, Forbidden, InvalidRequest) as exc:
                     latest[key] = getattr(exc, "message", None) or str(exc)
             found = latest[key]
             if isinstance(found, str):
                 item.update({"latest_version": None, "update_available": None, "check_error": found})
                 continue
-            current = (item["ref"], item["version"]) if found.ref else (None, item["version"])
             item.update({"latest_version": found.version, "latest_ref": found.ref,
-                         "update_available": current != (found.ref, found.version)})
+                         "update_available": _update_available(item, row, found)})
         return out
+
+
+def _bundle_spec(bundle: SkillBundle) -> dict[str, Any]:
+    description = bundle.description or bundle.name
+    return {"description": description, "instructions": bundle.instructions, "files": bundle.files}
+
+
+def _update_available(item: dict[str, Any], row: Any, found: SkillBundle) -> bool:
+    """Whether re-importing would change the skill.
+
+    A declared version (frontmatter, registry release) that moved is an update. A version that is
+    just the source's commit moves with every commit to the repository, so there the skill only
+    counts as updated when its own content changed.
+    """
+    commit_version = bool(found.ref) and found.ref.startswith(found.version)
+    if not commit_version and item["version"] != found.version[:63]:
+        return True
+    imported = Skill.model_validate({"metadata": {"name": row.name}, "spec": _bundle_spec(found)}).to_document()["spec"]
+    stored = row.source if row.source is not None else row.document.get("spec")
+    return bool(diff({"spec": stored}, {"spec": imported}))
 
 
 def _as_written(row: Any) -> dict[str, Any]:

@@ -527,7 +527,10 @@ replace them.
   rubric) and `boolean` (Jev's *noul*: probability a statement is true).
   Providers: `jev` (TypeSafe API via its SDK, or via OpenRouter / Vercel AI
   Gateway where configured) and `llm` (any model through the gateways in
-  §7.3 using structured output) as the self-hostable fallback.
+  §7.3 using structured output) as the self-hostable fallback. Jev needs
+  the `typesafe-sdk` package (`pip install 'shoal[jev]'`; the container
+  image includes it) and an API key from a secret named by
+  `provider_config.api_key_secret`, or `TYPESAFE_API_KEY` on the worker.
 - **`decide` step.** A workflow step that asks typed questions about any
   expression (issue text, diff summary, prior outputs) and exposes
   `answer`, `probabilities` and `confidence` for branching with `if`. A
@@ -772,7 +775,8 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **OIDC sign-in.** Generic OpenID Connect (Okta, Microsoft Entra ID, Google,
   Keycloak, Auth0, Dex): authorization-code flow with PKCE, ID tokens verified
   against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
-  Shoal session tokens afterwards. Claims map to the user record and optionally
+  Shoal session tokens afterwards; signing out revokes the session token
+  itself, not only the cookie. Claims map to the user record and optionally
   to role bindings (`groups` claim → group membership). Configured per tenant
   (several providers allowed) plus a bootstrap admin token for first setup.
 - **SCIM 2.0 provisioning.** `/scim/v2/Users`, `/scim/v2/Groups`,
@@ -782,7 +786,9 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   immediately; group membership changes flow through to role bindings.
 - **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
-  than the owner holds), with expiry, last-used, and revocation. A key
+  than the owner holds), with expiry, last-used, and revocation.
+  `SHOAL_API_KEY_MAX_DAYS` caps how long a key may live (keys created without
+  an expiry get the cap). A key
   limited to namespaces keeps only the tenant-level `:read` permissions of its
   owner, never tenant administration.
 - **Nobody hands out more than they hold.** Granting a role, changing a custom
@@ -796,6 +802,9 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   are injected at the last moment and redacted from events and logs.
 - **Quotas**: per-tenant concurrency, sandbox minutes and token budgets.
 - **Audit log**: every mutating API call and every agent tool call is recorded.
+  Behind reverse proxies, `SHOAL_TRUSTED_PROXIES` (addresses or CIDRs) makes
+  the log record the client address from `X-Forwarded-For` instead of the
+  proxy's.
 
 ---
 
@@ -837,7 +846,9 @@ credential performed it*, and lets policy decide what the run may do.
     own. It requires an approval from someone who does have write access
     (checked per reviewer), and optionally an *agent-assisted merge check*:
     a reviewer agent step that checks the diff against policy and posts its
-    verdict as a review before merge. Policies can also require labels or
+    verdict as a review before merge. The step that opened the pull request
+    cannot record that verdict itself (`independent_merge_check`, on by
+    default), so an authoring agent cannot certify its own change. Policies can also require labels or
     block merging entirely (`elevation: deny | qualified_approval | allow`).
 
 ## 12. API
@@ -891,7 +902,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   data or secrets. Only an empty tenant can be federated; a revoked link can be
   replaced by linking the tenant again. Until then the hub refuses the tenant's
   calls with `503 federation_revoked` instead of serving it as an empty hosted
-  tenant, and the member's Federation page says the hub rejected its link. Operators can manage links as code with
+  tenant, and the member's Federation page says the hub rejected its link.
+  A member that leaves (`shoal federation leave`) tells the hub, which marks
+  the link `left` and refuses the same way, and removes the role bindings it
+  gave hub people and groups. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -950,7 +964,9 @@ the moment of use and redacted from run logs. The `env` provider reads
 readable by every tenant, so instances shared by several organisations set
 `SHOAL_SECRET_ENV_SHARED=false`. Variables that configure Shoal itself
 (`SHOAL_SECRET_KEY`, `SHOAL_SECRET_PROVIDERS`) are never handed out as
-secrets. Deleting a namespace deletes its secrets, role bindings and
+secrets, and names that would contain `__` are not looked up (so tenant
+`acme` cannot read tenant `acme--ops`'s variables); env secrets are
+tenant-wide, readable from every namespace. Deleting a namespace deletes its secrets, role bindings and
 personal credentials; deleting a user deletes their personal credentials.
 There are four scopes:
 
