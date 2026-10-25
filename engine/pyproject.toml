@@ -63,6 +63,10 @@ openai-compatible = "awm.agents.providers.openai_compat:OpenAICompatibleProvider
 llm = "awm.decisions.llm:LLMDecisionProvider"
 jev = "awm.decisions.jev:JevProvider"
 
+[project.entry-points."awm.eval_sinks"]
+braintrust = "awm.evals.sinks.braintrust:BraintrustSink"
+langfuse = "awm.evals.sinks.langfuse:LangfuseSink"
+
 [project.entry-points."awm.agent_runtimes"]
 tool-loop = "awm.agents.tool_loop:ToolLoopRuntime"
 cli = "awm.agents.cli_runtime:CliRuntime"
