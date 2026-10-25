@@ -705,6 +705,112 @@ def eval_get(ctx: typer.Context, eval_run_id: Annotated[str, typer.Argument(help
         emit(row, output, name=lambda r: r["id"])
 
 
+def _pct(value: Any) -> str | None:
+    return None if value is None else f"{value:.0%}"
+
+
+def _score(value: Any) -> str | None:
+    return None if value is None else f"{value:.3f}"
+
+
+def _signed(value: Any) -> str | None:
+    return None if value is None else f"{value:+.3f}"
+
+
+EVAL_RUN_COLUMNS = [
+    ("ID", lambda r: r["id"]),
+    ("EVAL", lambda r: r["eval_name"]),
+    ("STATUS", lambda r: styled(r["status"])),
+    ("WORKFLOW", lambda r: f"{len(r['variants'])} variants" if len(r.get("variants") or []) > 1 else f"v{r['workflow_version']}"),
+    ("SCORE", lambda r: _score((r.get("summary") or {}).get("score"))),
+    ("PASS RATE", lambda r: _pct((r.get("summary") or {}).get("pass_rate"))),
+    ("GATE", lambda r: None if "passed" not in (r.get("gate") or {}) else ("passed" if r["gate"]["passed"] else "failed")),
+    ("AGE", lambda r: age(r["created_at"])),
+]
+
+
+@eval_app.command("list")
+def eval_list(
+    ctx: typer.Context,
+    name: Annotated[str | None, typer.Argument(help="Only runs of this eval.")] = None,
+    status: Annotated[str | None, typer.Option(help="Comma-separated statuses, e.g. running,completed.")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=200)] = 20,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """List eval runs, newest first."""
+    params = {"eval": name, "status": status, "limit": limit}
+    with api(ctx, namespace) as client:
+        page = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/eval-runs", **params)
+    emit(page["items"], output, EVAL_RUN_COLUMNS, name=lambda r: r["id"])
+
+
+@eval_app.command("cancel")
+def eval_cancel(ctx: typer.Context, eval_run_id: Annotated[str, typer.Argument(help="Eval run id.")]) -> None:
+    """Cancel a running eval run and the workflow runs it started."""
+    with api(ctx) as client:
+        row = client.request("POST", f"/v1/eval-runs/{quote(eval_run_id)}/cancel")
+    console.print(f"eval run {escape(row['id'])} {styled(row['status'])}")
+
+
+CASE_DIFF_COLUMNS = [
+    ("CASE", lambda c: c["case"]),
+    ("BASELINE", lambda c: _score(c["baseline"])),
+    ("CANDIDATE", lambda c: _score(c["candidate"])),
+    ("DELTA", lambda c: _signed(c["delta"])),
+]
+
+
+@eval_app.command("compare")
+def eval_compare(
+    ctx: typer.Context,
+    eval_run_id: Annotated[str, typer.Argument(help="Candidate eval run id.")],
+    baseline: Annotated[str, typer.Argument(help="Baseline eval run id.")],
+    output: Output = Format.table,
+) -> None:
+    """Case-by-case diff of an eval run against a baseline run."""
+    with api(ctx) as client:
+        diff = client.get(f"/v1/eval-runs/{quote(eval_run_id)}/compare", baseline=baseline)
+    if output is not Format.table:
+        emit(diff, output)
+        return
+    for variant, d in (diff.get("variants") or {}).items():
+        b, c = d.get("baseline") or {}, d.get("candidate") or {}
+        console.print(f"[bold]{escape(variant)}[/bold]  v{b.get('workflow_version')} {_score(b.get('score'))} -> "
+                      f"v{c.get('workflow_version')} {_score(c.get('score'))}  delta {_signed(d.get('delta'))} "
+                      f"over {d.get('shared_cases')} shared cases")
+        if d.get("regressions"):
+            console.print(f"  [red]regressed:[/red] {escape(', '.join(d['regressions']))}")
+        if d.get("improvements"):
+            console.print(f"  [green]improved:[/green] {escape(', '.join(d['improvements']))}")
+        changed = [x for x in d.get("cases") or [] if x["delta"]]
+        if changed:
+            emit(changed, Format.table, CASE_DIFF_COLUMNS)
+
+
+SCORE_COLUMNS = [
+    ("VERSION", lambda v: f"v{v['workflow_version']}"),
+    ("RUNS", lambda v: v["runs"]),
+    ("MEAN SCORE", lambda v: _score(v["mean_score"])),
+    ("LATEST", lambda v: _score((v.get("latest") or {}).get("score"))),
+    ("PASS RATE", lambda v: _pct((v.get("latest") or {}).get("pass_rate"))),
+    ("LATEST RUN", lambda v: (v.get("latest") or {}).get("eval_run_id")),
+]
+
+
+@eval_app.command("scores")
+def eval_scores(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Eval name.")],
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Scores per workflow version across completed runs of an eval."""
+    with api(ctx, namespace) as client:
+        data = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/evals/{quote(name)}/scores")
+    emit(data["versions"], output, SCORE_COLUMNS, name=lambda v: str(v["workflow_version"]))
+
+
 def _print_eval(row: dict[str, Any]) -> None:
     summary = row.get("summary") or {}
     console.print(f"[bold]{row['id']}[/bold]  {escape(row['eval_name'])} v{row['eval_version']}  "
@@ -741,6 +847,27 @@ def integrations_new(
         err.print(f"[red]error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print(f"Created integration project in {escape(str(target))}")
+
+
+@integrations_app.command("check")
+def integrations_check(
+    url: Annotated[str, typer.Argument(help="Base URL of a running remote integration service.")],
+    token: Annotated[
+        str | None, typer.Option("--token", envvar="SHOAL_INTEGRATION_TOKEN", help="The service's bearer token.")
+    ] = None,
+) -> None:
+    """Run the integration contract checks against a remote integration service (any language)."""
+    import asyncio
+
+    from shoal.sdk.testing.contract import check_remote_service
+
+    problems = asyncio.run(check_remote_service(url, token))
+    for problem in problems:
+        err.print(f"[red]FAIL[/red] {escape(problem)}")
+    if problems:
+        err.print(f"{len(problems)} problem(s)")
+        raise typer.Exit(1)
+    console.print(f"{escape(url)} passes the integration contract")
 
 
 # --------------------------------------------------------------------------- tenants

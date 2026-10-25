@@ -54,6 +54,11 @@ export interface AdoptResult {
   dry_run: boolean;
 }
 
+export interface RemoveResult {
+  removed: { kind: string; name: string }[];
+  kept?: { kind: string; name: string; reason: string }[];
+}
+
 export const spec = (r: Resource) => r.spec as unknown as BlueprintSpec;
 
 export function isFeatured(s: BlueprintSpec) {
@@ -114,7 +119,7 @@ export function useUpdateAdoption(ns: string) {
 export function useRemoveAdoption(ns: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => rawJson<void>(`/v1/namespaces/${ns}/blueprint-adoptions/${id}`, { method: "DELETE" }),
+    mutationFn: (id: string) => rawJson<RemoveResult | undefined>(`/v1/namespaces/${ns}/blueprint-adoptions/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["blueprint-adoptions", ns] });
       void qc.invalidateQueries({ queryKey: ["resources"] });

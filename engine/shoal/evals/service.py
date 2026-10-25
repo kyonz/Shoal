@@ -525,10 +525,14 @@ class EvalService:
                     "duration_ms": duration, "workflow_version": run.workflow_version},
         }
         scores, score, grading_cost = await grade_case(self.engine, row.tenant_id, spec, scope)
+        failed = run.status != "succeeded"
+        require_success = spec.require_success if spec.require_success is not None else row.mode == "cases"
+        if failed and require_success:
+            score = 0.0  # graders can score an empty or partial output well; a failed run is not a pass
         result.outputs = run.outputs
         result.scores, result.score = scores, score
         result.passed = score >= spec.threshold
-        result.error = {"message": "workflow run failed", "run_error": run.error, "stage": "run"} if run.status != "succeeded" else None
+        result.error = {"message": f"workflow run {run.status}", "run_error": run.error, "stage": "run"} if failed else None
         result.status = "graded"
         result.cost_usd = round(float((run.usage or {}).get("cost_usd", 0.0)) + grading_cost, 6)
         result.duration_ms = duration

@@ -534,7 +534,10 @@ replace them.
   rubric) and `boolean` (Jev's *noul*: probability a statement is true).
   Providers: `jev` (TypeSafe API via its SDK, or via OpenRouter / Vercel AI
   Gateway where configured) and `llm` (any model through the gateways in
-  §7.3 using structured output) as the self-hostable fallback.
+  §7.3 using structured output) as the self-hostable fallback. Jev needs
+  the `typesafe-sdk` package (`pip install 'shoal[jev]'`; the container
+  image includes it) and an API key from a secret named by
+  `provider_config.api_key_secret`, or `TYPESAFE_API_KEY` on the worker.
 - **`decide` step.** A workflow step that asks typed questions about any
   expression (issue text, diff summary, prior outputs) and exposes
   `answer`, `probabilities` and `confidence` for branching with `if`. A
@@ -876,7 +879,9 @@ credential performed it*, and lets policy decide what the run may do.
     own. It requires an approval from someone who does have write access
     (checked per reviewer), and optionally an *agent-assisted merge check*:
     a reviewer agent step that checks the diff against policy and posts its
-    verdict as a review before merge. Policies can also require labels or
+    verdict as a review before merge. The step that opened the pull request
+    cannot record that verdict itself (`independent_merge_check`, on by
+    default), so an authoring agent cannot certify its own change. Policies can also require labels or
     block merging entirely (`elevation: deny | qualified_approval | allow`).
 
 ## 12. API

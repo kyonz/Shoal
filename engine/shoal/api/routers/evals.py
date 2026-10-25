@@ -44,6 +44,7 @@ class EvalRunOut(Out):
     variants: list[dict[str, Any]]
     mode: str
     status: str
+    spec: dict[str, Any] = Field(description="The Eval spec as it was when the run started (threshold, graders, ...).")
     summary: dict[str, Any]
     gate: dict[str, Any]
     baseline_id: str | None

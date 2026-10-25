@@ -291,6 +291,17 @@ def test_eval_run_gates(cli, tenant_key):
     started = cli(*auth, "eval", "run", "triage-eval", "-o", "name")
     assert started.exit_code == 0 and started.stdout.strip()
 
+    listed = cli(*auth, "eval", "list", "triage-eval")
+    assert listed.exit_code == 0 and "triage-eval" in listed.output and "failed" in listed.output, listed.output
+    names = cli(*auth, "eval", "list", "-o", "name").stdout.split()
+    assert row["id"] in names and len(names) == 3
+    compared = cli(*auth, "eval", "compare", row["id"], names[-1])
+    assert compared.exit_code == 0 and "over 2 shared cases" in compared.output, compared.output
+    scores = cli(*auth, "eval", "scores", "triage-eval")
+    assert scores.exit_code == 0 and "v1" in scores.output and "0.500" in scores.output
+    cancelled = cli(*auth, "eval", "cancel", row["id"])
+    assert cancelled.exit_code == 1 and "completed" in cancelled.output  # finished runs cannot be cancelled
+
 
 def test_integrations_new(tmp_path):
     runner = CliRunner()

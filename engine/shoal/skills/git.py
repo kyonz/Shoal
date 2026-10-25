@@ -171,7 +171,7 @@ class GitSkillSource(SkillSource):
             fresh = cached and cached.directory.exists() and (
                 SHA.match(ref) or time.monotonic() - cached.fetched_at < config.refresh_seconds
             )
-            if cached and fresh and not force:
+            if cached and fresh and not (force or ctx.refresh):
                 return cached
             digest = hashlib.sha256(f"{config.url}\n{ref}".encode()).hexdigest()[:24]
             directory = self._cache_root(ctx) / digest

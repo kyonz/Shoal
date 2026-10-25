@@ -979,6 +979,12 @@ class EvalSpec(Model):
     from_runs: EvalRunQuery | None = None
     graders: list[Grader] = Field(min_length=1)
     threshold: float = Field(0.8, ge=0, le=1, description="A case passes when its weighted score is at least this.")
+    require_success: bool | None = Field(
+        None,
+        description="A case whose workflow run did not succeed scores 0 and fails, whatever its graders say "
+        "(their scores are still recorded). Defaults to true for cases and false for from_runs, which picks "
+        "run statuses itself; set false to grade runs that are expected to fail.",
+    )
     concurrency: int = Field(5, ge=1)
     decision_provider: str | None = None
     gate: EvalGate = Field(default_factory=EvalGate)

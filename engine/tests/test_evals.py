@@ -106,6 +106,23 @@ async def test_failed_runs_and_bad_inputs_score_zero(engine, tenant):
     assert row.summary["score"] == 0.5
 
 
+async def test_a_failed_run_fails_its_case_unless_failures_are_expected(engine, tenant):
+    await apply(engine, tenant, "Workflow", "triage", classifier("{{ 1 // 0 if 'boom' in inputs.text else 'bug' }}"))
+    spec = {**EVAL, "cases": [{"name": "boom", "inputs": {"text": "boom"}}, CASES[0]],
+            "graders": [{"name": "lenient", "check": "true"}]}
+    await apply(engine, tenant, "Eval", "triage-eval", spec)
+    row = await run_eval(engine, tenant)
+    results = {r.case_name: r for r in await engine.evals.results(row.id)}
+    boom = results["boom"]
+    assert boom.status == "graded" and boom.error["stage"] == "run"
+    assert boom.score == 0.0 and not boom.passed and boom.scores["lenient"]["score"] == 1.0  # grades kept
+    assert results["crash"].passed and row.summary["score"] == 0.5
+
+    await apply(engine, tenant, "Eval", "triage-eval", {**spec, "require_success": False})
+    row = await run_eval(engine, tenant)
+    assert all(r.passed for r in await engine.evals.results(row.id))
+
+
 async def test_llm_judge_and_decision_graders(engine, tenant):
     seen: list[ModelRequest] = []
 
