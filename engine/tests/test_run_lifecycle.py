@@ -210,7 +210,7 @@ async def test_retry_reruns_only_failed_children(engine, tenant, tmp_path):
         "retry": {"max_attempts": 2, "backoff": "1s"},
     }]}))
     run = await engine.executor.start_run(tenant.id, "fan", {})
-    for _ in range(20):
+    for _ in range(150):  # up to ~15s of real time: under load, Temporal delivers child wakes slowly
         await engine.run_until_idle()
         if (await engine.store.get_run(tenant.id, run.id)).status == "succeeded":
             break

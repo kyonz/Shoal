@@ -30,6 +30,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `from_runs` | object | optional |  |
 | `graders` | list of object | **required** |  |
 | `threshold` | number | optional | A case passes when its weighted score is at least this. Default: `0.8`. |
+| `require_success` | bool | optional | A case whose workflow run did not succeed scores 0 and fails, whatever its graders say (their scores are still recorded). Defaults to true for cases and false for from_runs, which picks run statuses itself; set false to grade runs that are expected to fail. |
 | `concurrency` | number | optional |  Default: `5`. |
 | `decision_provider` | string | optional |  |
 | `gate` | object | optional |  |

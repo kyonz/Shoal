@@ -6,6 +6,7 @@ import { evalExtension } from "./evals/EvalExtension";
 import { evalPlatformExtension } from "./evals/Platforms";
 import { blueprintExtension } from "./blueprints/blueprintExtension";
 import { customIntegrationExtension } from "./customIntegrations";
+import { targetListExtension } from "./targetLists";
 
 const EXT = {
   agents: agentExtension,
@@ -15,6 +16,7 @@ const EXT = {
   gateways: gatewayExtension,
   "model-policies": modelPolicyExtension,
   evals: evalExtension,
+  "target-lists": targetListExtension,
   blueprints: blueprintExtension,
   "skill-sources": {},
   "eval-platforms": evalPlatformExtension,

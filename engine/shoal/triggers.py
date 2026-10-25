@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
+from shoal.campaigns.target_lists import referenced_lists
 from shoal.core import clock
 from shoal.core.errors import NotFound
 from shoal.core.expressions import ExpressionError, render, truthy
@@ -47,10 +48,17 @@ class TriggerService:
 
     # ------------------------------------------------------------------ evaluation
 
-    def evaluate(self, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
-        """Dry-run a trigger against an event: does it match, and with which inputs?"""
+    def evaluate(
+        self, trigger: Trigger, event: IntegrationEvent, lists: dict[str, list[str]] | None = None
+    ) -> dict[str, Any]:
+        """Dry-run a trigger against an event: does it match, and with which inputs?
+
+        ``lists`` holds the keys of the target lists the trigger's expressions name (see :meth:`check`).
+        """
         spec = trigger.spec
-        ctx = {"event": event.data, "event_type": event.type, "trigger": {"name": trigger.metadata.name}}
+        ctx = {
+            "event": event.data, "event_type": event.type, "trigger": {"name": trigger.metadata.name}, "lists": lists or {},
+        }
         if not fnmatch.fnmatch(event.type, spec.event):
             return {"matched": False, "reason": f"event type '{event.type}' does not match '{spec.event}'"}
         try:
@@ -61,6 +69,18 @@ class TriggerService:
         except ExpressionError as exc:
             return {"matched": False, "reason": f"expression error: {exc}", "error": True}
         return {"matched": True, "inputs": inputs, "dedupe_key": None if dedupe is None else str(dedupe)}
+
+    async def check(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
+        """:meth:`evaluate`, with the target lists the trigger's expressions name loaded first."""
+        spec = trigger.spec
+        names = referenced_lists([spec.filter, spec.inputs, spec.dedupe_key])
+        lists: dict[str, list[str]] = {}
+        if names and fnmatch.fnmatch(event.type, spec.event):
+            try:
+                lists = await self.engine.target_lists.keys(tenant_id, names)
+            except Exception as exc:
+                return {"matched": False, "reason": f"target list error: {exc}", "error": True}
+        return self.evaluate(trigger, event, lists)
 
     async def integration_match(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> str | None:
         """The connection integration's structured filters (``match``); None when the event passes."""
@@ -145,7 +165,7 @@ class TriggerService:
                         tenant_id, connection, row.namespace
                     ):
                         continue  # an organisation connection that is not shared with this namespace
-                outcome = self.evaluate(trigger, event)
+                outcome = await self.check(tenant_id, trigger, event)
                 if outcome["matched"]:
                     reason = await self.integration_match(tenant_id, trigger, event)
                     if reason is not None:
@@ -249,7 +269,7 @@ class TriggerService:
             id=new_id("evt"),
             data=data or {},
         )
-        outcome = self.evaluate(resource, event)
+        outcome = await self.check(tenant_id, resource, event)
         if not outcome["matched"]:
             return {"trigger": trigger_name, "status": "filtered", "reason": outcome["reason"]}
         return await self._fire(tenant_id, resource, event, outcome)
@@ -292,7 +312,7 @@ class TriggerService:
             id=f"{trigger.metadata.name}:{state.next_fire_at.isoformat()}",
             data={"scheduled_at": state.next_fire_at.isoformat(), "fired_at": now.isoformat(), "next_at": upcoming.isoformat()},
         )
-        outcome = self.evaluate(trigger, event)
+        outcome = await self.check(row.tenant_id, trigger, event)
         if not (outcome["matched"] or outcome.get("error")):
             return 0
         if outcome.get("dedupe_key") is None:

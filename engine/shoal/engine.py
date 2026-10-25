@@ -28,6 +28,7 @@ from shoal.auth.user_credentials import UserCredentials
 from shoal.auth.workload import WorkloadIssuer
 from shoal.blueprints import BlueprintService
 from shoal.campaigns.service import CampaignService
+from shoal.campaigns.target_lists import TargetLists
 from shoal.cloud import CloudIdentities
 from shoal.config import Settings, get_settings
 from shoal.core import clock
@@ -149,6 +150,7 @@ class Engine:
         self.executor = Executor(self)
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)
+        self.target_lists = TargetLists(self)
         self.blueprints = BlueprintService(self)
         self.skill_sources = SkillSourceService(self)
         self.signals = Signals(self)

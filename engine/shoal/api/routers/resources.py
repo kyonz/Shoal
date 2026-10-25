@@ -34,6 +34,7 @@ from shoal.core.models import (
     CustomIntegration,
     ResourceBase,
     SandboxProfile,
+    TargetListSpec,
     Trigger,
     parse_resource,
 )
@@ -637,6 +638,51 @@ async def query_resource(namespace: str, name: str, resource: str, body: QueryIn
     return page.model_dump()
 
 
+# --------------------------------------------------------------------------- target lists
+
+PREVIEW_LIMIT = 1000
+
+
+def _resolution(resolved: Any) -> dict[str, Any]:
+    targets = [{"key": k, **v} for k, v in resolved.targets.items()]
+    return {
+        "total": len(targets),
+        "targets": targets[:PREVIEW_LIMIT],
+        "truncated": len(targets) > PREVIEW_LIMIT,
+        "missing": resolved.missing,
+    }
+
+
+@router.get("/namespaces/{namespace}/target-lists/{name}/resolve", tags=["target-lists"],
+            summary="The targets a target list resolves to now")
+async def resolve_target_list(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "target-lists:read")
+    with use_namespace(namespace):
+        try:
+            resolved = await ctx.engine.target_lists.resolve(ctx.tenant_id, name)
+        except NotFound:
+            raise
+        except Exception as exc:
+            raise InvalidRequest(f"could not resolve target list: {exc}") from exc
+    return _resolution(resolved)
+
+
+@router.post("/namespaces/{namespace}/target-lists/preview", tags=["target-lists"],
+             summary="Resolve an unsaved target list spec")
+async def preview_target_list(namespace: str, body: TargetListSpec, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "target-lists:read")
+    if body.connection:
+        await ctx.namespace(namespace, "connections:use")
+    with use_namespace(namespace):
+        try:
+            resolved = await ctx.engine.target_lists.resolve_spec(ctx.tenant_id, body)
+        except NotFound:
+            raise
+        except Exception as exc:
+            raise InvalidRequest(f"could not resolve target list: {exc}") from exc
+    return _resolution(resolved)
+
+
 # --------------------------------------------------------------------------- triggers
 
 
@@ -650,7 +696,8 @@ async def test_trigger(namespace: str, name: str, body: TriggerTestIn, ctx: CtxD
     await ctx.namespace(namespace, "triggers:read")
     trigger = await _trigger(ctx, namespace, name)
     event = IntegrationEvent(type=body.event_type or trigger.spec.event.replace("*", "test"), id=new_id("evt"), data=body.data)
-    outcome = ctx.engine.triggers.evaluate(trigger, event)
+    with use_namespace(namespace):
+        outcome = await ctx.engine.triggers.check(ctx.tenant_id, trigger, event)
     if outcome["matched"] and trigger.spec.connection:
         with use_namespace(namespace):
             reason = await ctx.engine.triggers.integration_match(ctx.tenant_id, trigger, event)

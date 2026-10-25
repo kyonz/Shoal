@@ -586,3 +586,18 @@ async def test_tenant_wide_versions_can_be_read_one_at_a_time(admin):
     assert first.status_code == 200, first.text
     assert first.json()["document"]["spec"]["display_name"] == "Ada"
     assert (await admin.get(f"{url}/versions/9")).status_code == 404
+
+
+async def test_target_list_resolve_and_preview(admin):
+    spec = {"items": [{"name": "a"}, {"name": "b"}, {"name": "a"}], "key": "{{ target.name }}"}
+    r = await admin.put("/v1/namespaces/default/target-lists/mine", json={"spec": spec})
+    assert r.status_code == 201, r.text
+    r = await admin.get("/v1/namespaces/default/target-lists/mine/resolve")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"total": 2, "targets": [{"key": "a", "name": "a"}, {"key": "b", "name": "b"}], "truncated": False, "missing": []}
+    r = await admin.post("/v1/namespaces/default/target-lists/preview", json={"items": [{"id": 7}]})
+    assert r.json()["targets"] == [{"key": "7", "id": 7}]
+    r = await admin.put("/v1/namespaces/default/target-lists/bad", json={"spec": {"resource": "repository"}})
+    assert r.status_code == 422
+    r = await admin.get("/v1/namespaces/default/target-lists/nope/resolve")
+    assert r.status_code == 404
