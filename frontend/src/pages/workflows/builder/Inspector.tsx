@@ -346,7 +346,17 @@ function ScriptEditor({ step, set }: { step: StepDoc; set: SetFn }) {
 }
 
 function WaitEditor({ step, set }: { step: StepDoc; set: SetFn }) {
-  const mode = step.condition ? "condition" : step.until ? "until" : "duration";
+  const mode = step.signal ? "signal" : step.condition ? "condition" : step.until ? "until" : "duration";
+  const signal = (step.signal as { name?: string; event?: string; match?: string }) ?? {};
+  const sigSource = signal.event !== undefined ? "event" : "name";
+  const setSig = (patch: Record<string, string | undefined>, key?: string) => {
+    const next: Record<string, string> = { ...signal } as Record<string, string>;
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) delete next[k];
+      else next[k] = v;
+    }
+    set({ signal: next }, key);
+  };
   const condition = (step.condition as Record<string, unknown>) ?? {};
   const action = useAction(condition.action as string);
   const switchMode = (m: string) => {
@@ -355,6 +365,7 @@ function WaitEditor({ step, set }: { step: StepDoc; set: SetFn }) {
       duration: m === "duration" ? "1h" : undefined,
       until: m === "until" ? "{{ inputs.deadline }}" : undefined,
       condition: m === "condition" ? { action: "", check: "{{ result }}", poll_interval: "15m" } : undefined,
+      signal: m === "signal" ? { name: "approved" } : undefined,
     });
   };
   const setCond = (patch: Record<string, unknown>, key?: string) => {
@@ -369,9 +380,10 @@ function WaitEditor({ step, set }: { step: StepDoc; set: SetFn }) {
           value={mode}
           onChange={switchMode}
           options={[
-            { value: "duration", label: "For a duration" },
-            { value: "until", label: "Until a time" },
-            { value: "condition", label: "Until a condition" },
+            { value: "duration", label: "Duration", title: "Wait for a fixed duration" },
+            { value: "until", label: "Time", title: "Wait until a point in time" },
+            { value: "condition", label: "Condition", title: "Poll until a condition holds" },
+            { value: "signal", label: "Signal", title: "Wait for a signal sent into the run" },
           ]}
         />
         {mode === "duration" && (
@@ -412,6 +424,49 @@ function WaitEditor({ step, set }: { step: StepDoc; set: SetFn }) {
                 <option value="fail">Fail the step</option>
               </NativeSelect>
             </Field>
+          </>
+        )}
+        {mode === "signal" && (
+          <>
+            <Segmented
+              value={sigSource}
+              onChange={(v) => setSig(v === "event" ? { name: undefined, event: "" } : { event: undefined, name: "" })}
+              options={[
+                { value: "name", label: "Named signal" },
+                { value: "event", label: "Integration event" },
+              ]}
+            />
+            {sigSource === "name" ? (
+              <Field
+                label="Signal name"
+                required
+                description="Send it with Send signal on the run page, POST /v1/runs/{id}/signals/<name>, or the run's callback URL {{ run.signal_url }}/<name>. Signals sent early are kept."
+              >
+                <Input mono value={signal.name ?? ""} placeholder="approved" onChange={(e) => setSig({ name: e.target.value })} />
+              </Field>
+            ) : (
+              <Field label="Event key" required description="Takes the next integration event with this wake key, e.g. github:pr:{{ inputs.repo }}#{{ inputs.pr }}.">
+                <ExpressionInput value={signal.event ?? ""} onChange={(v) => setSig({ event: v }, `step:${step.id}:sig-event`)} />
+              </Field>
+            )}
+            <Field label="Only accept when" description="Optional. Evaluated with `signal` (the payload); signals that don't match stay queued.">
+              <ExpressionInput value={signal.match ?? ""} onChange={(v) => setSig({ match: v || undefined }, `step:${step.id}:sig-match`)} placeholder="{{ signal.status == 'done' }}" />
+            </Field>
+            <div className="grid grid-cols-2 gap-2.5">
+              <Field label="Give up after">
+                <Input mono value={str(step.max_wait)} placeholder="never" onChange={(e) => set({ max_wait: e.target.value || undefined })} />
+              </Field>
+              <Field label="When time runs out">
+                <NativeSelect value={str(step.on_timeout) || "continue"} onChange={(e) => set({ on_timeout: e.target.value === "continue" ? undefined : e.target.value })}>
+                  <option value="continue">Continue</option>
+                  <option value="fail">Fail the step</option>
+                </NativeSelect>
+              </Field>
+            </div>
+            <p className="text-[11.5px] text-faint">
+              Outputs: <code className="font-mono">received</code>, <code className="font-mono">payload</code>, <code className="font-mono">source</code>, <code className="font-mono">sender</code>,{" "}
+              <code className="font-mono">timed_out</code>.
+            </p>
           </>
         )}
       </div>

@@ -49,6 +49,31 @@ curl -X POST "$SHOAL_URL/v1/runs/$RUN_ID/steps/review/approval" \
 
 `decide` steps with `on_low_confidence: approval` also hold the run for a person when the decision model is unsure.
 
+## Signals
+
+A `wait` step in **Signal** mode pauses until data is sent into the run:
+
+```yaml
+- id: deploy_done
+  type: wait
+  signal:
+    name: deployed
+    match: "{{ signal.env == 'prod' }}"
+  max_wait: 2h
+  on_timeout: fail
+```
+
+While it waits, the run viewer shows a banner with a JSON payload box and **Send signal**. The **Signals** tab lists every signal sent to the run, whether it is still queued or which step took it, and where it came from (API, callback URL or integration event). Signals sent before the step starts waiting are kept for it, and ones that don't satisfy `match` stay queued. Sending needs the `runs:signal` permission. Other systems can send one with the API, or call `{{ run.signal_url }}/<name>` without an API key:
+
+```bash
+curl -X POST "$SHOAL_URL/v1/runs/$RUN_ID/signals/deployed" \
+  -H "Authorization: Bearer $SHOAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"payload": {"env": "prod", "sha": "4f2c1e9"}}'
+```
+
+The step outputs `received`, `payload`, `source`, `sender` and `timed_out`. Use `signal: {event: "github:pr:acme/api#12"}` instead of `name` to take the next integration event with that wake key.
+
 ## Cancel and rerun
 
 **Cancel** asks the executor to stop the run (`POST /v1/runs/{id}/cancel`); running steps are cancelled at their next checkpoint. **Rerun** starts a new run of the same workflow version with the same inputs (`POST /v1/runs/{id}/rerun`) and labels it `rerun_of`.
