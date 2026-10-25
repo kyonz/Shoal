@@ -45,6 +45,7 @@ var declarativeKinds = []declarativeKind{
 	{"identity", "Identity", "identities", true, "A person across systems (email, GitHub login, Jira account, Shoal users), used to attribute runs and pull requests to the human who drove them. Tenant-wide.", ""},
 	{"blueprint", "Blueprint", "blueprints", true, "A blueprint in the tenant's catalogue: a versioned bundle of templated resources that namespace owners adopt into their namespace. Tenant-wide.", ""},
 	{"skill_source", "SkillSource", "skill-sources", true, "A skill source (marketplace): a git repository in the Agent Skills layout, a skill registry, or any installed skill source plugin, from which namespaces import skills. Tenant-wide and managed by tenant admins (`skill-sources:manage`); credentials are secrets in the `shared` namespace, never clear text.", ""},
+	{"custom_integration", "CustomIntegration", "custom-integrations", true, "A custom integration registered for the organisation: a remote service speaking the Shoal integration protocol (`url`) or an installed Python package (`package`). Shoal pulls its manifest (connection settings, auth, actions, resources, events) so connecting to it works like a built-in; `status` reports whether it is ready. Tenant-wide and managed by tenant admins (`custom-integrations:manage`); the service token is a secret in the `shared` namespace.", ""},
 }
 
 type declarativeModel struct {
