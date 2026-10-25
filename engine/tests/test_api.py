@@ -565,3 +565,13 @@ async def test_rerun_keeps_the_trigger_context(admin, api):
     rerun = (await admin.post(f"/v1/runs/{fired['run_id']}/rerun")).json()
     await engine.run_until_idle()
     assert (await admin.get(f"/v1/runs/{rerun['id']}")).json()["outputs"] == {"key": "PROJ-1"}
+
+
+async def test_tenant_wide_versions_can_be_read_one_at_a_time(admin):
+    url = "/v1/identities/ada"
+    assert (await admin.put(url, json={"spec": {"display_name": "Ada"}})).status_code == 201
+    assert (await admin.put(url, json={"spec": {"display_name": "Ada Lovelace"}})).status_code == 200
+    first = await admin.get(f"{url}/versions/1")
+    assert first.status_code == 200, first.text
+    assert first.json()["document"]["spec"]["display_name"] == "Ada"
+    assert (await admin.get(f"{url}/versions/9")).status_code == 404

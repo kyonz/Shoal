@@ -243,11 +243,15 @@ def _tenant_routes(plural: str, kind: str) -> None:
         await ctx.engine.store.delete_resource(ctx.tenant_id, kind, name)
         await ctx.audit(f"{kind.lower()}.deleted", name)
 
-
     @router.get(f"/{plural}/{{name}}/versions", tags=tag, response_model=list[ResourceVersionOut], name=f"versions_{plural}")
     async def versions(name: str, ctx: CtxDep) -> Any:
         await ctx.require(verbs["read"])
         return await ctx.engine.store.resource_versions(ctx.tenant_id, kind, name)
+
+    @router.get(f"/{plural}/{{name}}/versions/{{version}}", tags=tag, response_model=ResourceVersionOut, name=f"version_{plural}")
+    async def version(name: str, version: int, ctx: CtxDep) -> Any:
+        await ctx.require(verbs["read"])
+        return await ctx.engine.store.get_resource_version_row(ctx.tenant_id, kind, name, version)
 
     @router.get(f"/{plural}/{{name}}/diff", tags=tag, response_model=VersionDiffOut, name=f"diff_{plural}")
     async def diff_versions(name: str, ctx: CtxDep, from_: int = Query(alias="from", ge=1), to: int | None = Query(None, ge=1)) -> Any:
