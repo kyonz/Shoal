@@ -77,8 +77,13 @@ class FederationHub:
     async def create_link(self, tenant_id: str, *, mode: str, actor: str) -> tuple[t.FederationLink, str]:
         if mode not in p.MODES:
             raise InvalidRequest(f"mode must be one of {p.MODES}")
-        if await self.link_for_tenant(tenant_id) is not None:
+        existing = await self.link_for_tenant(tenant_id)
+        if existing is not None and existing.status != "revoked":
             raise Conflict("this tenant is already federated; issue a new enrollment token instead")
+        if existing is not None:  # a revoked link is replaced by the new one
+            async with self.store.session() as s:
+                await s.execute(delete(t.FederationRequest).where(t.FederationRequest.link_id == existing.id))
+                await s.execute(delete(t.FederationLink).where(t.FederationLink.id == existing.id))
         async with self.store.session() as s:
             in_use = (await s.execute(select(func.count()).select_from(t.Resource).where(t.Resource.tenant_id == tenant_id))).scalar()
         if in_use:

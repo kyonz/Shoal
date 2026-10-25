@@ -54,11 +54,8 @@ terraform_provider() {
   go vet ./...
   go build ./...
   go test ./...
-  if have terraform; then
-    TF_ACC=1 go test ./... -count=1 -timeout 20m  # TestMain starts an engine from ../engine
-  else
-    echo "terraform not installed: skipping acceptance tests"
-  fi
+  # TestMain starts an engine from ../engine; terraform-plugin-testing downloads Terraform when it is not installed
+  TF_ACC=1 go test ./... -count=1 -timeout 20m
 }
 
 helm_chart() {

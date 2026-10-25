@@ -121,6 +121,7 @@ func (p *shoalProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewGroupResource,
 		NewAPIKeyResource,
 		NewOIDCProviderResource,
+		NewFederationLinkResource,
 	}
 	for _, kind := range declarativeKinds {
 		out = append(out, newDeclarativeResource(kind))

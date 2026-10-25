@@ -2,7 +2,9 @@ package provider
 
 import (
 	"fmt"
+	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -283,4 +285,76 @@ func checkKeyWorks(name string) resource.TestCheckFunc {
 		}
 		return nil
 	}
+}
+
+func configFederationLink(mode string) string {
+	return fmt.Sprintf(`
+provider "shoal" {
+  api_key = %q
+}
+
+resource "shoal_federation_link" "globex" {
+  tenant = "globex-acc"
+  mode   = %q
+}
+`, os.Getenv("SHOAL_ACC_ADMIN_TOKEN"), mode)
+}
+
+func TestAccFederationLink(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			if os.Getenv("SHOAL_ACC_ADMIN_TOKEN") == "" {
+				t.Skip("needs the operator token (SHOAL_ACC_ADMIN_TOKEN); set when TestMain starts the engine")
+			}
+			admin := clientFromEnv(os.Getenv("SHOAL_ACC_ADMIN_TOKEN"))
+			_, err := admin.Do(testContext(), "POST", "/v1/tenants", map[string]string{"slug": "globex-acc"}, nil)
+			if err != nil && !strings.Contains(err.Error(), "409") && !strings.Contains(err.Error(), "exists") {
+				t.Fatal(err)
+			}
+		},
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(*terraform.State) error {
+			var link struct {
+				Status string `json:"status"`
+			}
+			admin := clientFromEnv(os.Getenv("SHOAL_ACC_ADMIN_TOKEN"))
+			if _, err := admin.Do(testContext(), "GET", "/v1/federation/links/globex-acc", nil, &link); err != nil {
+				return err
+			}
+			if link.Status != "revoked" {
+				return fmt.Errorf("link status %q after destroy, want revoked", link.Status)
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: configFederationLink("read_write"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestMatchResourceAttr("shoal_federation_link.globex", "id", regexp.MustCompile(`^fed_`)),
+					resource.TestCheckResourceAttr("shoal_federation_link.globex", "status", "pending"),
+					resource.TestCheckResourceAttr("shoal_federation_link.globex", "connected", "false"),
+					resource.TestCheckResourceAttr("shoal_federation_link.globex", "mode", "read_write"),
+					resource.TestCheckResourceAttr("shoal_federation_link.globex", "effective_mode", "read"), // until the member enrolls
+					resource.TestMatchResourceAttr("shoal_federation_link.globex", "enrollment_token", regexp.MustCompile(`^fedjoin_`)),
+				),
+			},
+			{
+				Config: configFederationLink("read"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("shoal_federation_link.globex", "mode", "read"),
+					resource.TestCheckResourceAttr("shoal_federation_link.globex", "effective_mode", "read"),
+					resource.TestMatchResourceAttr("shoal_federation_link.globex", "enrollment_token", regexp.MustCompile(`^fedjoin_`)),
+				),
+			},
+			{
+				ResourceName:                         "shoal_federation_link.globex",
+				ImportState:                          true,
+				ImportStateId:                        "globex-acc",
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "tenant",
+				ImportStateVerifyIgnore:              []string{"enrollment_token", "enrollment_expires_at"},
+			},
+		},
+	})
 }

@@ -769,7 +769,9 @@ one control plane, and a federated deployment can also sit next to the hub.
   grants, which namespaces it exposes, and the first role bindings for hub
   people. The hub stores the link (`shoal federation link <tenant>` creates it
   and `shoal federation links` shows connection health), never the member's
-  data or secrets. Only an empty tenant can be federated.
+  data or secrets. Only an empty tenant can be federated; a revoked link can be
+  replaced by linking the tenant again. Operators can manage links as code with
+  the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
     evals and audit, and stream run events. Any write returns

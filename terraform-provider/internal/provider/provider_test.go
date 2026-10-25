@@ -116,6 +116,7 @@ func startEngine() (func(), error) {
 	}
 	os.Setenv("SHOAL_ENDPOINT", endpoint)
 	os.Setenv("SHOAL_API_KEY", created.APIKey)
+	os.Setenv("SHOAL_ACC_ADMIN_TOKEN", admin)
 	return stop, nil
 }
 
