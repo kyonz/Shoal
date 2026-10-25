@@ -215,6 +215,28 @@ async def test_unreachable_services_are_retryable_errors():
     assert r.status_code == 502 and r.json()["error"]["retryable"] is True
 
 
+async def test_jira_writes_say_who_requested_them():
+    api = MockHTTP(host="acme.atlassian.net")
+    comment = api.post("/rest/api/3/issue/{key}/comment", json={"id": "10"})
+    created = api.post("/rest/api/3/issue", json={"key": "OPS-2"})
+    config = {"base_url": "https://acme.atlassian.net", "email": "bot@acme.test", "api_token": "t"}
+    dana = {"display_name": "Dana", "jira_account_id": "acc-1"}
+    harness = IntegrationHarness(JiraIntegration, config=config, http=api, initiator=dana)
+
+    await harness.call("add_comment", {"key": "OPS-1", "body": "Fixed in #12"})
+    await harness.call("create_issue", {"project": "OPS", "summary": "Flaky test", "labels": ["ci"]})
+
+    last = comment.last.json["body"]["content"][-1]["content"]
+    assert last == [{"type": "text", "text": "Requested by: "}, {"type": "mention", "attrs": {"id": "acc-1", "text": "@Dana"}}]
+    assert created.last.json["fields"]["labels"] == ["ci", "shoal-automated"]
+
+    server_api = MockHTTP(host="acme.atlassian.net")
+    plain = server_api.post("/rest/api/2/issue/{key}/comment", json={"id": "11"})
+    server = IntegrationHarness(JiraIntegration, config={**config, "api_version": "2"}, http=server_api, initiator=dana)
+    await server.call("add_comment", {"key": "OPS-1", "body": "Done"})
+    assert plain.last.json["body"] == "Done\n\nRequested by: Dana"
+
+
 async def test_harness_webhook_verification():
     harness = IntegrationHarness(TicketsIntegration, config={"api_token": "t", "webhook_secret": "s3"})
     headers, body = signed_webhook("s3", {"action": "closed", "id": "T-4"})
