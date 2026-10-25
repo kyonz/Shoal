@@ -78,6 +78,8 @@ class Executor:
         labels: dict[str, str] | None = None,
         initiator: dict[str, Any] | None = None,
     ) -> t.Run:
+        if (await self.store.get_tenant(tenant_id)).status == "suspended":
+            raise Forbidden("this tenant is suspended; no new runs start until an instance admin resumes it")
         row = await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
         document = row.document
         if version is not None and version != row.version:

@@ -49,6 +49,22 @@ To drive runs with a Temporal cluster you already run, set `SHOAL_ORCHESTRATOR=t
 `SHOAL_TEMPORAL_ADDRESS` in `deploy/.env`. Adding `-f deploy/docker-compose.temporal.yaml` starts a
 throwaway Temporal dev server to try it with. See [Running Shoal on Temporal](../docs/temporal.md).
 
+## Many tenants and instance admins
+
+One deployment hosts many tenants. To let people sign in once and switch between the tenants they
+belong to, configure the instance sign-in and name the first instance admins:
+
+```sh
+SHOAL_INSTANCE_OIDC='{"issuer": "https://login.example.com", "client_id": "shoal"}'
+SHOAL_INSTANCE_OIDC_CLIENT_SECRET=...
+SHOAL_INSTANCE_ADMINS='["you@example.com"]'
+```
+
+Register `<public url>/v1/auth/callback` as the redirect URI. Instance admins create and manage
+tenants in the admin console (or `POST /v1/tenants`) and can make others instance admins or
+read-only auditors. In Helm, set `instance.admins` and `instance.oidc` (with `clientSecretRef`
+pointing at a Secret). `SHOAL_ADMIN_TOKEN` stays as a break-glass credential.
+
 ## Kubernetes (Helm)
 
 ```sh

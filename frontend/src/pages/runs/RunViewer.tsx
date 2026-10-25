@@ -36,6 +36,7 @@ import { EventRow, Terminal, Transcript } from "./EventViews";
 import { CredentialBanner } from "./CredentialBanner";
 import { SignalBanner, SignalsTab, useSignals } from "./Signals";
 import { useRunEvents, type StreamState } from "./useRunEvents";
+import { Actor, actorName } from "@/lib/actor";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -156,7 +157,7 @@ function RunHeader({ run, state, now }: { run: RunDetail; state: StreamState; no
       <div className="flex items-center gap-4 text-xs text-muted">
         <span title={dateTime(run.created_at)}>
           <span className="text-faint">by </span>
-          {(run.initiator as { display_name?: string })?.display_name ?? run.started_by ?? "—"}
+          {(run.initiator as { display_name?: string })?.display_name ?? actorName(run.started_by, "—")}
           {run.trigger_name && <span className="text-faint"> via trigger {run.trigger_name}</span>}
         </span>
         <span className="tabular-nums">
@@ -452,7 +453,9 @@ function Overview({ run, onSelect, now }: { run: RunDetail; onSelect: (id: strin
             </>
           )}
           <dt className="text-faint">Initiator</dt>
-          <dd className="truncate">{(run.initiator as { actor?: string }).actor ?? run.started_by}</dd>
+          <dd className="min-w-0">
+            <Actor actor={(run.initiator as { actor?: string }).actor ?? run.started_by} />
+          </dd>
           {Object.keys(run.labels ?? {}).length > 0 && (
             <>
               <dt className="text-faint">Labels</dt>

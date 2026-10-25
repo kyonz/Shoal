@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
+from shoal.auth.accounts import INSTANCE_ADMIN, INSTANCE_ROLES
 from shoal.auth.rbac import Principal
 from shoal.auth.sessions import SESSION_PREFIX, is_revoked, verify_session
 from shoal.core.errors import Forbidden, InvalidRequest, NotFound, Unauthorized
@@ -61,19 +62,7 @@ async def authenticate(request: Request, engine: Engine) -> Principal:
             tenant_id = tenant.id
         return Principal.system(tenant_id)
     if token.startswith(SESSION_PREFIX):
-        claims = verify_session(settings, token)
-        try:
-            user = await engine.directory.get_user(claims["tid"], claims["sub"])
-        except NotFound as exc:
-            raise Unauthorized("session user no longer exists") from exc
-        if not user.active:
-            raise Unauthorized("account is deactivated")
-        if is_revoked(user, claims):
-            raise Unauthorized("signed out; sign in again")
-        return Principal(
-            tenant_id=user.tenant_id, actor=f"user:{user.username}", kind=user.kind, user_id=user.id,
-            display_name=user.display_name, email=user.email,
-        )
+        return await _session_principal(engine, verify_session(settings, token))
     key = await engine.store.authenticate_api_key(token)
     if key is None:
         raise Unauthorized("invalid, expired or revoked credentials")
@@ -83,6 +72,7 @@ async def authenticate(request: Request, engine: Engine) -> Principal:
     if not owner.active:
         raise Unauthorized("the key's owner is deactivated")
     prefix = "sa" if owner.kind == "service" else "user"
+    await _require_active_tenant(engine, key.tenant_id)
     return Principal(
         tenant_id=key.tenant_id,
         actor=f"{prefix}:{owner.username}",
@@ -94,6 +84,50 @@ async def authenticate(request: Request, engine: Engine) -> Principal:
         key_scopes=tuple(key.scopes or ()),
         key_namespaces=tuple(key.namespaces or ()),
     )
+
+
+async def _session_principal(engine: Engine, claims: dict[str, Any]) -> Principal:
+    """A UI session: a tenant user, held by an instance account; instance admins may hold one without a tenant user."""
+    tenant_id, user_id, account_id = claims.get("tid"), claims.get("sub"), claims.get("acc")
+    account = None
+    if account_id:
+        try:
+            account = await engine.accounts.get(account_id)
+        except NotFound as exc:
+            raise Unauthorized("session account no longer exists") from exc
+        if not account.active:
+            raise Unauthorized("account is deactivated on this instance")
+        if is_revoked(account, claims):
+            raise Unauthorized("signed out; sign in again")
+    instance_role = account.instance_role if account else None
+    if user_id:
+        try:
+            user = await engine.directory.get_user(tenant_id, user_id)
+        except NotFound as exc:
+            raise Unauthorized("session user no longer exists") from exc
+        if not user.active:
+            raise Unauthorized("account is deactivated")
+        if is_revoked(user, claims):
+            raise Unauthorized("signed out; sign in again")
+        if account is not None and user.account_id not in (None, account.id):
+            raise Unauthorized("session user belongs to another account")
+        if instance_role is None:
+            await _require_active_tenant(engine, tenant_id)
+        return Principal(
+            tenant_id=user.tenant_id, actor=f"user:{user.username}", kind=user.kind, user_id=user.id,
+            display_name=user.display_name, email=user.email, account_id=account_id, instance_role=instance_role,
+        )
+    if account is None or (tenant_id and instance_role is None):
+        raise Unauthorized("session is not valid for this tenant; sign in again")
+    return Principal(  # an instance admin or auditor outside any tenant they belong to (audited under this actor)
+        tenant_id=tenant_id, actor=f"account:{account.email or account.id}", kind="user", display_name=account.display_name,
+        email=account.email, account_id=account.id, instance_role=instance_role,
+    )
+
+
+async def _require_active_tenant(engine: Engine, tenant_id: str | None) -> None:
+    if tenant_id and (await engine.store.get_tenant(tenant_id)).status == "suspended":
+        raise Forbidden("this tenant is suspended; contact your instance admin")
 
 
 @dataclass
@@ -134,9 +168,16 @@ CtxDep = Annotated[Ctx, Depends(get_ctx)]
 
 
 async def get_system_ctx(ctx: CtxDep) -> Ctx:
-    if not ctx.principal.is_system_admin:
-        raise Forbidden("this call needs the system admin token")
+    if not (ctx.principal.is_system_admin or ctx.principal.instance_role == INSTANCE_ADMIN):
+        raise Forbidden("this call needs an instance admin")
     return ctx
 
 
-SystemCtxDep = Annotated[Ctx, Depends(get_system_ctx)]
+async def get_instance_reader_ctx(ctx: Annotated[Ctx, Depends(get_ctx)]) -> Ctx:
+    if not (ctx.principal.is_system_admin or ctx.principal.instance_role in INSTANCE_ROLES):
+        raise Forbidden("this call needs an instance admin or auditor")
+    return ctx
+
+
+SystemCtxDep = Annotated[Ctx, Depends(get_system_ctx)]  # instance admins (and the break-glass token)
+InstanceReaderCtxDep = Annotated[Ctx, Depends(get_instance_reader_ctx)]

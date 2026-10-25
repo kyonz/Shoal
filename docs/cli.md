@@ -24,6 +24,15 @@ Flags win over environment variables, which win over the current context:
 Bootstrap a fresh server with its admin token: `shoal --token $SHOAL_ADMIN_TOKEN tenants create acme`
 prints the tenant's first API key.
 
+Instance admins (or the admin token) manage tenants:
+
+```sh
+shoal tenants list                               # with status
+shoal tenants add-member acme dana@acme.com      # tenant-admin by default; --role viewer
+shoal tenants suspend acme                       # members locked out, no new runs; data kept
+shoal tenants resume acme
+```
+
 ## Resources
 
 ```sh

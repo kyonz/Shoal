@@ -426,3 +426,15 @@ def test_skills_import_and_upgrade(cli, tenant_key, server, tmp_path):
     assert "(was 1.0.0)" in upgraded.stdout and "/spec/instructions" in upgraded.stdout
     rolled = cli(*auth, "skills", "rollback", "pdf", "1")
     assert rolled.exit_code == 0 and "(1.0.0)" in rolled.stdout
+
+
+def test_instance_admin_manages_tenants(cli, tenant_key):
+    added = cli("--token", ADMIN, "tenants", "add-member", "acme", "dana@acme.test", "--role", "viewer")
+    assert added.exit_code == 0 and "viewer" in added.output, added.output
+    assert cli("--token", ADMIN, "tenants", "suspend", "acme").exit_code == 0
+    listed = cli("--token", ADMIN, "tenants", "list", "-o", "json")
+    assert json.loads(listed.stdout)[0]["status"] == "suspended"
+    blocked = cli("--token", tenant_key, "get", "workflows")
+    assert blocked.exit_code == 1 and "suspended" in blocked.output
+    assert cli("--token", ADMIN, "tenants", "resume", "acme").exit_code == 0
+    assert cli("--token", tenant_key, "get", "workflows").exit_code == 0

@@ -38,6 +38,7 @@ from shoal.api.routers import (
     evals,
     federation,
     hooks,
+    instance,
     resources,
     runs,
     scim,
@@ -189,6 +190,7 @@ def install_request_context(app: FastAPI) -> None:
 HUB_LOCAL_PREFIXES = (
     "/v1/federation", "/v1/auth", "/v1/tenants", "/v1/hooks", "/v1/users", "/v1/groups", "/v1/service-accounts",
     "/v1/api-keys", "/v1/oidc-providers", "/v1/openapi.json", "/v1/docs", "/v1/info",
+    "/v1/instance", "/v1/me/tenant",  # instance accounts and tenant switching live on the hub
     "/.well-known",  # each deployment is its own workload identity issuer
 )
 
@@ -354,7 +356,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
+    for module in (system, instance, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
                    credentials, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:

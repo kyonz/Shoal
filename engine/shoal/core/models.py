@@ -726,6 +726,11 @@ def credential_fields(values: dict[str, Any]) -> list[str]:
     return sorted(k for k in values if CREDENTIAL_NAME.search(k))
 
 
+def endpoint_fields(values: dict[str, Any]) -> list[str]:
+    """Settings that choose where a request (and its credentials) goes: ``host``, ``url``, ``api_url``, ..."""
+    return sorted(k for k in values if k in ("host", "url") or k.endswith(("_url", "_host")))
+
+
 class GatewaySpec(Model):
     """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...).
 
@@ -846,12 +851,45 @@ class EvalCase(Model):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Carried to results and eval sinks.")
 
 
-class EvalDatasetRef(Model):
+class EvalPlatformSpec(Model):
+    """An eval platform connected once by an admin (tenant-wide, ``eval-platforms:manage``).
+
+    Evals point at it with ``platform: <name>`` instead of repeating sink settings.
+    Credentials are secret names in the tenant's ``shared`` namespace.
+    """
+
+    description: str | None = None
+    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    config: dict[str, Any] = Field(
+        default_factory=dict, description="Sink settings; credentials as secret names (api_key_secret, secret_key_secret)."
+    )
+
+    @model_validator(mode="after")
+    def _no_clear_text_credentials(self) -> EvalPlatformSpec:
+        leaked = [k for k in credential_fields(self.config) if not k.endswith("_secret")]
+        if leaked:
+            raise ValueError(f"config keys {leaked} look like credentials: store them as secrets and use <name>_secret")
+        return self
+
+
+class _PlatformOrSink(Model):
+    sink: str | None = Field(None, description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    platform: str | None = Field(None, description="An EvalPlatform; its sink and settings apply, `config` overrides them.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
+
+    @model_validator(mode="after")
+    def _one_target(self) -> _PlatformOrSink:
+        if bool(self.sink) == bool(self.platform):
+            raise ValueError("set exactly one of `sink` or `platform`")
+        if self.platform and (endpoints := endpoint_fields(self.config)):
+            raise ValueError(f"{', '.join(endpoints)}: an eval platform's endpoints are set on the platform only")
+        return self
+
+
+class EvalDatasetRef(_PlatformOrSink):
     """Cases imported from an eval platform (``shoal.eval_sinks`` plugin) each time the eval runs."""
 
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
     name: str = Field(description="Dataset name on the platform.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
     limit: int | None = Field(None, ge=1)
 
 
@@ -906,11 +944,8 @@ class Grader(Model):
         return self
 
 
-class EvalSinkRef(Model):
+class EvalSinkRef(_PlatformOrSink):
     """Export each finished eval run (traces and scores) to an eval platform."""
-
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
 
 
 class EvalGate(Model):
@@ -1074,6 +1109,12 @@ class Eval(ResourceBase):
     plural: ClassVar[str] = "evals"
 
 
+class EvalPlatform(ResourceBase):
+    kind: Literal["EvalPlatform"] = "EvalPlatform"
+    spec: EvalPlatformSpec
+    plural: ClassVar[str] = "eval-platforms"
+
+
 class SkillSource(ResourceBase):
     kind: Literal["SkillSource"] = "SkillSource"
     spec: SkillSourceSpec
@@ -1094,7 +1135,8 @@ AnyResource = Annotated[
     | ModelPolicy
     | Blueprint
     | Eval
-    | SkillSource,
+    | SkillSource
+    | EvalPlatform,
     Field(discriminator="kind"),
 ]
 
@@ -1102,7 +1144,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

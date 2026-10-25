@@ -53,6 +53,7 @@ import {
 } from "@/components/ui";
 import { KeyValueInput, SchemaForm, type Widget } from "@/components/forms/SchemaForm";
 import { KINDS, NAME_RE, kindPath, kindPermissions } from "./kinds";
+import { actorName } from "@/lib/actor";
 
 export interface Draft {
   name: string;
@@ -722,7 +723,7 @@ function HistoryTab({ plural, ns, name, canWrite, onRestored }: {
                 <span className="mt-0.5 font-mono text-xs font-semibold tabular-nums">v{v.version}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-xs">{relTime(v.created_at)}</span>
-                  <span className="block truncate text-[11px] text-faint">{v.created_by ?? "unknown"}</span>
+                  <span className="block truncate text-[11px] text-faint">{actorName(v.created_by)}</span>
                 </span>
                 {v === current && <Badge tone="ok">current</Badge>}
               </button>

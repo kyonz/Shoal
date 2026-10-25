@@ -12,6 +12,7 @@ import { cn } from "@/lib/cn";
 import { humanize } from "@/components/forms/SchemaForm";
 import { relTime } from "@/lib/format";
 import { Badge, Button, Card, CardHeader, CodeEditor, CopyButton, Dialog, EmptyState, Field, Input, NativeSelect, Skeleton } from "@/components/ui";
+import { actorName } from "@/lib/actor";
 
 // --------------------------------------------------------------------------- errors
 
@@ -211,7 +212,7 @@ export function VersionsPanel({ plural, ns, name, current }: { plural: Plural; n
           >
             <Badge tone={v.version === latest?.version ? "accent" : "neutral"}>v{v.version}</Badge>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs">{v.created_by ?? "unknown"}</span>
+              <span className="block truncate text-xs">{actorName(v.created_by)}</span>
               <span className="block text-[11px] text-faint">{relTime(v.created_at)}</span>
             </span>
           </button>

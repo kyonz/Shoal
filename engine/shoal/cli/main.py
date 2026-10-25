@@ -35,7 +35,7 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 secrets_app = typer.Typer(help="Manage namespace secrets (values are write-only).", no_args_is_help=True)
-tenants_app = typer.Typer(help="Create and list tenants (needs the system admin token).", no_args_is_help=True)
+tenants_app = typer.Typer(help="Create and manage tenants (instance admins or the admin token).", no_args_is_help=True)
 eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_help=True)
 integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_args_is_help=True)
 db_app = typer.Typer(help="Database schema migrations (runs where the server runs; uses SHOAL_DATABASE_URL).", no_args_is_help=True)
@@ -1103,7 +1103,37 @@ def tenants_list(ctx: typer.Context, output: Output = Format.table) -> None:
     """List tenants."""
     with api(ctx) as client:
         emit(client.get("/v1/tenants"), output, [("SLUG", lambda t: t["slug"]), ("NAME", lambda t: t.get("name")),
+                                                  ("STATUS", lambda t: t.get("status", "active")),
                                                   ("AGE", lambda t: age(t.get("created_at")))], name=lambda t: t["slug"])
+
+
+@tenants_app.command("suspend")
+def tenants_suspend(ctx: typer.Context, slug: Annotated[str, typer.Argument()]) -> None:
+    """Suspend a tenant: its members are locked out and no new runs start (data is kept)."""
+    with api(ctx) as client:
+        client.request("PATCH", f"/v1/tenants/{slug}", json={"status": "suspended"})
+    console.print(f"tenant [bold]{escape(slug)}[/bold] suspended")
+
+
+@tenants_app.command("resume")
+def tenants_resume(ctx: typer.Context, slug: Annotated[str, typer.Argument()]) -> None:
+    """Resume a suspended tenant."""
+    with api(ctx) as client:
+        client.request("PATCH", f"/v1/tenants/{slug}", json={"status": "active"})
+    console.print(f"tenant [bold]{escape(slug)}[/bold] resumed")
+
+
+@tenants_app.command("add-member")
+def tenants_add_member(
+    ctx: typer.Context,
+    slug: Annotated[str, typer.Argument()],
+    email: Annotated[str, typer.Argument(help="The person's email; they are invited if they have not signed in yet.")],
+    role: Annotated[str, typer.Option(help="Role in that tenant, granted tenant-wide.")] = "tenant-admin",
+) -> None:
+    """Give someone a role in a tenant."""
+    with api(ctx) as client:
+        member = client.request("POST", f"/v1/tenants/{slug}/members", json={"email": email, "role": role})
+    console.print(f"{escape(member['username'])} now has {', '.join(member['roles'])} in [bold]{escape(slug)}[/bold]")
 
 
 # --------------------------------------------------------------------------- database

@@ -10,6 +10,7 @@ import { alignKeys, stripServerDefaults, toDocument, toYaml } from "@/features/w
 import type { Schemas } from "@/api/client";
 import type { WorkflowSpecDoc } from "@/features/workflow/types";
 import { useBuilder } from "./store";
+import { actorName } from "@/lib/actor";
 
 type Version = Schemas["ResourceVersionOut"];
 
@@ -74,7 +75,7 @@ export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
                   {i === 0 && <Badge tone="ok">latest</Badge>}
                 </div>
                 <div className="mt-0.5 truncate text-[11px] text-faint">
-                  {v.created_by ?? "unknown"} · {relTime(v.created_at)}
+                  {actorName(v.created_by)} · {relTime(v.created_at)}
                 </div>
                 {v.message && <div className="mt-0.5 line-clamp-2 text-[11.5px] text-muted">{v.message}</div>}
               </button>

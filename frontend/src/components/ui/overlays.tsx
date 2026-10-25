@@ -300,18 +300,20 @@ export function TabsTrigger({ value, children, count }: { value: string; childre
 }
 
 /** Segmented control for small mode switches (Visual / YAML / Split). */
-export function Segmented<T extends string>({ value, onChange, options, className }: {
+export function Segmented<T extends string>({ value, onChange, options, className, disabled }: {
   value: T;
   onChange: (v: T) => void;
   options: { value: T; label: ReactNode; icon?: ReactNode; title?: string }[];
   className?: string;
+  disabled?: boolean;
 }) {
   return (
-    <div className={cn("inline-flex h-8 items-center rounded-lg border border-border bg-subtle p-0.5", className)}>
+    <div className={cn("inline-flex h-8 items-center rounded-lg border border-border bg-subtle p-0.5", disabled && "pointer-events-none opacity-60", className)}>
       {options.map((o) => (
         <button
           key={o.value}
           title={o.title}
+          disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
             "flex h-full items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
