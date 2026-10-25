@@ -73,6 +73,22 @@ class ApprovalRequest(BaseModel):
     initiator: str | None = Field(None, description="Display name of the person the run acts for.")
 
 
+class SetupPermission(BaseModel):
+    name: str
+    why: str
+
+
+class SetupFeature(BaseModel):
+    """Something an app can do, with the permissions (OAuth scopes) and event subscriptions it needs and why."""
+
+    key: str
+    title: str
+    description: str
+    scopes: list[SetupPermission] = Field(default_factory=list)
+    events: list[SetupPermission] = Field(default_factory=list)
+    required: bool = False
+
+
 class WebhookReply(BaseModel):
     """The HTTP answer to a webhook delivery, for services that read it (Slack challenges, modal errors)."""
 
@@ -258,9 +274,47 @@ class Integration:
     def webhook_setup_instructions(self, url: str) -> str:
         return f"Send webhooks to {url}"
 
-    def setup_manifest(self, webhook_url: str, install_redirect_url: str, connection: str) -> dict[str, Any] | None:
-        """An app manifest for the service with Shoal's URLs filled in (Slack app manifests), if it has one."""
+    # --- guided app setup --------------------------------------------------------
+
+    setup_features: ClassVar[list[SetupFeature]] = []  # what the app can do, each with the permissions it needs
+
+    def setup_manifest(
+        self, webhook_url: str, install_redirect_url: str, connection: str, *, config: Any = None,
+        features: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """An app manifest for the service with Shoal's URLs filled in (Slack app manifests), if it has one.
+
+        ``features`` are the ``setup_features`` keys to ask permissions for (None: the connection's choice).
+        """
         return None
+
+    def setup_create_url(self, manifest: dict[str, Any]) -> str | None:
+        """A link that opens the service's "create app" page prefilled with ``manifest``, if it has one."""
+        return None
+
+    def enabled_features(self, config: Any = None, features: list[str] | None = None) -> list[str]:
+        """The setup features in effect: ``features`` if given, else the connection's ``features`` setting,
+        else all of them; required ones are always on."""
+        chosen = features if features is not None else getattr(config, "features", None)
+        keys = [f.key for f in self.setup_features]
+        if chosen is None:
+            return keys
+        return [f.key for f in self.setup_features if f.required or f.key in chosen]
+
+    def setup_permissions(self, features: list[str]) -> tuple[list[str], list[str]]:
+        """(scopes, events) the given features need, in a stable order without duplicates."""
+        scopes: dict[str, None] = {}
+        events: dict[str, None] = {}
+        for feature in self.setup_features:
+            if feature.key in features:
+                scopes.update((p.name, None) for p in feature.scopes)
+                events.update((p.name, None) for p in feature.events)
+        return list(scopes), list(events)
+
+    def features_used(self, triggers: list[Any], workflows: list[Any]) -> dict[str, list[str]]:
+        """Which setup features the connection's triggers and workflows rely on: feature key -> reasons
+        (e.g. ``"trigger help-bot"``), so the setup guide can recommend them."""
+        return {}
 
     # --- trigger filters --------------------------------------------------------
 
@@ -355,6 +409,7 @@ class Integration:
             "approvals": cls.supports_approvals,
             "trigger_filter_schema": cls.trigger_filter_model.model_json_schema() if cls.trigger_filter_model else None,
             "install": bool(cls.install_fields),
+            "setup_features": [f.model_dump() for f in cls.setup_features],
         }
 
 

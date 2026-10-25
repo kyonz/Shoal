@@ -450,19 +450,90 @@ async def connection_webhook(namespace: str, name: str, ctx: CtxDep) -> dict[str
         conn = await _connection(ctx, namespace, name)
     integration = ctx.engine.integrations.get(conn.spec.integration)
     out: dict[str, Any] = {"url": url, "instructions": integration.webhook_setup_instructions(url)}
-    manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name)
+    manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name,
+                                          config=_plain_config(integration, conn))
     if manifest is not None:
         out["manifest"] = manifest
     out["install"] = bool(integration.install_fields)
+    out["setup"] = bool(integration.setup_features)
+    return out
+
+
+def _plain_config(integration: Any, conn: Connection) -> Any:
+    """The connection's non-secret settings as the integration's model (None if they do not validate alone)."""
+    try:
+        return integration.connection_model.model_validate(conn.spec.config)
+    except ValidationError:
+        return None
+
+
+@router.get("/namespaces/{namespace}/connections/{name}/setup", tags=["connections"],
+            summary="Guided app setup: features with the permissions they need, the generated manifest, progress")
+async def connection_setup(
+    namespace: str, name: str, ctx: CtxDep,
+    features: str | None = Query(None, description="Comma-separated features to preview instead of the connection's"),
+) -> dict[str, Any]:
+    await ctx.namespace(namespace, "connections:read")
+    with use_namespace(namespace):
+        url = await ctx.engine.integrations.webhook_url(ctx.tenant_id, name)
+        conn = await _connection(ctx, namespace, name)
+    integration = ctx.engine.integrations.get(conn.spec.integration)
+    config = _plain_config(integration, conn)
+    chosen = None if features is None else [f for f in features.split(",") if f]
+    enabled = integration.enabled_features(config, chosen)
+    triggers = [Trigger.model_validate(r.document)
+                for r in await ctx.engine.store.list_resources(ctx.tenant_id, "Trigger", all_namespaces=True)]
+    triggers = [tr for tr in triggers if tr.spec.connection == name]
+    workflows = []
+    for row in await ctx.engine.store.list_resources(ctx.tenant_id, "Workflow", namespace=namespace):
+        try:
+            workflow = parse_resource(row.document)
+        except (ValidationError, ValueError):
+            continue
+        if name in (workflow.spec.connections or {}).values():
+            workflows.append(workflow)
+    used = integration.features_used(triggers, workflows)
+    redirect = ctx.engine.integrations.install_redirect_uri
+    manifest = integration.setup_manifest(url, redirect, name, config=config, features=chosen)
+    scopes, events = integration.setup_permissions(enabled)
+    secrets = {s.name for s in await ctx.engine.store.list_secrets(ctx.tenant_id, namespace=namespace)}
+    secrets |= {s.name for s in await ctx.engine.store.list_secrets(ctx.tenant_id, namespace=SHARED_NAMESPACE)}
+    fields = {}
+    for field in integration.secret_fields():
+        secret = conn.spec.secrets.get(field)
+        fields[field] = {"secret": secret, "set": bool(secret and secret in secrets)}
+    out: dict[str, Any] = {
+        "integration": integration.key,
+        "url": url,
+        "install_redirect_url": redirect,
+        "instructions": integration.webhook_setup_instructions(url),
+        "features": [{**f.model_dump(), "enabled": f.key in enabled, "used_by": used.get(f.key, [])}
+                     for f in integration.setup_features],
+        "custom": chosen is not None or getattr(config, "features", None) is not None,
+        "scopes": scopes,
+        "events": events,
+        "secrets": fields,
+        "config": conn.spec.config,
+        "install": bool(integration.install_fields),
+    }
+    if manifest is not None:
+        out["manifest"] = manifest
+        out["manifest_yaml"] = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
+        create_url = integration.setup_create_url(manifest)
+        if create_url:
+            out["create_url"] = create_url
     return out
 
 
 @router.post("/namespaces/{namespace}/connections/{name}/install", tags=["connections"],
              summary="Start an app install (e.g. Add to Slack); returns the URL to send the admin to")
-async def install_connection(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+async def install_connection(
+    namespace: str, name: str, ctx: CtxDep,
+    then: str | None = Query(None, pattern="^setup$", description="Come back to the guided setup instead of the connection"),
+) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:write")
     await ctx.require("secrets:write", namespace)
-    url = await ctx.engine.integrations.install_start(ctx.tenant_id, namespace, name, ctx.actor)
+    url = await ctx.engine.integrations.install_start(ctx.tenant_id, namespace, name, ctx.actor, then=then)
     return {"authorize_url": url}
 
 

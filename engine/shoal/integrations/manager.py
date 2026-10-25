@@ -241,19 +241,21 @@ class IntegrationManager:
             raise InvalidRequest(f"connection '{name}' is not ready to install: {exc}") from exc
         return resource, ConnectionContext(engine=self.engine, tenant_id=tenant_id, name=name, config=config, integration=integration)
 
-    async def install_start(self, tenant_id: str, namespace: str, name: str, actor: str) -> str:
+    async def install_start(self, tenant_id: str, namespace: str, name: str, actor: str, *, then: str | None = None) -> str:
+        """The URL to send the admin to; ``then`` (e.g. ``"setup"``) is the connection page to come back to."""
         resource, ctx = await self._partial(tenant_id, namespace, name)
         if not ctx.integration.install_fields:
             raise InvalidRequest(f"{ctx.integration.title} connections have no app install")
         state = self.engine.secrets.cipher.encrypt(json.dumps({
             "t": tenant_id, "n": namespace, "c": name, "a": actor, "exp": (clock.now() + INSTALL_STATE_TTL).timestamp(),
+            **({"then": then} if then else {}),
         }))
         return ctx.integration.install_url(ctx.config, self.install_redirect_uri, state)
 
-    async def install_callback(self, code: str, state: str) -> tuple[str, str, str, str, list[str]]:
+    async def install_callback(self, code: str, state: str) -> tuple[str, str, str, str, list[str], str | None]:
         """Exchange the code and store what the install returns as the connection's secrets.
 
-        Returns (tenant, namespace, connection, actor, fields stored). A field with no secret
+        Returns (tenant, namespace, connection, actor, fields stored, page to return to). A field with no secret
         named in the connection gets one (``<connection>-<field>``) and the connection is updated.
         """
         try:
@@ -278,4 +280,4 @@ class IntegrationManager:
                 updated = resource.model_copy(update={"spec": resource.spec.model_copy(update={"secrets": secrets})})
                 await self.engine.store.apply_resource(tenant_id, updated, actor=actor, namespace=namespace,
                                                        message="secrets added by app install")
-        return tenant_id, namespace, name, actor, stored
+        return tenant_id, namespace, name, actor, stored, data.get("then")

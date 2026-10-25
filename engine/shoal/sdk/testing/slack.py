@@ -111,6 +111,7 @@ class MockSlack(MockHTTP):
         self.users: dict[str, dict[str, Any]] = {}
         self.channels: dict[str, str] = {}  # name -> id
         self.install_codes: dict[str, str] = {"install-code": bot_token}
+        self.scopes: list[str] | None = None  # granted bot scopes, sent as auth.test's X-OAuth-Scopes (None: not sent)
         self._ts = itertools.count(1)
         api = "slack.com"
         for method, handler in {
@@ -291,7 +292,10 @@ class MockSlack(MockHTTP):
     def _auth_test(self, request: httpx.Request) -> Any:
         if not self._authorized(request):
             return {"ok": False, "error": "invalid_auth"}
-        return {"ok": True, "team": "Acme", "team_id": self.team, "user": "shoal", "user_id": "U0BOT", "url": "https://acme.slack.com/"}
+        data = {"ok": True, "team": "Acme", "team_id": self.team, "user": "shoal", "user_id": "U0BOT", "url": "https://acme.slack.com/"}
+        if self.scopes is None:
+            return data
+        return httpx.Response(200, json=data, headers={"X-OAuth-Scopes": ",".join(self.scopes)})
 
     def _post(self, request: httpx.Request) -> Any:
         if not self._authorized(request):

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Copy, Download, KeyRound, MessagesSquare, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, Download, KeyRound, MessagesSquare, PlugZap, UserRound, Save, Trash2, Wand2, Webhook, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -89,7 +89,10 @@ export default function ConnectionEditor() {
     try {
       const res = await put.mutateAsync({ name, body: { metadata: { description: description || null }, spec } });
       toast.success(isNew ? `Connection ${name} created` : `Saved ${name} (v${res.metadata.version})`);
-      if (isNew) navigate(nsPath(ns, "connections", name), { replace: true });
+      if (isNew) {
+        const guided = catalog?.setup_features?.length;
+        navigate(guided ? nsPath(ns, "connections", name, "setup") : nsPath(ns, "connections", name), { replace: true });
+      }
     } catch {
       /* shown inline */
     }
@@ -280,7 +283,7 @@ function PickIntegration({ integrations, onPick, loading }: { integrations: Inte
   );
 }
 
-type WebhookSetup = { url: string; instructions: string; manifest?: Record<string, unknown>; install?: boolean };
+type WebhookSetup = { url: string; instructions: string; manifest?: Record<string, unknown>; install?: boolean; setup?: boolean };
 
 function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string; webhookUrl?: string }) {
   const { can } = useAuth();
@@ -327,8 +330,15 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
       )}
       {(manifest || webhook.data?.install) && (
         <Card>
-          <CardHeader title="App setup" description="Create the app from this manifest, then install it." />
+          <CardHeader title="App setup" description={webhook.data?.setup ? "A step-by-step guide: what the app needs and why, its manifest, install and a check." : "Create the app from this manifest, then install it."} />
           <div className="space-y-3 p-4">
+            {webhook.data?.setup && (
+              <Link to={nsPath(ns, "connections", name, "setup")} className="block">
+                <Button className="w-full justify-center" variant="primary" icon={<Wand2 className="size-4" />}>
+                  Guided setup
+                </Button>
+              </Link>
+            )}
             {manifest && (
               <>
                 <JsonBlock value={manifest} maxHeight="220px" />
@@ -338,7 +348,7 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
               </>
             )}
             {webhook.data?.install && can("connections:write", ns) && can("secrets:write", ns) && (
-              <Button className="w-full justify-center" variant="primary" icon={<Download className="size-4" />} loading={install.isPending} onClick={() => install.mutate()}>
+              <Button className="w-full justify-center" variant={webhook.data?.setup ? "secondary" : "primary"} icon={<Download className="size-4" />} loading={install.isPending} onClick={() => install.mutate()}>
                 Install app
               </Button>
             )}

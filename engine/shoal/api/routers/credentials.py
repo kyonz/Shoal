@@ -151,9 +151,10 @@ async def install_callback(engine: EngineDep, code: str | None = None, state: st
     base = engine.settings.public_url.rstrip("/")
     if error or not code or not state:
         return RedirectResponse(f"{base}/?install_error={error or 'missing_code'}", status_code=303)
-    tenant_id, namespace, connection, actor, fields = await engine.integrations.install_callback(code, state)
+    tenant_id, namespace, connection, actor, fields, then = await engine.integrations.install_callback(code, state)
     await engine.store.audit(tenant_id, actor, "connection.installed", f"{namespace}/{connection}", namespace=namespace, fields=fields)
-    return RedirectResponse(f"{base}/ns/{namespace}/connections/{connection}?installed=1", status_code=303)
+    page = "/setup" if then == "setup" else ""
+    return RedirectResponse(f"{base}/ns/{namespace}/connections/{connection}{page}?installed=1", status_code=303)
 
 
 @router.get("/v1/users/{username}/credentials", response_model=list[CredentialOut], summary="Who connected what (admins)")

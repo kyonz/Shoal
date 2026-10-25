@@ -46,6 +46,8 @@ from shoal.integrations.base import (
     IntegrationEvent,
     Interaction,
     Page,
+    SetupFeature,
+    SetupPermission,
     WebhookReply,
     action,
     raise_for_status,
@@ -54,24 +56,74 @@ from shoal.integrations.base import (
 
 log = logging.getLogger(__name__)
 
-BOT_SCOPES = [
-    "app_mentions:read",
-    "channels:history",
-    "channels:read",
-    "chat:write",
-    "chat:write.public",
-    "commands",
-    "files:read",
-    "groups:history",
-    "groups:read",
-    "im:history",
-    "im:write",
-    "reactions:read",
-    "reactions:write",
-    "users:read",
-    "users:read.email",
+
+def _p(name: str, why: str) -> SetupPermission:
+    return SetupPermission(name=name, why=why)
+
+
+FEATURES = [
+    SetupFeature(
+        key="messages", title="Messages, approvals and forms", required=True,
+        description="Post and update messages, ask for approvals and input with buttons, menus and forms, and know who "
+                    "clicked. Interactivity (clicks and form submissions) is always on.",
+        scopes=[
+            _p("chat:write", "Post and update messages, approvals and forms."),
+            _p("chat:write.public", "Post in public channels without being invited first."),
+            _p("im:write", "Send approvals and questions to a person as a direct message."),
+            _p("users:read", "Show who clicked a button or answered a form."),
+            _p("users:read.email", "Match Slack people to Shoal users by email, so their clicks count as theirs."),
+            _p("channels:read", "Turn #channel names into channel ids."),
+            _p("groups:read", "Turn private #channel names into ids (once the app is invited)."),
+        ],
+    ),
+    SetupFeature(
+        key="mentions", title="Answer @mentions",
+        description="Start workflows when someone @-mentions the app (app_mention triggers).",
+        scopes=[_p("app_mentions:read", "Receive messages that @-mention the app.")],
+        events=[_p("app_mention", "Tells Shoal when the app is mentioned.")],
+    ),
+    SetupFeature(
+        key="channel_messages", title="Channel bots and conversation context",
+        description="Wire a channel to a workflow so every message (or every matching one) can start a run, and read "
+                    "threads and channel history with slack.get_conversation.",
+        scopes=[
+            _p("channels:history", "Read messages in public channels the app is in."),
+            _p("groups:history", "Read messages in private channels the app is invited to."),
+        ],
+        events=[
+            _p("message.channels", "Tells Shoal about new messages in public channels the app is in."),
+            _p("message.groups", "Tells Shoal about new messages in private channels the app is in."),
+        ],
+    ),
+    SetupFeature(
+        key="direct_messages", title="Direct messages to the app",
+        description="Let people DM the app (message triggers with direct_messages), with the app's Messages tab on.",
+        scopes=[_p("im:history", "Read direct messages people send the app.")],
+        events=[_p("message.im", "Tells Shoal about direct messages to the app.")],
+    ),
+    SetupFeature(
+        key="reactions", title="Reactions",
+        description="Start workflows from emoji reactions and let workflows react (the bot blueprint adds :eyes:).",
+        scopes=[
+            _p("reactions:read", "Receive reactions added to messages."),
+            _p("reactions:write", "Add reactions with slack.add_reaction."),
+        ],
+        events=[_p("reaction_added", "Tells Shoal when someone adds a reaction.")],
+    ),
+    SetupFeature(
+        key="slash_command", title="Slash command",
+        description="A /command that starts workflows as the person who typed it (slash_command triggers).",
+        scopes=[_p("commands", "Add the slash command to the workspace.")],
+    ),
+    SetupFeature(
+        key="files", title="Shared files",
+        description="Read files shared in messages (message filters with has_files, event.files).",
+        scopes=[_p("files:read", "Read details of files shared in channels the app is in.")],
+    ),
 ]
-BOT_EVENTS = ["app_mention", "message.channels", "message.groups", "message.im", "reaction_added"]
+FEATURE_KEYS = [f.key for f in FEATURES]
+BOT_SCOPES = list(dict.fromkeys(p.name for f in FEATURES for p in f.scopes))
+BOT_EVENTS = list(dict.fromkeys(p.name for f in FEATURES for p in f.events))
 SKIPPED_SUBTYPES = {"message_changed", "message_deleted", "message_replied", "channel_join", "channel_leave",
                     "channel_topic", "channel_purpose", "channel_name", "group_join", "group_leave", "pinned_item",
                     "unpinned_item", "ekm_access_denied"}
@@ -99,6 +151,12 @@ class SlackConnection(BaseModel):
     client_secret: SecretStr | None = Field(None, description="The app's client secret, for 'Add to Slack'.")
     default_channel: str | None = Field(None, description="Channel used when an action or approval names none.")
     api_url: str = Field("https://slack.com/api", description="Slack Web API base URL (change for GovSlack).")
+    app_name: str = Field("Shoal", max_length=35, description="The app's name and bot name in the generated manifest.")
+    slash_command: str = Field("/shoal", pattern=r"^/[a-z0-9_-]{1,31}$", description="The slash command in the generated manifest.")
+    features: list[str] | None = Field(
+        None, description=f"What the app is set up for ({', '.join(FEATURE_KEYS)}); decides the manifest's scopes and "
+                          "events. Empty: everything."
+    )
 
 
 # ----------------------------------------------------------------------------- models
@@ -564,9 +622,29 @@ class SlackIntegration(Integration):
         return MessageRef(channel=channel, ts=ts, thread_key=thread_key(channel, body.get("thread_ts") or ts))
 
     async def test_connection(self, ctx: ConnectionContext) -> dict[str, Any]:
-        data = await self._api(ctx, "auth.test")
-        return {"ok": True, "team": data.get("team"), "bot": data.get("user"), "url": data.get("url"),
-                "verifies_requests": ctx.config.signing_secret is not None}
+        """Check the token, and that the app was granted every scope its features need."""
+        url = f"{ctx.config.api_url.rstrip('/')}/auth.test"
+        async with ctx.http() as client:
+            response = await client.post(url, headers={"Authorization": f"Bearer {self._token(ctx)}"})
+        raise_for_status(response, "Slack")
+        data = response.json()
+        if not data.get("ok"):
+            raise IntegrationError(f"Slack auth.test failed: {data.get('error', 'unknown_error')}")
+        out: dict[str, Any] = {"ok": True, "team": data.get("team"), "bot": data.get("user"), "url": data.get("url"),
+                               "verifies_requests": ctx.config.signing_secret is not None}
+        header = response.headers.get("x-oauth-scopes")
+        if header is not None:
+            granted = {s.strip() for s in header.split(",") if s.strip()}
+            needed, _ = self.setup_permissions(self.enabled_features(ctx.config))
+            out["scopes"] = sorted(granted)
+            out["missing_scopes"] = [s for s in needed if s not in granted]
+            if out["missing_scopes"]:
+                out["ok"] = False
+                out["error"] = ("the app is missing scopes its features need: " + ", ".join(out["missing_scopes"])
+                                + ". Update the app from the new manifest and reinstall it.")
+        if ctx.config.signing_secret is None:
+            out["warning"] = "no signing secret: clicks, events and slash commands are rejected until you add it"
+        return out
 
     # ------------------------------------------------------------------ actions
 
@@ -736,7 +814,8 @@ class SlackIntegration(Integration):
     def install_url(self, config: Any, redirect_uri: str, state: str) -> str:
         if not config.client_id or config.client_secret is None:
             raise IntegrationError("set the Slack app's client_id and client_secret on the connection to use 'Add to Slack'")
-        query = urlencode({"client_id": config.client_id, "scope": ",".join(BOT_SCOPES), "redirect_uri": redirect_uri, "state": state})
+        scopes, _ = self.setup_permissions(self.enabled_features(config))
+        query = urlencode({"client_id": config.client_id, "scope": ",".join(scopes), "redirect_uri": redirect_uri, "state": state})
         return f"https://slack.com/oauth/v2/authorize?{query}"
 
     async def complete_install(self, ctx: ConnectionContext, code: str, redirect_uri: str) -> dict[str, str]:
@@ -756,29 +835,80 @@ class SlackIntegration(Integration):
 
     # ------------------------------------------------------------------ setup
 
-    def setup_manifest(self, webhook_url: str, install_redirect_url: str, connection: str) -> dict[str, Any]:
+    setup_features = FEATURES
+
+    def setup_manifest(
+        self, webhook_url: str, install_redirect_url: str, connection: str, *, config: Any = None,
+        features: list[str] | None = None,
+    ) -> dict[str, Any]:
+        enabled = self.enabled_features(config, features)
+        scopes, events = self.setup_permissions(enabled)
+        name = getattr(config, "app_name", None) or "Shoal"
+        bot: dict[str, Any] = {"bot_user": {"display_name": name, "always_online": True}}
+        if "direct_messages" in enabled:
+            bot["app_home"] = {"home_tab_enabled": False, "messages_tab_enabled": True, "messages_tab_read_only_enabled": False}
+        if "slash_command" in enabled:
+            bot["slash_commands"] = [{"command": getattr(config, "slash_command", None) or "/shoal", "url": webhook_url,
+                                      "description": f"Talk to {name} workflows", "usage_hint": "[what to do]",
+                                      "should_escape": False}]
+        settings: dict[str, Any] = {}
+        if events:
+            settings["event_subscriptions"] = {"request_url": webhook_url, "bot_events": events}
+        settings.update({
+            "interactivity": {"is_enabled": True, "request_url": webhook_url},
+            "org_deploy_enabled": False,
+            "socket_mode_enabled": False,
+            "token_rotation_enabled": False,
+        })
         return {
-            "display_information": {"name": "Shoal", "description": "Workflow approvals, inputs and notifications from Shoal.",
+            "display_information": {"name": name, "description": "Workflow approvals, inputs and notifications from Shoal.",
                                     "background_color": "#0b3d5c"},
-            "features": {
-                "bot_user": {"display_name": "Shoal", "always_online": True},
-                "slash_commands": [{"command": "/shoal", "url": webhook_url, "description": "Talk to Shoal workflows",
-                                    "usage_hint": "[what to do]", "should_escape": False}],
-            },
-            "oauth_config": {"redirect_urls": [install_redirect_url], "scopes": {"bot": BOT_SCOPES}},
-            "settings": {
-                "event_subscriptions": {"request_url": webhook_url, "bot_events": BOT_EVENTS},
-                "interactivity": {"is_enabled": True, "request_url": webhook_url},
-                "org_deploy_enabled": False,
-                "socket_mode_enabled": False,
-                "token_rotation_enabled": False,
-            },
+            "features": bot,
+            "oauth_config": {"redirect_urls": [install_redirect_url], "scopes": {"bot": scopes}},
+            "settings": settings,
         }
+
+    def setup_create_url(self, manifest: dict[str, Any]) -> str:
+        return "https://api.slack.com/apps?" + urlencode({"new_app": "1", "manifest_json": json.dumps(manifest, separators=(",", ":"))})
+
+    def features_used(self, triggers: list[Any], workflows: list[Any]) -> dict[str, list[str]]:
+        used: dict[str, list[str]] = {}
+
+        def note(key: str, why: str) -> None:
+            used.setdefault(key, [])
+            if why not in used[key]:
+                used[key].append(why)
+
+        for trigger in triggers:
+            spec, why = trigger.spec, f"trigger {trigger.metadata.name}"
+            match = spec.match or {}
+            if spec.event == "app_mention":
+                note("mentions", why)
+            elif spec.event == "message":
+                if match.get("direct_messages") is True:
+                    note("direct_messages", why)
+                else:
+                    note("channel_messages", why)
+                    if match.get("direct_messages") is None and not match.get("channels"):
+                        note("direct_messages", why)
+                if match.get("has_files"):
+                    note("files", why)
+            elif spec.event == "reaction_added":
+                note("reactions", why)
+            elif spec.event == "slash_command":
+                note("slash_command", why)
+        actions = {"slack.add_reaction": "reactions", "slack.get_conversation": "channel_messages"}
+        for workflow in workflows:
+            for step in workflow.spec.steps:
+                feature = actions.get(getattr(step, "action", None) or "")
+                if feature:
+                    note(feature, f"workflow {workflow.metadata.name}")
+        return used
 
     def webhook_setup_instructions(self, url: str) -> str:
         return (
             "Create a Slack app from the manifest below (api.slack.com/apps > Create New App > From a manifest); "
-            f"it points Event Subscriptions, Interactivity and the /shoal command at {url}. Put the app's signing "
+            f"it points Event Subscriptions, Interactivity and the slash command at {url}. Put the app's signing "
             "secret on this connection, then install the app: 'Add to Slack' (with client id and secret) or paste "
             "the bot token. Invite the app to the channels it should post in or listen to."
         )

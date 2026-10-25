@@ -94,6 +94,7 @@ export interface IntegrationCatalog {
   approvals?: boolean;
   install?: boolean;
   trigger_filter_schema?: JsonSchema | null;
+  setup_features?: { key: string; title: string; description: string; required: boolean }[];
 }
 
 export interface JsonSchema {

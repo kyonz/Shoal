@@ -318,6 +318,10 @@ async def test_setup_manifest_and_add_to_slack(engine, tenant, slack):
         assert r.status_code == 303 and r.headers["location"].endswith("/ns/default/connections/slack?installed=1")
         r = await api.get("/v1/install/callback", params={"code": "install-code", "state": "forged"})
         assert r.status_code == 401
+        r = await api.post("/v1/namespaces/default/connections/slack/install", params={"then": "setup"})
+        state = parse_qs(urlparse(r.json()["authorize_url"]).query)["state"][0]
+        r = await api.get("/v1/install/callback", params={"code": "install-code", "state": state})
+        assert r.headers["location"].endswith("/ns/default/connections/slack/setup?installed=1")
     connection = await engine.store.get_resource(tenant.id, "Connection", "slack")
     assert connection.spec.secrets["bot_token"] == "slack-bot-token"
     assert await engine.secrets.get(tenant.id, "slack-bot-token") == slack.bot_token
@@ -529,3 +533,76 @@ async def test_bot_replies_in_thread_with_conversation_context(world, slack):
     runs = await engine.store.list_runs(tenant.id)
     ctx = (await engine.store.get_step(runs[0].id, "ctx")).output
     assert ctx["transcript"] == "fox: the build is red\nDana Scully: <@U0BOT> what happened?"
+
+
+# --------------------------------------------------------------------------- guided setup
+
+
+async def test_manifest_asks_only_for_the_features_in_use(engine, tenant, slack):
+    integration = SlackIntegration()
+    full = integration.setup_manifest("https://hook", "https://cb", "slack")
+    assert full["features"]["slash_commands"][0]["command"] == "/shoal"
+    assert "im:history" in full["oauth_config"]["scopes"]["bot"]
+
+    config = SlackIntegration.connection_model.model_validate(
+        {"features": ["mentions"], "app_name": "Helper", "slash_command": "/helper"})
+    small = integration.setup_manifest("https://hook", "https://cb", "slack", config=config)
+    scopes = small["oauth_config"]["scopes"]["bot"]
+    assert "chat:write" in scopes and "app_mentions:read" in scopes  # messages are always on
+    assert "channels:history" not in scopes and "commands" not in scopes
+    assert small["settings"]["event_subscriptions"]["bot_events"] == ["app_mention"]
+    assert "slash_commands" not in small["features"] and small["features"]["bot_user"]["display_name"] == "Helper"
+    dms = integration.setup_manifest("https://hook", "https://cb", "slack", config=config, features=["direct_messages", "slash_command"])
+    assert dms["features"]["app_home"]["messages_tab_enabled"] is True
+    assert dms["features"]["slash_commands"][0]["command"] == "/helper"
+    assert "app_mention" not in dms["settings"]["event_subscriptions"]["bot_events"]
+    link = urlparse(integration.setup_create_url(small))
+    assert link.netloc == "api.slack.com" and json.loads(parse_qs(link.query)["manifest_json"][0]) == small
+
+
+async def test_setup_guide_recommends_features_and_tracks_progress(world, slack):
+    engine, tenant = world
+    engine.settings.admin_token = SecretStr("admin")
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "answer", {"connections": {"slack": "slack"}, "steps": [
+        {"id": "look", "type": "action", "action": "slack.add_reaction", "with": {"channel": "C1", "ts": "1.1", "name": "eyes"}}]}))
+    await engine.store.apply_resource(tenant.id, doc("Trigger", "help", {
+        "connection": "slack", "event": "message", "workflow": "answer", "match": {"channels": ["#help"], "mentioned": True}}))
+    await engine.store.apply_resource(tenant.id, doc("Trigger", "cmd", {"connection": "slack", "event": "slash_command", "workflow": "answer"}))
+    app = create_app(engine=engine)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test",
+                                 headers={"Authorization": "Bearer admin", "X-Shoal-Tenant": "acme"}) as api:
+        guide = (await api.get("/v1/namespaces/default/connections/slack/setup")).json()
+        by_key = {f["key"]: f for f in guide["features"]}
+        assert by_key["channel_messages"]["used_by"] == ["trigger help"]
+        assert by_key["slash_command"]["used_by"] == ["trigger cmd"]
+        assert by_key["reactions"]["used_by"] == ["workflow answer"]
+        assert by_key["direct_messages"]["used_by"] == []
+        assert all(f["enabled"] for f in guide["features"]) and guide["custom"] is False  # nothing chosen yet: everything
+        assert all(p["why"] for f in guide["features"] for p in f["scopes"] + f["events"])
+        assert guide["secrets"]["bot_token"] == {"secret": "slack-bot", "set": True}
+        assert guide["secrets"]["client_secret"] == {"secret": None, "set": False}
+        assert "request_url: " + guide["url"] in guide["manifest_yaml"]
+        assert guide["create_url"].startswith("https://api.slack.com/apps?new_app=1")
+
+        preview = (await api.get("/v1/namespaces/default/connections/slack/setup", params={"features": "channel_messages"})).json()
+        assert preview["custom"] is True and "commands" not in preview["scopes"]
+        assert preview["events"] == ["message.channels", "message.groups"]
+        assert [f["key"] for f in preview["features"] if f["enabled"]] == ["messages", "channel_messages"]
+
+
+async def test_verify_flags_scopes_the_app_was_not_granted(world, slack):
+    engine, tenant = world
+    connection = await engine.store.get_resource(tenant.id, "Connection", "slack")
+    connection.spec.config["features"] = ["mentions", "reactions"]
+    await engine.store.apply_resource(tenant.id, connection)
+    ctx = await engine.integrations.connection(tenant.id, "slack")
+    slack.scopes = ["chat:write", "chat:write.public", "im:write", "users:read", "users:read.email", "channels:read",
+                    "groups:read", "app_mentions:read"]
+    result = await ctx.integration.test_connection(ctx)
+    assert result["ok"] is False and result["missing_scopes"] == ["reactions:read", "reactions:write"]
+    assert "reinstall" in result["error"]
+    slack.scopes += ["reactions:read", "reactions:write"]
+    assert (await ctx.integration.test_connection(ctx))["ok"] is True
+    config = ctx.config.model_copy(update={"client_id": "1.2", "client_secret": SecretStr("shh")})
+    url = urlparse(ctx.integration.install_url(config, "https://cb", "state"))
+    assert "channels:history" not in parse_qs(url.query)["scope"][0]

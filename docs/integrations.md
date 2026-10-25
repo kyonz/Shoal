@@ -155,7 +155,10 @@ Never decide in the integration: the engine resolves the actor to a Shoal user
 the step's `approvers`, and only then records the decision. Its outcome is in
 `result["interactions"]` for `webhook_reply(ctx, headers, body, result)`, which
 lets you answer the delivery yourself (`WebhookReply(status, body)`). Two more
-optional hooks: `setup_manifest` (an app manifest shown on the connection) and
+optional hooks: `setup_manifest` (an app manifest shown on the connection, built
+from `setup_features`: each a `SetupFeature` with the scopes and events it needs
+and why; `features_used` recommends them from triggers and workflows and
+`setup_create_url` links to a prefilled "create app" page) and
 `install_fields` + `install_url` / `complete_install` (an OAuth app install
 that stores tokens as the connection's secrets).
 
@@ -168,11 +171,23 @@ passes, or the reason it does not. Any trigger can also set
 
 ## Slack
 
-Slack is built in. One Slack app per connection:
+Slack is built in. One Slack app per connection. Creating a Slack connection in
+the UI opens a **guided setup** (Connections → the connection → Guided setup)
+that walks through the steps below: pick what the app does (messages and
+approvals, @mentions, channel bots, DMs, reactions, a slash command, files) and
+it lists the OAuth scopes and event subscriptions each feature needs and why,
+recommends the ones the connection's triggers and workflows use, and generates
+the manifest (YAML or JSON, or **Create app in Slack**, which opens Slack with the
+manifest filled in). The choice is saved as the connection's `features`
+(`app_name` and `slash_command` name the app and its command); the manifest and
+Add to Slack ask only for those scopes, and the connection test reports any the
+app was not granted (`missing_scopes`). The same data is at
+`GET /v1/namespaces/{ns}/connections/{name}/setup` (`?features=a,b` previews a
+different choice).
 
 1. Create the connection (`integration: slack`), open it and copy the **app
-   manifest** (Event Subscriptions, Interactivity and `/shoal` already point at
-   the connection's URL). Create the app from it at api.slack.com/apps.
+   manifest** (Event Subscriptions, Interactivity and the slash command already
+   point at the connection's URL). Create the app from it at api.slack.com/apps.
 2. Store the app's **signing secret** on the connection (every request from
    Slack is verified; unsigned or older than five minutes is rejected).
 3. Install: **Add to Slack** (set `client_id` and the `client_secret` secret) or
