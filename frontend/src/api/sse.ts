@@ -17,7 +17,7 @@ export interface SseOptions {
   onError?: (err: unknown) => void;
   /** Called when the server ends the stream on purpose (e.g. run finished). */
   onEnd?: () => void;
-  /** The server cannot stream this resource (HTTP 501, e.g. through a federation hub); the stream stops. */
+  /** The server cannot stream this resource (HTTP 501); the stream stops. */
   onUnsupported?: () => void;
   lastEventId?: string;
 }

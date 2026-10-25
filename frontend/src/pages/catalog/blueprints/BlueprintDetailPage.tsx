@@ -42,7 +42,14 @@ export default function BlueprintDetailPage() {
   const s = spec(res.data);
   const params = Object.entries(s.params ?? {});
   const restricted = !!s.namespaces?.length && !s.namespaces.includes(ns);
-  const blocked = s.status === "draft" && !canPublish ? "Drafts cannot be adopted until published." : restricted ? `Only ${s.namespaces!.join(", ")} can adopt this.` : s.status === "deprecated" ? null : null;
+  const blocked =
+    s.status === "draft" && !canPublish
+      ? "Drafts cannot be adopted until published."
+      : restricted
+        ? `Only ${s.namespaces!.join(", ")} can adopt this.`
+        : s.status === "deprecated"
+          ? "This blueprint is deprecated and closed to new adoptions. Existing adoptions keep working and can still be upgraded."
+          : null;
   const mine = adoptions.data ?? [];
 
   return (
@@ -86,11 +93,7 @@ export default function BlueprintDetailPage() {
             )}
           </div>
         </div>
-        {(blocked || s.status === "deprecated") && (
-          <div className="border-t border-border bg-warn-soft px-5 py-2 text-[13px] text-warn">
-            {blocked ?? "This blueprint is deprecated. Existing adoptions keep working; consider an alternative for new work."}
-          </div>
-        )}
+        {blocked && <div className="border-t border-border bg-warn-soft px-5 py-2 text-[13px] text-warn">{blocked}</div>}
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">

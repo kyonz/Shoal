@@ -151,6 +151,7 @@ class CanMerge(BaseModel):
     can_merge: bool
     reasons: list[str]
     permission: str
+    head_sha: str | None = Field(None, description="The commit the decision applies to; a merge is pinned to it.")
     governance: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -310,7 +311,7 @@ class GitHubIntegration(Integration):
         cfg: GitHubConnection = ctx.config
         if cfg.token:
             return cfg.token.get_secret_value()
-        cache_key = f"{ctx.tenant_id}:{ctx.name}"
+        cache_key = f"{cfg.base_url}|{cfg.app_id}|{cfg.installation_id}"  # what the token is for, not the connection's name
         cached = self._tokens.get(cache_key)
         if cached and cached[1] - time.time() > 300:
             return cached[0]
@@ -428,11 +429,15 @@ class GitHubIntegration(Integration):
                 result["reasons"].append(f"{who} lacks write access to {repo} and policy forbids merging on the app's rights")
             elif policy.elevation == "qualified_approval":
                 reviews = await self._request(ctx, "GET", f"/repos/{repo}/pulls/{number}/reviews", params={"per_page": 100})
-                latest: dict[str, str] = {}
+                latest: dict[str, dict[str, Any]] = {}
                 for review in reviews:
                     if review.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
-                        latest[review["user"]["login"]] = review["state"]
-                approvers = [login for login, state in latest.items() if state == "APPROVED"]
+                        latest[review["user"]["login"]] = review
+                # Only an approval of the commit being merged counts: commits pushed after it were not reviewed.
+                approvers = [
+                    login for login, review in latest.items()
+                    if review["state"] == "APPROVED" and review.get("commit_id") == head_sha
+                ]
                 qualified = [a for a in approvers if await self._user_permission(ctx, repo, a) in WRITE_ROLES]
                 result["qualified_approvers"] = qualified
                 if qualified:
@@ -562,11 +567,17 @@ class GitHubIntegration(Integration):
             reasons.append(f"review decision is {status.review_decision}")
         if status.mergeable is False or status.mergeable_state in ("dirty", "blocked", "behind"):
             reasons.append(f"not mergeable (state: {status.mergeable_state})")
+        elif status.mergeable is None and status.state == "open":
+            reasons.append("GitHub is still computing mergeability; try again shortly")
         if status.checks == "failure":
             reasons.append("checks are failing")
+        elif status.checks == "pending":
+            reasons.append("checks are still running")
         governance = await self.governance(ctx, p.repo, p.number, status.head_sha)
         reasons += governance["reasons"]
-        return CanMerge(can_merge=not reasons, reasons=reasons, permission=permission, governance=governance)
+        return CanMerge(
+            can_merge=not reasons, reasons=reasons, permission=permission, head_sha=status.head_sha, governance=governance
+        )
 
     @action(description="Merge a pull request if permitted. Returns merged=false with a reason instead of failing.", input=MergePullRequest, output=MergeResult)
     async def merge_pull_request(self, ctx: ConnectionContext, p: MergePullRequest) -> MergeResult:
@@ -574,7 +585,8 @@ class GitHubIntegration(Integration):
         blocking = [r for r in check.reasons if p.require_approval or not r.startswith("review decision")]
         if blocking:
             return MergeResult(merged=False, reason="; ".join(blocking), governance=check.governance)
-        body: dict[str, Any] = {"merge_method": p.method}
+        # Pin the merge to the commit that was checked: GitHub refuses (409) if the branch moved since.
+        body: dict[str, Any] = {"merge_method": p.method, "sha": check.head_sha}
         if p.commit_title:
             body["commit_title"] = p.commit_title
         try:
@@ -703,7 +715,7 @@ class GitHubIntegration(Integration):
     async def verify_webhook(self, ctx: ConnectionContext, headers: dict[str, str], body: bytes) -> bool:
         secret = ctx.config.webhook_secret
         if secret is None:
-            return True
+            return False  # unsigned deliveries could fire triggers as anyone; set webhook_secret to receive webhooks
         signature = headers.get("x-hub-signature-256", "")
         expected = "sha256=" + hmac.new(secret.get_secret_value().encode(), body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature, expected)
@@ -744,6 +756,6 @@ class GitHubIntegration(Integration):
     def webhook_setup_instructions(self, url: str) -> str:
         return (
             f"In the repository or organization settings, add a webhook with payload URL {url}, content type "
-            "application/json, the connection's webhook secret, and events: Pull requests, Pull request reviews, "
+            "application/json, the connection's webhook secret (required: unsigned deliveries are rejected), and events: Pull requests, Pull request reviews, "
             "Issue comments, Check suites (plus anything your triggers use)."
         )

@@ -228,10 +228,8 @@ def _tenant_routes(plural: str, kind: str) -> None:
     @router.put(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"put_{plural}")
     async def put_one(name: str, body: ResourceIn, ctx: CtxDep, response: Response, message: str | None = MessageQuery) -> Any:
         await ctx.require(verbs["write"])
-        if kind == "Blueprint" and (body.spec or {}).get("status") == "featured":
-            current = await ctx.engine.store.find_resource(ctx.tenant_id, kind, name)
-            if current is None or current.spec.status != "featured":  # type: ignore[attr-defined]
-                await ctx.require("blueprints:feature")
+        if kind == "Blueprint":
+            await _require_feature(ctx, name, body.spec)
         return await _put(ctx, kind, name, SHARED_NAMESPACE, body, response, message)
 
     @router.get(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"get_{plural}")
@@ -266,6 +264,15 @@ for _plural, _kind_name in TENANT_SCOPED.items():
     _tenant_routes(_plural, _kind_name)
 
 
+async def _require_feature(ctx: Ctx, name: str, spec: dict[str, Any] | None) -> None:
+    """Featuring a blueprint (on any write path) needs blueprints:feature; keeping it featured does not."""
+    if (spec or {}).get("status") != "featured":
+        return
+    current = await ctx.engine.store.find_resource(ctx.tenant_id, "Blueprint", name)
+    if current is None or current.spec.status != "featured":  # type: ignore[attr-defined]
+        await ctx.require("blueprints:feature")
+
+
 # --------------------------------------------------------------------------- versions
 
 
@@ -288,6 +295,8 @@ async def _rollback(ctx: Ctx, kind: str, name: str, namespace: str, body: Rollba
     store = ctx.engine.store
     row = await store.get_resource_row(ctx.tenant_id, kind, name, namespace=namespace, fallback=False)
     target = await store.get_resource_version_row(ctx.tenant_id, kind, name, body.version, namespace=namespace)
+    if kind == "Blueprint" and not body.dry_run:
+        await _require_feature(ctx, name, target.document.get("spec"))
     if body.dry_run:
         current = await store.get_resource_version_row(ctx.tenant_id, kind, name, row.version, namespace=namespace)
         return VersionDiffOut(kind=kind, name=name, from_version=row.version, to_version=body.version,
@@ -340,6 +349,8 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
         plural = resource.plural
         if kind in TENANT_SCOPED_KINDS:
             await ctx.require(TENANT_VERBS[plural]["write"])
+            if kind == "Blueprint":
+                await _require_feature(ctx, resource.metadata.name, doc.get("spec"))
         else:
             await ctx.namespace(ns, f"{plural}:write")
         parsed.append((resource, ns, strip_nulls(doc.get("spec") or {})))

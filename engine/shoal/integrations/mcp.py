@@ -13,6 +13,7 @@ Servers that only speak stdio can be put behind an MCP HTTP proxy for now.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import re
 import time
@@ -27,7 +28,7 @@ from shoal.integrations.remote import check_url
 
 PROTOCOL_VERSION = "2025-06-18"
 TOOLS_TTL = 60.0
-_tools_cache: dict[tuple[str, str, str | None], tuple[float, list[dict[str, Any]]]] = {}
+_tools_cache: dict[tuple[str, str, str | None, str | None], tuple[float, list[dict[str, Any]]]] = {}
 
 
 class McpConnection(BaseModel):
@@ -104,7 +105,10 @@ class McpIntegration(Integration):
         return {"ok": True, "server": info.get("serverInfo", {}), "tools": len(await self._tools(ctx, refresh=True))}
 
     async def _tools(self, ctx: ConnectionContext, *, refresh: bool = False) -> list[dict[str, Any]]:
-        key = (ctx.tenant_id, ctx.name, ctx.acting_as)  # tool lists can differ per person
+        config: McpConnection = ctx.config
+        # Per server and credential (same-named connections in two namespaces may differ); lists can differ per person.
+        token = hashlib.sha256(config.token.get_secret_value().encode()).hexdigest() if config.token else None
+        key = (ctx.tenant_id, config.url, token, ctx.acting_as)
         cached = _tools_cache.get(key)
         if cached and not refresh and time.monotonic() - cached[0] < TOOLS_TTL:
             return cached[1]

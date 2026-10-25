@@ -101,6 +101,53 @@ async def test_qualified_approval_gates_merge(world):
     assert "shoal:merged-via-qualified-approval" in github.labels[(REPO, 1)]
 
 
+async def test_merge_is_pinned_to_the_reviewed_commit_and_waits_for_checks(world):
+    engine, tenant, github = world
+    github.collaborators[(REPO, "dana")] = "read"
+    await connect(engine, tenant)
+    dana = await initiator(engine, tenant, actor="user:dana@acme.test")
+    await call(engine, tenant, "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix"}, dana)
+    github.approve(REPO, 1, user="reviewer")
+
+    # Commits pushed after the approval were not reviewed: the approval no longer qualifies.
+    github.push(REPO, 1, "sha1-v2")
+    result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
+    assert not result["merged"] and result["governance"]["elevation"] == "awaiting_qualified_approval"
+
+    github.approve(REPO, 1, user="reviewer")
+    github.check_runs[(REPO, "sha1-v2")] = {"status": "in_progress", "conclusion": None}
+    result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
+    assert not result["merged"] and "checks are still running" in result["reason"]
+
+    github.check_runs.pop((REPO, "sha1-v2"))
+    result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
+    assert result["merged"]
+
+
+async def test_merge_refused_when_the_branch_moves_after_the_check(world):
+    engine, tenant, github = world
+    await connect(engine, tenant)
+    sam = await initiator(engine, tenant, github="sam")
+    github.collaborators[(REPO, "sam")] = "write"
+    await call(engine, tenant, "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix"}, sam)
+    github.approve(REPO, 1)
+    integration = engine.integrations.get("github")
+    original = integration.can_merge
+
+    async def check_then_push(ctx, p):
+        decision = await original(ctx, p)
+        github.push(REPO, 1, "sneaky")  # a commit lands between the check and the merge
+        return decision
+
+    integration.can_merge = check_then_push
+    try:
+        result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, sam)
+    finally:
+        del integration.can_merge
+    assert not result["merged"] and "409" in result["reason"]
+    assert github.merges == []
+
+
 async def test_deny_elevation_and_owner_merges(world):
     engine, tenant, github = world
     github.collaborators[(REPO, "sam")] = "write"

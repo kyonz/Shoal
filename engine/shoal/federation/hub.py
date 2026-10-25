@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -28,6 +29,7 @@ ENROLLMENT_TTL = timedelta(days=7)
 CONNECTED_WITHIN = timedelta(seconds=45)  # a connector polls at least this often while connected
 FORWARD_TIMEOUT = 30.0
 MAX_WAIT = 25.0
+FEDERATED_CACHE_TTL = 10.0  # seconds a replica trusts its hosted/federated answer for a tenant
 FORWARDED_HEADERS = ("content-type", "accept", "x-shoal-client", "if-match")
 
 
@@ -41,6 +43,11 @@ class FederationUnavailable(ShoalError):
     code = "federation_disconnected"
 
 
+class FederationRevoked(ShoalError):
+    status_code = 503
+    code = "federation_revoked"
+
+
 class FederationTimeout(ShoalError):
     status_code = 504
     code = "federation_timeout"
@@ -51,7 +58,7 @@ class FederationHub:
         self.engine = engine
         self._pollers: dict[str, set[asyncio.Event]] = {}  # link id -> connector polls waiting on this replica
         self._responses: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self._federated: dict[str, str | None] = {}  # tenant id -> link id (None: hosted), cached
+        self._federated: dict[str, tuple[str | None, float]] = {}  # tenant id -> (link id or None: hosted, when cached)
 
     @property
     def store(self) -> Any:
@@ -64,11 +71,18 @@ class FederationHub:
             return (await s.execute(select(t.FederationLink).where(t.FederationLink.tenant_id == tenant_id))).scalar_one_or_none()
 
     async def federated_link_id(self, tenant_id: str) -> str | None:
-        """The link to forward a tenant's calls through, or None for hosted tenants (cached)."""
-        if tenant_id not in self._federated:
+        """The link to forward a tenant's calls through, or None for hosted tenants.
+
+        A revoked link still counts: the tenant's data is in the member, so the hub refuses its
+        calls rather than serve it as an empty hosted tenant. Cached briefly, so a link made on
+        another replica takes effect within ``FEDERATED_CACHE_TTL``.
+        """
+        cached = self._federated.get(tenant_id)
+        if cached is None or time.monotonic() - cached[1] > FEDERATED_CACHE_TTL:
             link = await self.link_for_tenant(tenant_id)
-            self._federated[tenant_id] = link.id if link and link.status != "revoked" else None
-        return self._federated[tenant_id]
+            cached = (link.id if link else None, time.monotonic())
+            self._federated[tenant_id] = cached
+        return cached[0]
 
     async def links(self) -> list[t.FederationLink]:
         async with self.store.session() as s:
@@ -88,6 +102,8 @@ class FederationHub:
             in_use = (await s.execute(select(func.count()).select_from(t.Resource).where(t.Resource.tenant_id == tenant_id))).scalar()
         if in_use:
             raise Conflict("only an empty tenant can be federated: its data lives in the member deployment")
+        if await self.engine.federation_member.membership(tenant_id) is not None:
+            raise Conflict("this tenant is itself a member of another hub; it can't also be federated from here")
         token = p.ENROLLMENT_PREFIX + secrets.token_urlsafe(32)
         link = t.FederationLink(
             id=new_id("fed"), tenant_id=tenant_id, requested_mode=mode, created_by=actor,
@@ -99,6 +115,9 @@ class FederationHub:
         return link, token
 
     async def reissue_enrollment(self, tenant_id: str) -> tuple[t.FederationLink, str]:
+        link = await self.link_for_tenant(tenant_id)
+        if link is not None and link.status == "revoked":
+            raise Conflict("this link was revoked; federate the tenant again to get a new enrollment token")
         token = p.ENROLLMENT_PREFIX + secrets.token_urlsafe(32)
         link = await self._update(tenant_id, enrollment_hash=p.hash_token(token), enrollment_expires_at=clock.now() + ENROLLMENT_TTL)
         return link, token
@@ -182,7 +201,7 @@ class FederationHub:
                 if req is None or req.link_id != link.id or req.status == "done":
                     continue
                 req.status = "done"
-                req.response = {k: answer.get(k) for k in ("status", "headers", "body")}
+                req.response = {"status": answer.get("status"), "headers": answer.get("headers"), "body": self._seal(answer.get("body"))}
             link = row
         for answer in responses:
             future = self._responses.get(answer.get("id", ""))
@@ -228,7 +247,7 @@ class FederationHub:
                     .values(status="claimed", claimed_at=clock.now())
                 )
                 if result.rowcount:
-                    claimed.append({"id": row.id, **row.request})
+                    claimed.append({"id": row.id, **row.request, "body": self._open(row.request.get("body"))})
         return claimed
 
     # ------------------------------------------------------------------ forwarding
@@ -237,6 +256,8 @@ class FederationHub:
                       headers: dict[str, str], body: bytes, request_id: str) -> dict[str, Any]:
         async with self.store.session() as s:
             link = await s.get(t.FederationLink, link_id)
+        if link is not None and link.status == "revoked":
+            raise FederationRevoked("the hub's link to this tenant's member deployment was revoked; an operator can federate it again")
         if link is None or link.status != "active" or not link.secret_ciphertext:
             raise FederationUnavailable("this federated tenant has not enrolled a member deployment yet")
         if not self.connected(link):
@@ -255,7 +276,7 @@ class FederationHub:
             request={
                 "method": method.upper(), "path": path, "query": query, "assertion": assertion,
                 "headers": {k: v for k, v in headers.items() if k.lower() in FORWARDED_HEADERS} | {"x-request-id": request_id},
-                "body": base64.b64encode(body).decode() if body else "",
+                "body": self._seal(base64.b64encode(body).decode() if body else ""),
             },
         )
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
@@ -268,6 +289,8 @@ class FederationHub:
             return await self._await_response(req.id, future)
         finally:
             self._responses.pop(req.id, None)
+            async with self.store.session() as s:  # the hub keeps no copy of the member's data once answered
+                await s.execute(delete(t.FederationRequest).where(t.FederationRequest.id == req.id))
 
     async def _await_response(self, request_id: str, future: asyncio.Future[dict[str, Any]]) -> dict[str, Any]:
         """Woken directly when this replica served the poll; otherwise the answer shows up in the database."""
@@ -282,7 +305,14 @@ class FederationHub:
                 async with self.store.session() as s:
                     row = await s.get(t.FederationRequest, request_id)
                 if row is not None and row.status == "done" and row.response is not None:
-                    return row.response
+                    return row.response | {"body": self._open(row.response.get("body"))}
+
+    def _seal(self, body: str | None) -> str:
+        """Bodies wait in the hub's database only until answered, and encrypted while they do."""
+        return self.engine.secrets.cipher.encrypt(body) if body else ""
+
+    def _open(self, body: str | None) -> str:
+        return self.engine.secrets.cipher.decrypt(body) if body else ""
 
     async def _group_names(self, principal: Principal) -> list[str]:
         if not principal.user_id or not principal.tenant_id:

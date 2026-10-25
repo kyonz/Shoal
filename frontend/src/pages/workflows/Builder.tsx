@@ -35,8 +35,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Link, useBlocker, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
-import { ApiError, applyYaml } from "@/api/client";
-import { type IntegrationCatalog, useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
+import { ApiError, applyYaml, rawJson, type Resource } from "@/api/client";
+import { type IntegrationCatalog, resourcePath, useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { nsPath, useNs } from "@/lib/ns";
@@ -53,7 +53,7 @@ import { LAYOUT_ANNOTATION, type ParamDoc, type WorkflowSpecDoc } from "@/featur
 import { serverIssue, validateWorkflow, type Issue } from "@/features/workflow/validate";
 import { Inspector } from "./builder/Inspector";
 import { DND_MIME, Palette, type PaletteItem } from "./builder/Palette";
-import { useBuilder, useDirty } from "./builder/store";
+import { isDirty, useBuilder, useDirty } from "./builder/store";
 import { VersionsDialog } from "./builder/Versions";
 import { WorkflowSettings } from "./builder/WorkflowSettings";
 import { YamlPane } from "./builder/YamlPane";
@@ -108,6 +108,11 @@ function Builder() {
   const [serverIssues, setServerIssues] = useState<Issue[]>([]);
   const [checking, setChecking] = useState(false);
   const loadedFor = useRef<string | null>(null);
+  /** Server version the editor was loaded from (or last saved as): saves check it to avoid overwriting newer work. */
+  const loadedVersion = useRef<number | null>(null);
+  const saving = useRef(false);
+  /** A newer server version that arrived while there were unsaved edits. */
+  const [remote, setRemote] = useState<{ version: number; by: string | null } | null>(null);
 
   useEffect(() => {
     try {
@@ -117,26 +122,50 @@ function Builder() {
     }
   }, [view]);
 
+  useEffect(() => store().setReadOnly(!canWrite), [store, canWrite]);
+
   // ------------------------------------------------------------------ load
+  const loadResource = useCallback(
+    (r: Resource) => {
+      const selected = store().selected;
+      store().load({
+        spec: r.spec as WorkflowSpecDoc,
+        layout: decodeLayout(r.metadata.annotations?.[LAYOUT_ANNOTATION]),
+        meta: { name: r.metadata.name, description: r.metadata.description ?? "", labels: r.metadata.labels ?? {} },
+      });
+      // A reload of the same workflow keeps the inspector on the step being looked at.
+      if (selected && store().spec.steps.some((st) => st.id === selected)) store().select(selected);
+      loadedVersion.current = r.metadata.version;
+      setRemote(null);
+    },
+    [store],
+  );
+
   useEffect(() => {
     const key = `${ns}/${routeName ?? "new"}`;
-    if (loadedFor.current === key) return;
+    if (loadedFor.current === key) {
+      // Someone else (the assistant, the CLI, another tab) saved a newer version: follow it, or offer to.
+      const r = resource.data;
+      if (isNew || !r || saving.current || loadedVersion.current == null || r.metadata.version <= loadedVersion.current) return;
+      if (isDirty(store())) setRemote({ version: r.metadata.version, by: r.metadata.updated_by ?? null });
+      else {
+        loadResource(r);
+        toast.info(`Updated to version ${r.metadata.version}`, { description: r.metadata.updated_by ? `Saved by ${r.metadata.updated_by}` : undefined });
+      }
+      return;
+    }
     if (isNew) {
       store().load({ spec: { steps: [] }, layout: {}, meta: { name: "", description: "", labels: {} } });
+      loadedVersion.current = null;
+      setRemote(null);
       loadedFor.current = key;
       return;
     }
     if (!resource.data) return;
-    const r = resource.data;
-    const annotations = (r.metadata as { annotations?: Record<string, string> }).annotations ?? {};
-    store().load({
-      spec: r.spec as WorkflowSpecDoc,
-      layout: decodeLayout(annotations[LAYOUT_ANNOTATION]),
-      meta: { name: r.metadata.name, description: r.metadata.description ?? "", labels: r.metadata.labels ?? {} },
-    });
+    loadResource(resource.data);
     loadedFor.current = key;
     requestAnimationFrame(() => flow.fitView({ padding: 0.2, maxZoom: 1 }));
-  }, [ns, routeName, isNew, resource.data, store, flow]);
+  }, [ns, routeName, isNew, resource.data, store, flow, loadResource]);
 
   // ------------------------------------------------------------------ validation
   const clientIssues = useMemo(
@@ -261,22 +290,55 @@ function Builder() {
       st.select(null);
       return;
     }
+    if (st.meta.name === "new") {
+      // /workflows/new is the address of a blank builder, so a workflow called "new" could never be opened.
+      toast.error("“new” can't be used as a workflow name", { description: "Pick another name in workflow settings." });
+      st.select(null);
+      return;
+    }
     if (!st.spec.steps.length) {
       toast.error("Add at least one step before saving");
       return;
     }
+    saving.current = true;
     try {
+      // PUT creates or replaces, so check first that this save won't overwrite work it hasn't seen.
+      let current: Resource | null = null;
+      try {
+        current = await rawJson<Resource>(resourcePath("workflows", ns, st.meta.name));
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404)) throw e;
+      }
+      if (current && isNew) {
+        const ok = await confirm({
+          title: `Replace ${st.meta.name}?`,
+          description: `A workflow named ${st.meta.name} already exists in ${ns} (version ${current.metadata.version}). Saving replaces it with this one. Pick another name to keep both.`,
+          confirmLabel: "Replace",
+          danger: true,
+        });
+        if (!ok) return;
+      } else if (current && loadedVersion.current != null && current.metadata.version > loadedVersion.current) {
+        const ok = await confirm({
+          title: "Overwrite newer changes?",
+          description: `${st.meta.name} was saved as version ${current.metadata.version}${current.metadata.updated_by ? ` by ${current.metadata.updated_by}` : ""} after you opened it. Saving replaces those changes with yours.`,
+          confirmLabel: "Overwrite",
+          danger: true,
+        });
+        if (!ok) return;
+      }
       const res = await put.mutateAsync({
         name: st.meta.name,
         body: {
           metadata: {
             description: st.meta.description || null,
             labels: st.meta.labels,
-            annotations: { [LAYOUT_ANNOTATION]: encodeLayout(st.layout) },
+            annotations: { ...(current?.metadata.annotations ?? {}), [LAYOUT_ANNOTATION]: encodeLayout(st.layout) },
           },
           spec: st.spec as unknown as Record<string, unknown>,
         },
       });
+      loadedVersion.current = res.metadata.version;
+      setRemote(null);
       store().markSaved();
       toast.success(`Saved ${res.metadata.name}`, { description: `Version ${res.metadata.version}` });
       if (isNew) {
@@ -286,8 +348,10 @@ function Builder() {
     } catch (e) {
       const err = e as ApiError;
       toast.error("Could not save", { description: err.fieldErrors?.length ? err.fieldErrors.map((f) => `${f.loc.slice(1).join(".")}: ${f.msg}`).join("\n") : err.message });
+    } finally {
+      saving.current = false;
     }
-  }, [store, put, isNew, navigate, ns, canWrite]);
+  }, [store, put, isNew, navigate, ns, canWrite, confirm]);
 
   // ------------------------------------------------------------------ keyboard
   useEffect(() => {
@@ -327,7 +391,8 @@ function Builder() {
   }, [save, store, flow]);
 
   // ------------------------------------------------------------------ unsaved changes
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname);
+  // Read the store, not `dirty`: the blocker can run before a re-render (e.g. navigating right after the first save).
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => isDirty(store()) && currentLocation.pathname !== nextLocation.pathname);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     void confirm({ title: "Discard unsaved changes?", description: "Your edits to this workflow have not been saved.", confirmLabel: "Discard", danger: true }).then((ok) =>
@@ -375,6 +440,7 @@ function Builder() {
           <span className="max-w-64 truncate font-mono text-[13px] font-semibold">{meta.name || "untitled"}</span>
           {version != null && !isNew && <Badge>v{version}</Badge>}
           {isNew && <Badge tone="accent">new</Badge>}
+          {!canWrite && <Badge>read-only</Badge>}
           {dirty && (
             <Tooltip content="Unsaved changes">
               <span className="size-2 rounded-full bg-warn" />
@@ -448,6 +514,28 @@ function Builder() {
             </Tooltip>
           )}
         </div>
+
+        {remote && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-warn/20 bg-warn-soft px-3 py-1.5 text-[12.5px] text-warn">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1">
+              Version {remote.version} was saved{remote.by ? ` by ${remote.by}` : ""} while you were editing. Saving now would replace it.
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                const ok = await confirm({ title: "Discard your edits?", description: `Load version ${remote.version} and lose your unsaved changes.`, confirmLabel: "Discard and load", danger: true });
+                if (ok && resource.data) loadResource(resource.data);
+              }}
+            >
+              Load version {remote.version}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setRemote(null)}>
+              Keep editing
+            </Button>
+          </div>
+        )}
 
         {/* ---------------------------------------------------------------- body */}
         <div className="flex min-h-0 flex-1">
@@ -529,7 +617,11 @@ function Builder() {
           )}
           {view !== "yaml" && (
             <aside className="w-[380px] shrink-0 border-l border-border bg-panel">
-              {selected ? <Inspector key={selected} stepId={selected} issues={issues} /> : <WorkflowSettings isNew={isNew} issues={issues} />}
+              {selected ? (
+                <Inspector key={selected} stepId={selected} issues={issues} readOnly={!canWrite} />
+              ) : (
+                <WorkflowSettings isNew={isNew} issues={issues} readOnly={!canWrite} />
+              )}
             </aside>
           )}
         </div>

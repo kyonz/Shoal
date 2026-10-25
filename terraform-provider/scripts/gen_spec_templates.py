@@ -15,7 +15,7 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "templates" / "resources"
 TYPE_NAMES = {
     "Workflow": "workflow", "Agent": "agent", "Skill": "skill", "Connection": "connection", "Trigger": "trigger",
     "Campaign": "campaign", "SandboxProfile": "sandbox_profile", "Gateway": "gateway", "ModelPolicy": "model_policy",
-    "Eval": "eval", "Identity": "identity", "Blueprint": "blueprint", "SkillSource": "skill_source",
+    "Eval": "eval", "Identity": "identity", "CloudIdentity": "cloud_identity", "Blueprint": "blueprint", "SkillSource": "skill_source",
 }
 
 
