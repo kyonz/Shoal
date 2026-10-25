@@ -122,3 +122,15 @@ async def test_skill_source_contracts(engine, tmp_path):
     registry = RegistrySkillSource()
     ctx = SkillSourceContext(engine, "t", "registry", registry.config_model.model_validate({"url": "http://registry.test", "token": "tok"}), registry)
     await check_skill_source(registry, ctx)
+
+
+async def test_env_secrets_never_expose_shoal_settings(engine, tenant, monkeypatch):
+    env = engine.plugin("secrets", "env")
+    monkeypatch.setenv("SHOAL_SECRET_KEY", "the-master-key")
+    monkeypatch.setenv("SHOAL_SECRET_PROVIDERS", '["db","env"]')
+    monkeypatch.setenv("SHOAL_SECRET_SLACK_TOKEN", "shared")
+    assert await env.get(tenant.id, "key") is None
+    assert await env.get(tenant.id, "KEY") is None
+    assert await env.get(tenant.id, "providers") is None
+    assert await env.get(tenant.id, "slack-token") == "shared"
+    assert await engine.secrets.get(tenant.id, "key") is None
