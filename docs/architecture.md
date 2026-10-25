@@ -251,6 +251,55 @@ leases.
   cost budget. Usage is recorded per step and rolled up to run, campaign and
   tenant.
 
+### 7.1 Agent authentication and credentials
+
+Agents act on external systems, so *how they authenticate* is pluggable and
+kept out of the model's reach.
+
+- **Credential providers** (`awm.credentials` entry point) mint the credential
+  a step needs at the moment it needs it:
+  - `static` — a tenant secret (PAT, API token);
+  - `oauth2` — user-delegated OAuth (authorization-code flow run by the UI
+    against the connection, refresh tokens stored encrypted, scopes per
+    connection);
+  - `github-app` — short-lived installation tokens, optionally narrowed to the
+    target repository and permissions of the current step;
+  - `aws-sts`, `gcp-wif`, `azure-federated` — workload identity: AWM presents
+    its run identity token and exchanges it for cloud credentials;
+  - `vault` — dynamic secrets from HashiCorp Vault/OpenBao.
+- **Scoping and lifetime.** Credentials are resolved per step attempt, scoped
+  to that step's connections, expire with the step, and are redacted from
+  events, logs and transcripts.
+- **Keeping secrets away from the model.** Integration actions run in the
+  worker, so the model only ever sees tool inputs/outputs. Code running in the
+  sandbox gets credentials through env/files scoped to the sandbox, or through
+  an egress proxy that injects auth headers for allow-listed hosts so the raw
+  token never enters the sandbox (backends that support it: SPACE credential
+  references, Kubernetes sidecar proxy).
+- **Run identity.** Each agent step receives a signed, short-lived JWT
+  (`iss` = AWM, `sub` = `tenant/run/step/agent`, audience-restricted). It is
+  used to call back into the AWM API with least privilege, as the subject for
+  workload-identity federation, and as the caller identity for A2A and MCP.
+- **Human identity.** When a run is started by a user, the user id is carried
+  on the run for audit, and policy can require per-user OAuth connections
+  ("act as the requester") instead of a shared service identity.
+
+### 7.2 Agent interoperability: A2A and MCP
+
+- **A2A outbound.** An agent can delegate to a remote agent that speaks the
+  Agent2Agent (A2A) protocol. Remote agents are registered as `Agent`
+  resources with `runtime: a2a` (agent card URL + credential provider), so
+  they work as workflow `agent` steps and as `subagents` of a local agent.
+  AWM fetches and caches the Agent Card, sends the task, streams updates into
+  run events, and maps the final artifacts onto the step's declared outputs.
+- **A2A inbound.** Any agent or workflow can be published as an A2A agent:
+  AWM serves its Agent Card (skills derived from the workflow inputs/outputs,
+  `securitySchemes` for API keys/OAuth) and maps A2A tasks onto runs,
+  including streaming and input-required (approval) states.
+- **MCP.** Agents consume MCP servers as tool sources (stdio inside the
+  sandbox, or remote HTTP with OAuth via the credential providers). AWM also
+  exposes an MCP server so other agents/IDEs can list and run workflows.
+
 ---
 
 ## 8. Sandboxes (multi-engine execution)
@@ -312,8 +361,13 @@ class Integration(Protocol):
 - **Actions** have pydantic input/output models, so they are simultaneously
   workflow `action` steps, agent tools (JSON schema from the model) and API
   operations (`POST /v1/connections/{id}/actions/{action}`).
-- **Triggers**: `webhook` (signature-verified, per-trigger URL
-  `/v1/hooks/{trigger_id}`), `poll` (cursor persisted), `schedule` (cron).
+- **Triggers**: `webhook` (signature-verified, one URL per connection
+  `/v1/hooks/{webhook_id}`), `poll` (cursor persisted) and **`schedule`**
+  (cron expressions with time zones, e.g. `0 9 * * MON-FRI` in
+  `Pacific/Auckland`; overlap policy `skip`/`allow`; missed-run catch-up off by
+  default). Schedules are first-class in the UI and API, can start workflows or
+  campaigns, and are evaluated by the scheduler loop with leases so each tick
+  fires exactly once across workers.
   A trigger has a **filter** (expression over the event, e.g. "issue moved to
   column *Ready for AI*") and an **input mapping** into workflow inputs, plus
   dedupe keys and concurrency (e.g. one run per issue).
@@ -481,7 +535,8 @@ modal = "awm_modal:ModalBackend"
 ```
 
 Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
-`awm.agent_runtimes`, `awm.secrets`, `awm.steps`, `awm.orchestrators`.
+`awm.agent_runtimes`, `awm.credentials`, `awm.secrets`, `awm.steps`,
+`awm.orchestrators`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.
 

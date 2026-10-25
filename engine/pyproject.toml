@@ -1,0 +1,94 @@
+[project]
+name = "awm"
+version = "0.1.0"
+description = "AI Workflow Manager: an open-source, multi-tenant engine for multi-agent AI workflows"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "AI Workflow Manager contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Framework :: FastAPI",
+  "Framework :: Pydantic :: 2",
+]
+dependencies = [
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "aiosqlite>=0.20",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "httpx>=0.27",
+  "jinja2>=3.1",
+  "pyyaml>=6.0",
+  "typer>=0.12",
+  "croniter>=2.0",
+  "cryptography>=42",
+  "anthropic>=0.40",
+  "sse-starlette>=2.1",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.29"]
+kubernetes = ["kubernetes-asyncio>=30.1"]
+e2b = ["e2b>=1.0"]
+docker = ["docker>=7.1"]
+all = ["awm[postgres,kubernetes,e2b,docker]"]
+
+[project.scripts]
+awm = "awm.cli.main:app"
+
+[project.entry-points."awm.sandboxes"]
+local = "awm.sandbox.local:LocalBackend"
+docker = "awm.sandbox.docker:DockerBackend"
+kubernetes = "awm.sandbox.kubernetes:KubernetesBackend"
+e2b = "awm.sandbox.e2b:E2BBackend"
+space = "awm.sandbox.space:SpaceBackend"
+remote = "awm.sandbox.remote:RemoteBackend"
+
+[project.entry-points."awm.integrations"]
+github = "awm.integrations.github:GitHubIntegration"
+jira = "awm.integrations.jira:JiraIntegration"
+webhook = "awm.integrations.webhook:WebhookIntegration"
+
+[project.entry-points."awm.providers"]
+anthropic = "awm.agents.providers.anthropic:AnthropicProvider"
+scripted = "awm.agents.providers.scripted:ScriptedProvider"
+
+[project.entry-points."awm.agent_runtimes"]
+tool-loop = "awm.agents.tool_loop:ToolLoopRuntime"
+cli = "awm.agents.cli_runtime:CliRuntime"
+
+[project.entry-points."awm.secrets"]
+env = "awm.secrets.providers:EnvSecretProvider"
+db = "awm.secrets.providers:DatabaseSecretProvider"
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["awm"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["B008"]
