@@ -314,7 +314,10 @@ step:  pending → running → waiting? → succeeded | failed | skipped | cance
   conditions.
 - Long-running agent steps heartbeat; if a worker dies its lease expires and
   another worker resumes from the last checkpoint (the agent step restarts its
-  attempt; sandbox state is reattached when the backend supports it).
+  attempt; sandbox state is reattached when the backend supports it). A run whose
+  worker dies on every pass (out of memory, a crash) fails after
+  `SHOAL_MAX_LOST_LEASES` passes in a row (default 5) instead of taking down
+  worker after worker; a pass that finishes resets the count.
 
 The scheduler loop (in every worker, coordinated by leases) fires timers, polls
 poll-based triggers and wait conditions, ticks campaigns, and recovers expired

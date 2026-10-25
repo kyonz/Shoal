@@ -101,7 +101,8 @@ timeouts and the reconcile interval stay environment settings.
 | `SHOAL_TEMPORAL_VERSIONING_BEHAVIOR` | `auto-upgrade` | Or `pinned` |
 
 Activity heartbeats use `SHOAL_LEASE_SECONDS` as their timeout, and
-`SHOAL_WORKER_CONCURRENCY` caps concurrent passes per worker.
+`SHOAL_WORKER_CONCURRENCY` caps concurrent passes per worker. A run whose pass keeps killing its worker fails after
+`SHOAL_MAX_LOST_LEASES` attempts in a row, as it does without Temporal.
 
 **docker compose.** Set the variables in `deploy/.env`, or try it against a throwaway
 dev server:

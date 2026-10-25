@@ -40,6 +40,11 @@ reattached, so its workspace survives. Make steps safe to repeat: a script or ag
 exists before it creates it. See
 [Liveness and failures](../agents/sandboxes.md#liveness-and-failures-kubernetes).
 
+If the run itself is what kills its worker (it runs the process out of memory, say), every worker that claims it dies the
+same way. Shoal counts the passes in a row that ended with the worker gone, and after `SHOAL_MAX_LOST_LEASES` (default 5)
+marks the run failed, with that reason, instead of handing it to the next worker. A pass that finishes resets the count, and
+a worker that shuts down cleanly releases its leases, so restarts and deploys do not count.
+
 A lower lease means faster recovery but more database writes. The default suits most installs.
 
 ## Scaling

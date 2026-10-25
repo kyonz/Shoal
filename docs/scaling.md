@@ -195,6 +195,7 @@ very large numbers of concurrent timers and wake-ups.
 | `SHOAL_API_MAX_CONCURRENT_REQUESTS` | 64 | Requests one API process works on at once (0: unlimited) |
 | `SHOAL_API_QUEUE_TIMEOUT_SECONDS` | 1 | How long a request waits for a slot before `503` |
 | `SHOAL_WORKER_CONCURRENCY` | 16 | Runs a worker advances at once |
+| `SHOAL_MAX_LOST_LEASES` | 5 | Fail a run after this many passes in a row ended with its worker dying (0: never) |
 | `SHOAL_WORKER_LANES` | `["standard","agent"]` | Which runs a worker takes |
 | `SHOAL_DISPATCH_QUEUE` | database | `database` (poll the runs table) or `sqs` ([guide](dispatch-queues.md)) |
 | `SHOAL_DISPATCH_SWEEP_SECONDS` | 15 | With SQS, how often workers still look in the database |
