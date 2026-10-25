@@ -31,6 +31,7 @@ from shoal.core.scope import (
     current_namespace,
     resolve_namespace,
 )
+from shoal.runtime.queues import Wakeup
 from shoal.store import tables as t
 from shoal.store.tables import utcnow
 
@@ -86,6 +87,8 @@ class Store:
         self._read_sessions = async_sessionmaker(self.read_engine, expire_on_commit=False)
         # Called with the run id after every wake_run (the engine wires in its orchestrator).
         self.wake_hooks: list[Callable[[str], Awaitable[None]]] = []
+        # told (after commit) whenever a built-in run's next_wake_at is set: the dispatch queue
+        self.due_hooks: list[Callable[[Sequence[Wakeup]], Awaitable[None]]] = []
         # Bumped whenever keys, users, groups, roles or bindings change, so request caches can drop old answers.
         self.auth_generation = 0
         self.resource_generation = 0  # bumped by every resource apply or delete in this process
@@ -507,6 +510,8 @@ class Store:
             if existing is None:
                 raise
             return existing
+        if run.orchestrator == "builtin" and run.next_wake_at is not None:
+            await self._due([Wakeup(run.id, run.tenant_id, run.lane, run.next_wake_at)])
         return run
 
     async def run_by_idempotency_key(self, tenant_id: str, key: str | None) -> t.Run | None:
@@ -597,21 +602,34 @@ class Store:
     async def update_run(self, run_id: str, **values: Any) -> None:
         values["updated_at"] = utcnow()
         async with self.session() as s:
-            await s.execute(update(t.Run).where(t.Run.id == run_id).values(**values))
+            due = await self._update_run(s, run_id, values)
+        await self._due(due)
+
+    async def _update_run(self, s: AsyncSession, run_id: str, values: dict[str, Any], *where: Any) -> list[Wakeup]:
+        """Update a run; when that sets a built-in run's next_wake_at, return the wake-up to publish after commit."""
+        q = update(t.Run).where(t.Run.id == run_id, *where).values(**values)
+        if not self.due_hooks or values.get("next_wake_at") is None:
+            await s.execute(q)
+            return []
+        rows = (await s.execute(q.returning(t.Run.tenant_id, t.Run.lane, t.Run.orchestrator))).all()
+        return [Wakeup(run_id, tenant_id, lane, values["next_wake_at"]) for tenant_id, lane, orchestrator in rows
+                if orchestrator == "builtin"]
+
+    async def _due(self, wakeups: Sequence[Wakeup]) -> None:
+        if wakeups:
+            for hook in self.due_hooks:
+                await hook(wakeups)
 
     async def wake_run(self, run_id: str, at: datetime | None = None) -> None:
         """Ask a worker to look at a run (no-op for finished runs)."""
         at = at or utcnow()
         async with self.session() as s:
-            await s.execute(
-                update(t.Run)
-                .where(
-                    t.Run.id == run_id,
-                    t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
-                    or_(t.Run.next_wake_at.is_(None), t.Run.next_wake_at > at),
-                )
-                .values(next_wake_at=at)
+            due = await self._update_run(
+                s, run_id, {"next_wake_at": at},
+                t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+                or_(t.Run.next_wake_at.is_(None), t.Run.next_wake_at > at),
             )
+        await self._due(due)
         for hook in self.wake_hooks:
             await hook(run_id)
 
@@ -623,11 +641,13 @@ class Store:
         lease: timedelta,
         tenant_limits: Callable[[set[str]], Awaitable[dict[str, int]]] | None = None,
         lanes: Sequence[str] | None = None,
+        run_ids: Sequence[str] | None = None,
     ) -> list[str]:
         """Claim built-in runs that are due, taking turns across tenants.
 
         ``tenant_limits`` returns the most runs each tenant may have leased at once; tenants at their limit
-        are skipped. Optimistic per-row claim works on SQLite and Postgres.
+        are skipped. ``run_ids`` only considers those runs (wake-ups from a dispatch queue).
+        Optimistic per-row claim works on SQLite and Postgres.
         """
         now = utcnow()
         due = and_(
@@ -637,6 +657,7 @@ class Store:
             t.Run.next_wake_at <= now,
             or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
             *([t.Run.lane.in_(list(lanes))] if lanes else []),
+            *([t.Run.id.in_(list(run_ids))] if run_ids is not None else []),
         )
 
         def candidates(*where: Any) -> Any:
@@ -648,7 +669,7 @@ class Store:
             by_tenant: dict[str, list[str]] = {}
             for run_id, tenant_id in (await s.execute(candidates())).all():
                 by_tenant.setdefault(tenant_id, []).append(run_id)
-            if by_tenant:  # then the oldest due runs of other tenants, so one tenant's backlog cannot starve them
+            if by_tenant and run_ids is None:  # then the oldest due runs of other tenants, so one tenant's backlog cannot starve them
                 for run_id, tenant_id in (await s.execute(candidates(t.Run.tenant_id.not_in(list(by_tenant))))).all():
                     by_tenant.setdefault(tenant_id, []).append(run_id)
             room: dict[str, int] = {}
@@ -686,6 +707,19 @@ class Store:
                 if result.rowcount:
                     claimed.append(run_id)
         return claimed
+
+    async def dispatch_view(self, run_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """What a worker needs to decide about a wake-up it could not claim."""
+        if not run_ids:
+            return {}
+        cols = (t.Run.id, t.Run.status, t.Run.orchestrator, t.Run.next_wake_at, t.Run.lease_expires_at)
+        async with self.session() as s:
+            rows = (await s.execute(select(*cols).where(t.Run.id.in_(list(run_ids))))).all()
+        return {
+            row.id: {"status": row.status, "orchestrator": row.orchestrator, "next_wake_at": row.next_wake_at,
+                     "lease_expires_at": row.lease_expires_at}
+            for row in rows
+        }
 
     async def due_runs(
         self, orchestrator: str, before: datetime, *, include_leased: bool = False, limit: int = 200
@@ -804,8 +838,7 @@ class Store:
                     update(t.Run).where(t.Run.id == run_id, t.Run.lease_owner == release_lease)
                     .values(lease_owner=None, lease_expires_at=None, lease_losses=0)
                 )
-            if values:
-                await s.execute(update(t.Run).where(t.Run.id == run_id).values(**values, updated_at=now))
+            due = await self._update_run(s, run_id, {**values, "updated_at": now}) if values else []
             if clear_waits:
                 q = delete(t.WaitSubscription).where(t.WaitSubscription.run_id == run_id)
                 if isinstance(clear_waits, str):
@@ -824,6 +857,7 @@ class Store:
                     [t.RunEvent(tenant_id=tenant_id, run_id=run_id, step_id=sid, type=kind, data=data) for kind, data, sid in events]
                 )
                 await self.notify_events(s, run_id)
+        await self._due(due)
 
     # ------------------------------------------------------------------ events
 

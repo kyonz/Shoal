@@ -80,6 +80,15 @@ shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=a
 shoal blueprints install-defaults --dry-run    # add Shoal's bundled blueprints (tenants created before they shipped)
 ```
 
+## Connections
+
+Connections are created and changed with `shoal apply`. To point a service's webhooks at one:
+
+```sh
+shoal connections webhook-url jira-acme            # the URL, then its setup instructions
+shoal connections webhook-url jira-acme -o json    # the full response, including any setup manifest
+```
+
 ## Secrets
 
 ```sh

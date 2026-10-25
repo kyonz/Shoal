@@ -69,6 +69,8 @@ A lower lease means faster recovery but more database writes. The default suits 
   [Running Shoal at high throughput](../scaling.md#database-connections).
 - **Temporal:** if you already run Temporal, Shoal can hand it the scheduling of runs instead of the database. Workers
   then run as Temporal activity workers. See [Running Shoal on Temporal](../temporal.md).
+- **Amazon SQS:** workers can hear about due runs from an SQS queue instead of polling the database every second,
+  with the database still the source of truth. See [Dispatch queues](../dispatch-queues.md).
 
 ## Health and metrics
 
@@ -98,6 +100,7 @@ Every setting is an environment variable with the `SHOAL_` prefix (or a line in 
 | `SHOAL_WORKER_LANES` | both | Which runs a worker takes: `standard`, `agent` or both. |
 | `SHOAL_LEASE_SECONDS` | `60` | How long a worker's claim on a run lasts without renewal. |
 | `SHOAL_POLL_INTERVAL_SECONDS` | `1` | How often an idle worker looks for work. |
+| `SHOAL_DISPATCH_QUEUE` | `database` | `sqs` to have workers long-poll Amazon SQS for due runs, with `SHOAL_DISPATCH_SQS_*`. See [Dispatch queues](../dispatch-queues.md). |
 | `SHOAL_ORCHESTRATOR` | `builtin` | `temporal` to schedule runs on Temporal, with `SHOAL_TEMPORAL_*`. |
 | `SHOAL_SECRET_PROVIDERS` | `db,env` | Secret backends, in lookup order. See [Connections and secrets](../connections/README.md#where-values-are-stored). |
 | `SHOAL_SECRET_ENV_SHARED` | `true` | Turn off on deployments that host several organisations. |
@@ -105,6 +108,7 @@ Every setting is an environment variable with the `SHOAL_` prefix (or a line in 
 | `SHOAL_AUDIT_RETENTION_DAYS` | `400` | Delete audit entries older than this. `0` keeps them. |
 | `SHOAL_TRUSTED_PROXIES` | | Proxies whose `X-Forwarded-For` is believed, for audit addresses. |
 | `SHOAL_CORS_ORIGINS`, `SHOAL_STATIC_DIR` | | For serving the UI from elsewhere, or from the API process. |
+| `SHOAL_SANDBOX_REAP_INTERVAL_SECONDS` | `600` | How often workers delete [leftover Kubernetes sandboxes](../agents/sandboxes.md#cleanup). `0` turns it off. |
 | `SHOAL_DEFAULT_BLUEPRINTS` | `true` | Install the [bundled blueprints](../blueprints/bundled.md) in new tenants. |
 | `SHOAL_ASSISTANT_*` | | The [assistant](../assistant/README.md): on or off, gateway, model, effort. |
 | `SHOAL_DEFAULT_DECISION_PROVIDER` | `llm` | The provider for [decisions](../agents/decisions.md). |

@@ -164,6 +164,15 @@ Events of finished runs are deleted after `SHOAL_RUN_EVENT_RETENTION_DAYS`
 `SHOAL_AUDIT_RETENTION_DAYS`. Processed webhook deliveries are kept for a day.
 Deletes run hourly in small batches.
 
+## Dispatch queues
+
+Every worker polls the runs table about once a second for due runs. With many
+replicas that is a steady stream of claim queries even when nothing is due.
+`SHOAL_DISPATCH_QUEUE=sqs` has workers long-poll Amazon SQS for wake-ups
+instead and sweep the database only every `SHOAL_DISPATCH_SWEEP_SECONDS` (15s).
+The database stays the source of truth and claims still take a lease, so
+tenant fairness and caps work the same way ([guide](dispatch-queues.md)).
+
 ## Temporal
 
 `SHOAL_ORCHESTRATOR=temporal` replaces the claim loop with Temporal timers and
@@ -188,6 +197,8 @@ very large numbers of concurrent timers and wake-ups.
 | `SHOAL_WORKER_CONCURRENCY` | 16 | Runs a worker advances at once |
 | `SHOAL_MAX_LOST_LEASES` | 5 | Fail a run after this many passes in a row ended with its worker dying (0: never) |
 | `SHOAL_WORKER_LANES` | `["standard","agent"]` | Which runs a worker takes |
+| `SHOAL_DISPATCH_QUEUE` | database | `database` (poll the runs table) or `sqs` ([guide](dispatch-queues.md)) |
+| `SHOAL_DISPATCH_SWEEP_SECONDS` | 15 | With SQS, how often workers still look in the database |
 | `SHOAL_RATE_LIMIT_REQUESTS_PER_SECOND` | 100 | Per tenant, per API process (0: off) |
 | `SHOAL_RATE_LIMIT_BURST` | 200 | Requests allowed above the rate in a burst |
 | `SHOAL_MAX_PENDING_RUNS_PER_TENANT` | 10000 | Waiting runs before new runs get 429 (0: off) |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -126,6 +127,20 @@ class SandboxBackend(abc.ABC):
         sandbox = await self.attach(sandbox_id, spec)
         if sandbox is not None:
             await sandbox.close()
+
+    def reap_scope(self, config: dict[str, Any], tenant_id: str) -> str | None:
+        """Where sandboxes for a profile with this ``config`` live, for :meth:`reap` (None: nothing to sweep)."""
+        return None
+
+    async def reap(
+        self, scope: str, run_state: Callable[[str | None, str | None], Awaitable[str]], *, min_age_seconds: float
+    ) -> int:
+        """Delete sandboxes in ``scope`` that no live run owns (left behind by a crash or a ttl). Returns how many.
+
+        ``run_state(tenant_id, run_id)`` from a sandbox's labels is ``active``, ``over`` (finished or unknown run),
+        or ``foreign`` (not one of this deployment's tenants: never touch it).
+        """
+        return 0
 
 
 def shell_quote(value: str) -> str:

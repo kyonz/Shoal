@@ -301,6 +301,92 @@ async def test_kubernetes_backend_lifecycle_against_fake_api(tmp_path, monkeypat
     assert calls[-2:] == [("delete", "shoal-acme", name), ("delete-netpol", "shoal-acme", name)]
 
 
+async def test_kubernetes_orphans_are_reaped(engine, tenant, monkeypatch):
+    """Pods the ttl ended, or whose run is over or gone, are deleted with their NetworkPolicies; live and foreign ones stay."""
+    from datetime import UTC, datetime, timedelta
+
+    from kubernetes_asyncio import client
+
+    from shoal.core.models import parse_resource
+
+    def doc(kind, name, spec):
+        return parse_resource({"apiVersion": "shoal.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
+
+    await engine.store.apply_resource(tenant.id, doc("SandboxProfile", "k8s", {"backend": "kubernetes", "config": {"namespace": "shoal-{tenant}"}}))
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "hold", {"steps": [{"id": "ok", "type": "approval", "message": "ok?"}]}))
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "quick", {"steps": [{"id": "s", "type": "set", "values": {"x": 1}}]}))
+    waiting = await engine.executor.start_run(tenant.id, "hold", {})
+    done = await engine.executor.start_run(tenant.id, "quick", {})
+    await engine.run_until_idle()
+    assert (await engine.store.get_run(tenant.id, done.id)).status == "succeeded"
+
+    old, now = datetime.now(UTC) - timedelta(hours=1), datetime.now(UTC)
+
+    def obj(name, labels, created, phase=None):
+        meta = type("M", (), {"name": name, "labels": labels, "creation_timestamp": created})()
+        return type("O", (), {"metadata": meta, "status": type("S", (), {"phase": phase})()})()
+
+    def pod(name, run_id, *, tenant_id=tenant.id, phase="Running", created=old):
+        labels = {"app.kubernetes.io/managed-by": "shoal", "shoal.dev/sandbox": name, "shoal.dev/tenant": tenant_id}
+        if run_id:
+            labels["shoal.dev/run"] = run_id
+        return obj(name, labels, created, phase)
+
+    pods = [
+        pod("live", waiting.id),
+        pod("finished-run", done.id),
+        pod("ttl-ended", waiting.id, phase="Failed"),
+        pod("unknown-run", "run_gone"),
+        pod("starting", "run_not_recorded_yet", created=now),
+        pod("other-deployment", "run_elsewhere", tenant_id="ten_elsewhere", phase="Failed"),
+    ]
+    policies = [obj(n, {"app.kubernetes.io/managed-by": "shoal", "shoal.dev/sandbox": n}, c)
+                for n, c in [("live", old), ("finished-run", old), ("no-pod", old), ("just-made", now)]]
+    deleted: list[tuple[str, str, str]] = []
+
+    class FakeCore:
+        def __init__(self, api=None):
+            pass
+
+        async def list_namespaced_pod(self, namespace, label_selector=None):
+            assert label_selector == "app.kubernetes.io/managed-by=shoal"
+            return type("L", (), {"items": pods})()
+
+        async def delete_namespaced_pod(self, name, namespace, grace_period_seconds=None):
+            deleted.append(("pod", namespace, name))
+
+    class FakeNetworking:
+        def __init__(self, api=None):
+            pass
+
+        async def list_namespaced_network_policy(self, namespace, label_selector=None):
+            return type("L", (), {"items": policies})()
+
+        async def delete_namespaced_network_policy(self, name, namespace):
+            deleted.append(("netpol", namespace, name))
+
+    class FakeApiClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(client, "CoreV1Api", FakeCore)
+    monkeypatch.setattr(client, "NetworkingV1Api", FakeNetworking)
+    monkeypatch.setattr(client, "ApiClient", FakeApiClient)
+    engine.sandboxes.backend("kubernetes")._config = object()
+
+    assert await engine.sandboxes.reap_orphans() == 3
+    namespace = f"shoal-{tenant.id.lower()}"
+    assert {name for kind, ns, name in deleted if kind == "pod" and ns == namespace} == {"finished-run", "ttl-ended", "unknown-run"}
+    assert {name for kind, _, name in deleted if kind == "netpol"} >= {"finished-run", "ttl-ended", "unknown-run", "no-pod"}
+    assert not {name for _, _, name in deleted} & {"live", "starting", "other-deployment", "just-made"}
+
+
 async def test_profiles_a_backend_cannot_enforce_are_refused(engine, tenant):
     from shoal.core.models import parse_resource
 

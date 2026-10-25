@@ -54,6 +54,7 @@ under **Docs**.
 - [Operating Shoal](operations/README.md): workers, leases, scaling, metrics and settings.
 - [Running at high throughput](scaling.md): connection pools, agent worker pools, quotas and overload behaviour.
 - [Running on Temporal](temporal.md): use a Temporal cluster you already run.
+- [Dispatch queues](dispatch-queues.md): let workers hear about due runs from Amazon SQS instead of polling Postgres.
 - [The CLI](cli.md) and the [Terraform provider](../terraform-provider/docs/index.md).
 - [Plugins](plugins.md): add model providers, sandbox backends, secret backends and more.
 

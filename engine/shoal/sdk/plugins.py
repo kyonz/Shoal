@@ -37,6 +37,7 @@ from shoal.decisions.base import Answer, DecisionProvider, DecisionRequest, Deci
 from shoal.evals.sinks.base import EvalExport, EvalSink, ExportResult, ScoredCase, Trace, TraceSpan
 from shoal.integrations.base import Integration
 from shoal.runtime.orchestrator import Orchestrator
+from shoal.runtime.queues import Delivery, DispatchQueue, QueueError, Wakeup
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec
 from shoal.secrets.providers import SecretProvider
 from shoal.skills.base import SkillBundle, SkillPage, SkillSource, SkillSourceContext, SkillSummary
@@ -66,6 +67,8 @@ PLUGIN_GROUPS: dict[str, PluginGroup] = {
                     "any A2A agent via the `a2a` runtime"),
         PluginGroup("credentials", CredentialProvider, "Issue short-lived cloud credentials for a CloudIdentity."),
         PluginGroup("orchestrators", Orchestrator, "Drive runs: the built-in Postgres executor, or Temporal."),
+        PluginGroup("dispatch_queues", DispatchQueue,
+                    "Tell workers a run is due: the runs table itself (polled), Amazon SQS, or your own queue."),
         PluginGroup("skill_sources", SkillSource, "Marketplaces skills are imported from: list, search and fetch SKILL.md bundles.",
                     "the `registry` source's shoal.skill-source/v1 protocol, which `shoal.sdk.skill_server` serves for any source"),
     )
@@ -86,8 +89,11 @@ __all__ = [
     "EvalSink",
     "ExecResult",
     "ExportResult",
+    "Delivery",
+    "DispatchQueue",
     "Integration",
     "Orchestrator",
+    "QueueError",
     "IssueRequest",
     "ModelProvider",
     "ModelRequest",
@@ -109,4 +115,5 @@ __all__ = [
     "ToolDef",
     "Trace",
     "TraceSpan",
+    "Wakeup",
 ]

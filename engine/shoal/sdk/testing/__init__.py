@@ -23,6 +23,7 @@ from shoal.sdk.testing.harness import EngineHarness, IntegrationHarness, engine_
 from shoal.sdk.testing.http import MockHTTP, RecordedCall, Route, UnmatchedRequest
 from shoal.sdk.testing.plugins import (
     check_decision_provider,
+    check_dispatch_queue,
     check_entry_point,
     check_eval_sink,
     check_model_provider,
@@ -45,6 +46,7 @@ __all__ = [
     "UnmatchedRequest",
     "check_config",
     "check_decision_provider",
+    "check_dispatch_queue",
     "check_entry_point",
     "check_eval_sink",
     "check_integration",

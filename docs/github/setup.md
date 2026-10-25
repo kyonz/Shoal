@@ -73,7 +73,8 @@ The same check is `POST /v1/namespaces/{ns}/connections/{name}/test`.
 ## Receive events from GitHub
 
 Every connection has its own webhook URL, `https://<shoal>/v1/hooks/<id>`, shown on the connection page with a copy
-button and returned by `GET /v1/namespaces/{ns}/connections/{name}/webhook`.
+button, returned by `GET /v1/namespaces/{ns}/connections/{name}/webhook`, and printed by
+`shoal connections webhook-url <name>`.
 
 1. In the org's (or one repository's) **Settings › Webhooks › Add webhook**, or in the GitHub App's settings:
    - **Payload URL**: the connection's webhook URL.
