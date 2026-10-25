@@ -49,11 +49,25 @@ shoal cancel run_01...
 shoal approve run_01...                     # the run's waiting approval step (or name it: run_01... publish)
 shoal approve run_01... publish --reject -m "not yet"
 shoal signal run_01... build.done -d '{"ok": true}'   # resume a wait step with data
+shoal rerun run_01... --wait                     # same inputs and workflow version, as a new run
+shoal triggers fire nightly -d '{"ref": "main"}' # as if the trigger's event had arrived
 ```
 
 `run --wait` and `--follow` print the `shoal approve` command when the run stops at an approval.
 A rejection does not fail the run: the step's output has `approved: false`, so gate the steps after
 it with `if: "{{ steps.<id>.output.approved }}"`.
+
+## Campaigns and blueprints
+
+```sh
+shoal campaigns launch coverage-uplift -i goal="90% coverage"   # one run per target
+shoal campaigns launch coverage-uplift --paused                  # create it; 'resume' starts it
+shoal campaigns list
+shoal campaigns get cmp_01...                                     # status and progress
+shoal campaigns pause|resume|cancel|retry cmp_01...
+shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme --dry-run
+shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme
+```
 
 ## Secrets
 
