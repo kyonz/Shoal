@@ -21,6 +21,10 @@ class Settings(BaseSettings):
         "sqlite+aiosqlite:///./shoal.db",
         description="SQLAlchemy async URL, e.g. postgresql+asyncpg://user:pass@host/shoal",
     )
+    secret_providers: list[str] = Field(
+        default_factory=lambda: ["db", "env"],
+        description="Secret backends (shoal.secrets plugins) in lookup order; the first writable one stores new secrets.",
+    )
     secret_key: SecretStr = Field(
         SecretStr("dev-insecure-secret-key-change-me"),
         description="Key used to encrypt stored secrets and sign run identity tokens.",

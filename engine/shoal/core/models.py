@@ -539,6 +539,13 @@ class ConnectionSpec(Model):
     )
     oauth: OAuthSpec | None = Field(None, description="Lets people connect with OAuth instead of pasting a token.")
 
+    @model_validator(mode="after")
+    def _personal_fields(self) -> ConnectionSpec:
+        if self.credentials != "shared" and not (self.user_fields or self.secrets or self.oauth):
+            raise ValueError(f"credentials: {self.credentials} needs `user_fields` (or `secrets`, or `oauth`) "
+                             "to say which fields each person supplies")
+        return self
+
 
 class TriageSpec(Model):
     """Semantic trigger filter: ask a decision model about the event before starting a run."""

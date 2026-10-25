@@ -127,7 +127,7 @@ class Engine:
         self.authz = Authorizer(self)
         self.oidc = OIDCService(self)
         self.events = EventBus(self.store)
-        self.secrets = SecretManager(self)
+        self.secrets = SecretManager(self, self.settings.secret_providers)
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
         self.identities = IdentityService(self)

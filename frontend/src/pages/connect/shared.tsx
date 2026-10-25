@@ -1,15 +1,17 @@
 /** Helpers shared by the connect and campaign pages. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { diffLines } from "diff";
-import { Blocks, GitPullRequest, History, SquareKanban, Webhook } from "lucide-react";
+import { AlertTriangle, Blocks, GitPullRequest, History, KeyRound, SquareKanban, Waypoints, Webhook } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import YAML from "yaml";
 import { ApiError, rawJson, type Resource, type Schemas } from "@/api/client";
 import { useResourceVersions, type Plural } from "@/api/hooks";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { humanize } from "@/components/forms/SchemaForm";
 import { relTime } from "@/lib/format";
-import { Badge, Button, Card, CardHeader, CodeEditor, CopyButton, Dialog, EmptyState, Field, Input, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, CodeEditor, CopyButton, Dialog, EmptyState, Field, Input, NativeSelect, Skeleton } from "@/components/ui";
 
 // --------------------------------------------------------------------------- errors
 
@@ -51,6 +53,7 @@ const MARKS: Record<string, { icon: ReactNode; className: string }> = {
   github: { icon: <GitPullRequest />, className: "bg-[#24292f] text-white dark:bg-[#f0f3f6] dark:text-[#24292f]" },
   jira: { icon: <SquareKanban />, className: "bg-[#1868db] text-white" },
   webhook: { icon: <Webhook />, className: "bg-[#c2410c] text-white" },
+  mcp: { icon: <Waypoints />, className: "bg-[#111827] text-white dark:bg-[#e5e7eb] dark:text-[#111827]" },
 };
 
 export function IntegrationMark({ integrationKey, size = "md" }: { integrationKey: string; size?: "sm" | "md" | "lg" }) {
@@ -348,4 +351,68 @@ export function useConnectionCapabilities(ns: string, name: string | undefined) 
     retry: false,
     staleTime: 60_000,
   });
+}
+
+// --------------------------------------------------------------------------- secret picker
+
+const CREATE = "__create__";
+
+export function SecretPicker({ ns, field, value, onChange, description, disabled }: {
+  ns: string;
+  field: string;
+  value: string | undefined;
+  onChange: (v: string | undefined) => void;
+  description?: string;
+  disabled?: boolean;
+}) {
+  const { can } = useAuth();
+  const secrets = useSecrets(ns, can("secrets:read", ns));
+  const [dialog, setDialog] = useState<"new" | "set" | null>(null);
+  const names = (secrets.data ?? []).map((s) => s.name);
+  const missing = !!value && !!secrets.data && !names.includes(value);
+  return (
+    <Field label={humanize(field)} description={description}>
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <KeyRound className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-faint" />
+          <NativeSelect
+            disabled={disabled}
+            className={cn("pl-8 font-mono text-xs", missing && "border-warn")}
+            value={value ?? ""}
+            onChange={(e) => {
+              if (e.target.value === CREATE) setDialog("new");
+              else onChange(e.target.value || undefined);
+            }}
+          >
+            <option value="">— not set —</option>
+            {missing && <option value={value}>{value} (missing)</option>}
+            {names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+            {can("secrets:write", ns) && <option value={CREATE}>+ Create a new secret…</option>}
+          </NativeSelect>
+        </div>
+        {missing && can("secrets:write", ns) && (
+          <Button variant="secondary" onClick={() => setDialog("set")}>
+            Set value
+          </Button>
+        )}
+      </div>
+      {missing && (
+        <p className="mt-1 flex items-center gap-1 text-xs text-warn">
+          <AlertTriangle className="size-3" /> Secret “{value}” does not exist in {ns} yet.
+        </p>
+      )}
+      <SecretDialog
+        ns={ns}
+        open={!!dialog}
+        onOpenChange={(o) => !o && setDialog(null)}
+        initialName={dialog === "set" ? value : `${field.replace(/_/g, "-")}`}
+        lockName={dialog === "set"}
+        onSaved={(n) => onChange(n)}
+      />
+    </Field>
+  );
 }
