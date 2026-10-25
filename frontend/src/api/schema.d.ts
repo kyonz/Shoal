@@ -4273,6 +4273,13 @@ export interface components {
             mode: string;
             /** Status */
             status: string;
+            /**
+             * Spec
+             * @description The Eval spec as it was when the run started (threshold, graders, ...).
+             */
+            spec: {
+                [key: string]: unknown;
+            };
             /** Summary */
             summary: {
                 [key: string]: unknown;
@@ -4371,6 +4378,13 @@ export interface components {
             mode: string;
             /** Status */
             status: string;
+            /**
+             * Spec
+             * @description The Eval spec as it was when the run started (threshold, graders, ...).
+             */
+            spec: {
+                [key: string]: unknown;
+            };
             /** Summary */
             summary: {
                 [key: string]: unknown;
@@ -4650,6 +4664,15 @@ export interface components {
              * @description Role bindings for hub people and groups, made on join.
              */
             grants?: components["schemas"]["GrantIn"][];
+        };
+        /** KeptResource */
+        KeptResource: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /** LinkCreated */
         LinkCreated: {
@@ -5084,6 +5107,19 @@ export interface components {
              * @default 100
              */
             limit: number;
+        };
+        /** RemoveResult */
+        RemoveResult: {
+            /**
+             * Removed
+             * @description Resources deleted with the adoption.
+             */
+            removed: components["schemas"]["ResourceRef"][];
+            /**
+             * Kept
+             * @description Resources left alone: already deleted, or no longer labelled with this adoption.
+             */
+            kept?: components["schemas"]["KeptResource"][];
         };
         /**
          * ResourceIn
@@ -10068,11 +10104,13 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RemoveResult"];
+                };
             };
             /** @description Validation Error */
             422: {
