@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
 from shoal.core.errors import StepError
 from shoal.core.models import (
+    SCRIPT_RESERVED_OUTPUTS,
     ActionStep,
     ApprovalStep,
+    ParamValidationError,
     RunStatus,
     ScriptStep,
     SetStep,
     WaitStep,
     WorkflowCallStep,
+    validate_params,
 )
 from shoal.integrations.base import IntegrationError
 from shoal.runtime.context import Completed, StepContext, StepResult, Suspended
+from shoal.sandbox.base import shell_quote
 
 
 class SetHandler:
@@ -44,17 +50,99 @@ class ActionHandler:
         return Completed(output)
 
 
+_SCRIPT_FILES = {"shell": "script.sh", "bash": "script.sh", "python": "script.py", "node": "script.js"}
+MAX_SCRIPT_OUTPUTS_BYTES = 1_000_000
+
+# Helpers written next to every program so scripts need no Shoal package installed.
+PYTHON_HELPER = """\
+\"\"\"Shoal script step helpers: ``inputs`` and ``set_output(name, value)``.\"\"\"
+import json as _json
+import os as _os
+
+with open(_os.environ["SHOAL_INPUTS"]) as _f:
+    inputs = _json.load(_f)
+outputs = {}
+
+
+def set_outputs(values):
+    outputs.update(values)
+    with open(_os.environ["SHOAL_OUTPUTS"], "w") as f:
+        _json.dump(outputs, f, default=str)
+
+
+def set_output(name, value):
+    set_outputs({name: value})
+"""
+
+NODE_HELPER = """\
+// Shoal script step helpers: inputs and setOutput(name, value).
+const fs = require("fs");
+const inputs = JSON.parse(fs.readFileSync(process.env.SHOAL_INPUTS, "utf8"));
+const outputs = {};
+function setOutputs(values) {
+  Object.assign(outputs, values);
+  fs.writeFileSync(process.env.SHOAL_OUTPUTS, JSON.stringify(outputs));
+}
+function setOutput(name, value) { setOutputs({ [name]: value }); }
+module.exports = { inputs, outputs, setOutput, setOutputs };
+"""
+
+
+def _script_command(language: str, step_dir: str, script: str) -> str:
+    d, s = shell_quote(step_dir), shell_quote(script)
+    if language == "python":
+        return f"PYTHONPATH={d}${{PYTHONPATH:+:$PYTHONPATH}} exec python3 {s}"
+    if language == "node":
+        return f"NODE_PATH={d}${{NODE_PATH:+:$NODE_PATH}} exec node {s}"
+    return f"exec {'bash' if language == 'bash' else 'sh'} {s}"
+
+
+def _input_var(name: str) -> str:
+    return "SHOAL_INPUT_" + re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+
+
+def _input_env(inputs: dict[str, Any]) -> dict[str, str]:
+    """Scalar inputs as ``SHOAL_INPUT_<NAME>`` for shell scripts."""
+    env = {}
+    for name, value in inputs.items():
+        if isinstance(value, bool):
+            env[_input_var(name)] = "true" if value else "false"
+        elif isinstance(value, str | int | float):
+            env[_input_var(name)] = str(value)
+    return env
+
+
 class ScriptHandler:
     async def run(self, ctx: StepContext) -> StepResult:
         step = ctx.step
         assert isinstance(step, ScriptStep)
-        script = ctx.render(step.run)
+        inputs = ctx.render(step.inputs)
         env = {k: str(v) for k, v in ctx.render(step.env).items()}
         profile = step.sandbox or ctx.workflow.defaults.sandbox
         timeout = step.timeout.total_seconds() if step.timeout else None
         async with ctx.engine.sandboxes.acquire(ctx.run, profile) as sandbox:
-            await ctx.emit("script.started", {"sandbox_id": sandbox.id, "script": script[:2000]})
-            result = await sandbox.exec(script, cwd=step.workdir, env=env, timeout=timeout)
+            rel = f".shoal/steps/{step.id}-{ctx.attempt}"
+            step_dir = sandbox.resolve(rel)
+            inputs_path, outputs_path = f"{step_dir}/inputs.json", f"{step_dir}/outputs.json"
+            await sandbox.write_file(inputs_path, json.dumps(inputs, default=str))
+            await sandbox.write_file(outputs_path, "{}")
+            if step.code is not None:
+                source = step.code
+                script_path = f"{step_dir}/{_SCRIPT_FILES[step.language]}"
+                await sandbox.write_file(script_path, step.code)
+                if step.language == "python":
+                    await sandbox.write_file(f"{step_dir}/shoal_step.py", PYTHON_HELPER)
+                elif step.language == "node":
+                    await sandbox.write_file(f"{step_dir}/shoal_step.js", NODE_HELPER)
+                command = _script_command(step.language, step_dir, script_path)
+            else:
+                source = command = ctx.render(step.run)
+            env = {**_input_env(inputs), **env, "SHOAL_INPUTS": inputs_path, "SHOAL_OUTPUTS": outputs_path,
+                   "SHOAL_STEP_DIR": step_dir}
+            await ctx.emit("script.started", {"sandbox_id": sandbox.id, "language": step.language if step.code is not None else "shell",
+                                              "script": source[:2000]})
+            result = await sandbox.exec(command, cwd=step.workdir, env=env, timeout=timeout)
+            declared = await self._read_outputs(sandbox, outputs_path)
         output = ctx.redactor(result.to_dict())
         await ctx.emit("script.finished", {"exit_code": result.exit_code, "duration": result.duration_seconds})
         usage = {"sandbox_seconds": result.duration_seconds}
@@ -63,7 +151,33 @@ class ScriptHandler:
                 f"script exited with {result.exit_code}" + (" (timed out)" if result.timed_out else ""),
                 details={"stdout": output["stdout"][-4000:], "stderr": output["stderr"][-4000:]},
             )
-        return Completed(output, usage=usage)
+        if result.ok and step.outputs:
+            try:
+                declared = validate_params(step.outputs, declared)
+            except ParamValidationError as exc:
+                raise StepError(
+                    f"script outputs are invalid: {exc}",
+                    details={"errors": exc.errors, "stderr": output["stderr"][-4000:]},
+                ) from exc
+        declared = ctx.redactor(declared)
+        top = {k: v for k, v in declared.items() if k not in SCRIPT_RESERVED_OUTPUTS}
+        return Completed({**top, **output, "outputs": declared}, usage=usage)
+
+    @staticmethod
+    async def _read_outputs(sandbox: Any, path: str) -> dict[str, Any]:
+        try:
+            raw = await sandbox.read_file(path)
+        except Exception:  # the program removed it; backends raise their own errors
+            return {}
+        if len(raw) > MAX_SCRIPT_OUTPUTS_BYTES:
+            raise StepError(f"script outputs exceed {MAX_SCRIPT_OUTPUTS_BYTES} bytes")
+        try:
+            value = json.loads(raw or b"{}")
+        except ValueError as exc:
+            raise StepError(f"$SHOAL_OUTPUTS is not valid JSON: {exc}") from exc
+        if not isinstance(value, dict):
+            raise StepError("$SHOAL_OUTPUTS must hold a JSON object")
+        return value
 
 
 def _parse_time(value: Any) -> datetime:

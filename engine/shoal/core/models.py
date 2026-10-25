@@ -167,15 +167,42 @@ class ActionStep(StepBase):
     with_: dict[str, Any] = Field(default_factory=dict, alias="with")
 
 
+SCRIPT_RESERVED_OUTPUTS = frozenset({"exit_code", "stdout", "stderr", "timed_out", "duration_seconds", "outputs"})
+
+
 class ScriptStep(StepBase):
-    """Run a shell script in a sandbox. Output: ``exit_code``, ``stdout``, ``stderr``."""
+    """Run a script in a sandbox: deterministic code instead of an agent.
+
+    Either ``run`` (a shell command line, rendered as an expression) or ``code``
+    (a program in ``language``, used verbatim). ``inputs`` are rendered and
+    handed to the program as JSON in the file named by ``$SHOAL_INPUTS``; it
+    writes a JSON object of ``outputs`` to ``$SHOAL_OUTPUTS``. Python programs
+    can also ``import shoal_step`` (``inputs``, ``set_output``, ``set_outputs``).
+    Output: ``exit_code``, ``stdout``, ``stderr``, the declared outputs (also
+    under ``outputs``).
+    """
 
     type: Literal["script"] = "script"  # type: ignore[misc]
-    run: str
+    run: str | None = Field(None, description="Shell command line; expressions are rendered.")
+    code: str | None = Field(None, description="Program source in `language`; used verbatim, never rendered.")
+    language: Literal["shell", "bash", "python", "node"] = "shell"
+    inputs: dict[str, Any] = Field(default_factory=dict, description="Values (expressions allowed) passed as JSON.")
+    outputs: dict[str, ParamSpec] = Field(default_factory=dict, description="Typed outputs the program must write.")
     sandbox: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     workdir: str | None = None
     fail_on_error: bool = True
+
+    @model_validator(mode="after")
+    def _one_source(self) -> ScriptStep:
+        if (self.run is None) == (self.code is None):
+            raise ValueError("script step needs exactly one of: run, code")
+        if self.run is not None and self.language != "shell":
+            raise ValueError("'language' applies to 'code'; 'run' is always a shell command line")
+        reserved = SCRIPT_RESERVED_OUTPUTS & set(self.outputs)
+        if reserved:
+            raise ValueError(f"reserved output names: {sorted(reserved)}")
+        return self
 
 
 class WaitCondition(Model):
