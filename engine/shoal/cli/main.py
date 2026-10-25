@@ -360,7 +360,16 @@ def delete(
         else:
             path = _resource_path(kind_name, plural, ns, name)
         client.request("DELETE", path)
-    console.print(f"{plural.rstrip('s')}/{escape(name)} deleted")
+    console.print(f"{_singular(plural)}/{escape(name)} deleted")
+
+
+def _singular(plural: str) -> str:
+    """'model-policies' -> 'model-policy', 'workflows' -> 'workflow'."""
+    if plural == "ns":
+        return "namespace"
+    if plural.endswith("ies"):
+        return plural[:-3] + "y"
+    return plural.removesuffix("s")
 
 
 # --------------------------------------------------------------------------- runs
@@ -433,6 +442,8 @@ def _follow(client: Client, run_id: str, *, show: bool, step: str | None = None)
             break
         if show:
             print_event(data)
+        if data.get("type") == "approval.requested" and data.get("step_id"):
+            err.print(f"waiting for approval: shoal approve {run_id} {escape(data['step_id'])} (or --reject)")
     final = client.get(f"/v1/runs/{quote(run_id)}")
     err.print(f"run {final['id']} {styled(final['status'])}")
     return final
@@ -481,6 +492,29 @@ def cancel(ctx: typer.Context, run_id: Annotated[str, typer.Argument(help="Run i
     with api(ctx) as client:
         result = client.request("POST", f"/v1/runs/{quote(run_id)}/cancel")
     console.print(f"run {result['id']} {styled(result['status'])} (cancel requested)")
+
+
+@app.command()
+def approve(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id.")],
+    step: Annotated[str | None, typer.Argument(help="Approval step id (default: the run's only waiting approval).")] = None,
+    reject: Annotated[bool, typer.Option("--reject", help="Reject instead of approving.")] = False,
+    comment: Annotated[str | None, typer.Option("--comment", "-m", help="Comment recorded with the decision.")] = None,
+) -> None:
+    """Approve (or --reject) a run's approval step."""
+    with api(ctx) as client:
+        if step is None:
+            run = client.get(f"/v1/runs/{quote(run_id)}")
+            waiting = [s["step_id"] for s in run.get("steps") or [] if s["type"] == "approval" and s["status"] == "waiting"]
+            if len(waiting) != 1:
+                found = ", ".join(waiting) if waiting else "none"
+                err.print(f"[red]error:[/red] name the approval step; waiting approvals in {escape(run_id)}: {escape(found)}")
+                raise typer.Exit(2)
+            step = waiting[0]
+        client.request("POST", f"/v1/runs/{quote(run_id)}/steps/{quote(step)}/approval",
+                       json={"approved": not reject, "comment": comment})
+    console.print(f"step {escape(step)} {'rejected' if reject else 'approved'} (run {escape(run_id)})")
 
 
 @app.command()

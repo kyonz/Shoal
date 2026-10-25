@@ -613,7 +613,7 @@ class Integration(Protocol):
 
 - **Actions** have pydantic input/output models, so they are simultaneously
   workflow `action` steps, agent tools (JSON schema from the model) and API
-  operations (`POST /v1/connections/{id}/actions/{action}`).
+  operations (`POST /v1/namespaces/{namespace}/connections/{name}/actions/{action}`).
 - **Triggers**: `webhook` (signature-verified, one URL per connection
   `/v1/hooks/{webhook_id}`), `poll` (cursor persisted) and **`schedule`**
   (cron expressions with time zones, e.g. `0 9 * * MON-FRI` in
