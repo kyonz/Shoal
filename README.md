@@ -131,6 +131,7 @@ The full version, with tests, Jira writeback and failure handling, is in [`examp
 **Integrations and triggers**
 - GitHub, Jira, generic webhooks and schedules, each with triggers, actions and metadata queries.
 - An integrations SDK and test kit, plus a language-neutral remote protocol: write an integration in any language ([guide](docs/integrations.md)).
+- Skill marketplaces: import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 
 **Campaigns, blueprints and evals**
 - Campaigns fan one workflow out over many targets with concurrency, budgets, rate limits and progress tracking.
@@ -155,6 +156,7 @@ The full version, with tests, Jira writeback and failure handling, is in [`examp
 | [Architecture](docs/architecture.md) | Concepts, the runtime, plugin contracts and the API surface |
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
+| [Skill sources](docs/skills.md) | Importing skills from marketplaces, and writing skill source plugins |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
 | [Terraform provider](terraform-provider/README.md) | Managing Shoal as code |
 | [Brand](docs/brand.md) | Logo, colours and how to use them |

@@ -69,6 +69,22 @@ shoal eval run triage-eval --baseline previous --fail-under 0.9 --max-regression
 With `--wait` the command exits 1 unless the eval completes and its gate passes; the gate's
 reasons are printed. `shoal eval get <id>` shows a past run.
 
+## Skills from marketplaces
+
+```sh
+shoal skills sources                          # skill sources this namespace can browse
+shoal skills browse acme-skills -q pdf        # list or search one
+shoal skills show acme-skills skills/pdf      # SKILL.md, files and version
+shoal skills import acme-skills skills/pdf --dry-run   # the diff, nothing written
+shoal skills import acme-skills skills/pdf    # as Skill 'pdf' (--name to choose, --version to pin)
+shoal skills imports --check                  # imported skills and whether a newer version exists
+shoal skills upgrade pdf                      # shows the diff, asks, applies
+shoal skills rollback pdf 1                   # restore an earlier version
+```
+
+Sources themselves are tenant-wide resources: `shoal apply` a `SkillSource` and
+`shoal get skill-sources` (see [skills.md](skills.md)).
+
 ## Integrations
 
 `shoal integrations new servicenow --title ServiceNow` scaffolds an integration project from the
