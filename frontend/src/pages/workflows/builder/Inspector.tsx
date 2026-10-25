@@ -1,11 +1,13 @@
-import { AlertTriangle, CircleAlert, Copy, Trash2, X } from "lucide-react";
+import { AlertTriangle, CircleAlert, Copy, Sparkles, Trash2, X } from "lucide-react";
 import { useMemo } from "react";
 import { useResource, useStepSchema, type JsonSchema } from "@/api/hooks";
 import { useNs } from "@/lib/ns";
-import { Badge, Button, Field, Input, NativeSelect, Segmented, Switch, Tooltip } from "@/components/ui";
+import { Badge, Button, CodeEditor, Field, Input, NativeSelect, Segmented, Switch, Tooltip } from "@/components/ui";
 import { KeyValueInput, SchemaForm, TagInput } from "@/components/forms/SchemaForm";
 import { dependencies } from "@/features/workflow/graph";
 import { ExpressionInput } from "@/features/workflow/ExpressionInput";
+import { useAssistant } from "@/features/assistant/store";
+import { SCRIPT_LANGUAGES, SCRIPT_TEMPLATES, editorLanguage, type ScriptLanguage } from "@/features/workflow/scriptTemplates";
 import { stepType } from "@/features/workflow/stepTypes";
 import type { Issue } from "@/features/workflow/validate";
 import type { ParamDoc, StepDoc } from "@/features/workflow/types";
@@ -252,26 +254,94 @@ function ActionEditor({ step, set }: { step: StepDoc; set: SetFn }) {
 }
 
 function ScriptEditor({ step, set }: { step: StepDoc; set: SetFn }) {
+  const workflow = useBuilder((s) => s.meta.name);
+  const ask = useAssistant((s) => s.ask);
+  const mode = step.code !== undefined || step.run === undefined ? "code" : "run";
+  const language = (step.language as ScriptLanguage | undefined) ?? "shell";
+  const switchMode = (m: "code" | "run") => {
+    if (m === mode) return;
+    if (m === "run") set({ code: undefined, language: undefined, run: "echo hello" });
+    else set({ run: undefined, language: "python", code: SCRIPT_TEMPLATES.python });
+  };
+  const switchLanguage = (lang: ScriptLanguage) => {
+    const code = str(step.code);
+    const untouched = !code.trim() || Object.values(SCRIPT_TEMPLATES).includes(code);
+    set({ language: lang === "shell" ? undefined : lang, ...(untouched ? { code: SCRIPT_TEMPLATES[lang] } : {}) });
+  };
+  const outputs = Object.keys((step.outputs as Record<string, unknown>) ?? {});
+  const inputs = Object.keys((step.inputs as Record<string, unknown>) ?? {});
+  const askAssistant = () =>
+    ask(
+      `Write the ${SCRIPT_LANGUAGES.find((l) => l.value === language)?.label ?? language} code for the script step \`${step.id}\`` +
+        (workflow ? ` in workflow \`${workflow}\`` : "") +
+        (inputs.length ? ` (inputs: ${inputs.join(", ")})` : "") +
+        (outputs.length ? ` (outputs: ${outputs.join(", ")})` : "") +
+        ". It should: ",
+    );
   return (
-    <Section title="Script">
-      <div className="space-y-3">
-        <Field label="Command" required description="Runs with bash in the sandbox workspace. Output: exit_code, stdout, stderr.">
-          <ExpressionInput multiline mono minHeight="120px" value={str(step.run)} onChange={(v) => set({ run: v }, `step:${step.id}:run`)} />
-        </Field>
-        <div className="grid grid-cols-2 gap-2.5">
-          <Field label="Sandbox profile">
-            <ResourceSelect plural="sandbox-profiles" value={step.sandbox as string} onChange={(v) => set({ sandbox: v })} placeholder="Default" />
-          </Field>
-          <Field label="Working directory">
-            <Input mono value={str(step.workdir)} placeholder="/workspace" onChange={(e) => set({ workdir: e.target.value })} />
-          </Field>
+    <>
+      <Section
+        title="Script"
+        description="Deterministic code in the sandbox: faster, cheaper and repeatable compared with an agent."
+        action={<Segmented value={mode} onChange={switchMode} options={[{ value: "code", label: "Code" }, { value: "run", label: "Command" }]} />}
+      >
+        <div className="space-y-3">
+          {mode === "code" ? (
+            <>
+              <div className="flex items-center gap-2">
+                <NativeSelect value={language} onChange={(e) => switchLanguage(e.target.value as ScriptLanguage)} className="w-36">
+                  {SCRIPT_LANGUAGES.map((l) => (
+                    <option key={l.value} value={l.value}>
+                      {l.label}
+                    </option>
+                  ))}
+                </NativeSelect>
+                <div className="flex-1" />
+                <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={askAssistant}>
+                  Write with assistant
+                </Button>
+              </div>
+              <Field label="Code" required description="Used as written (expressions are not rendered here): pass data in through Inputs.">
+                <CodeEditor
+                  value={str(step.code)}
+                  onChange={(v) => set({ code: v }, `step:${step.id}:code`)}
+                  language={editorLanguage(language)}
+                  minHeight="180px"
+                  maxHeight="460px"
+                  className="rounded-lg border border-border bg-subtle/30 font-mono text-[12px]"
+                />
+              </Field>
+            </>
+          ) : (
+            <Field label="Command" required description="A shell command line; {{ }} expressions are rendered. Output: exit_code, stdout, stderr.">
+              <ExpressionInput multiline mono minHeight="120px" value={str(step.run)} onChange={(v) => set({ run: v }, `step:${step.id}:run`)} />
+            </Field>
+          )}
         </div>
-        <Field label="Environment">
-          <KeyValueInput value={(step.env as Record<string, string>) ?? {}} onChange={(v) => set({ env: Object.keys(v).length ? v : undefined })} keyPlaceholder="NAME" />
-        </Field>
-        <Switch checked={step.fail_on_error !== false} onCheckedChange={(c) => set({ fail_on_error: c ? undefined : false })} label={<span className="text-xs">Fail the step on a non-zero exit code</span>} />
-      </div>
-    </Section>
+      </Section>
+      <Section title="Inputs" description="Rendered expressions, passed to the program as JSON ($SHOAL_INPUTS; Python and Node: shoal_step.inputs).">
+        <ExpressionMap value={(step.inputs as Record<string, unknown>) ?? {}} onChange={(v) => set({ inputs: Object.keys(v).length ? v : undefined })} keyPlaceholder="input" addLabel="Add input" />
+      </Section>
+      <Section title="Outputs" description="Typed values the program writes ($SHOAL_OUTPUTS or set_output); later steps read steps.<id>.output.<name>.">
+        <ParamsEditor kind="output" value={(step.outputs as Record<string, ParamDoc>) ?? {}} onChange={(v) => set({ outputs: Object.keys(v).length ? v : undefined })} />
+      </Section>
+      <Section title="Environment">
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field label="Sandbox profile">
+              <ResourceSelect plural="sandbox-profiles" value={step.sandbox as string} onChange={(v) => set({ sandbox: v })} placeholder="Default" />
+            </Field>
+            <Field label="Working directory">
+              <Input mono value={str(step.workdir)} placeholder="/workspace" onChange={(e) => set({ workdir: e.target.value })} />
+            </Field>
+          </div>
+          <Field label="Environment variables">
+            <KeyValueInput value={(step.env as Record<string, string>) ?? {}} onChange={(v) => set({ env: Object.keys(v).length ? v : undefined })} keyPlaceholder="NAME" />
+          </Field>
+          <Switch checked={step.fail_on_error !== false} onCheckedChange={(c) => set({ fail_on_error: c ? undefined : false })} label={<span className="text-xs">Fail the step on a non-zero exit code</span>} />
+        </div>
+      </Section>
+    </>
   );
 }
 

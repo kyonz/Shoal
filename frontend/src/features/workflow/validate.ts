@@ -24,7 +24,7 @@ function required(step: StepDoc): [string, string][] {
     case "action":
       return [["action", "Choose an integration action"]];
     case "script":
-      return [["run", "Add a script to run"]];
+      return step.run !== undefined && step.code === undefined ? [["run", "Add a command to run"]] : [["code", "Write the script's code"]];
     case "approval":
       return [["message", "Add a message for the approver"]];
     case "workflow":

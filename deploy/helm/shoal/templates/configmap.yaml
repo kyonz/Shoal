@@ -13,3 +13,8 @@ data:
   SHOAL_LEASE_SECONDS: {{ .Values.config.leaseSeconds | quote }}
   SHOAL_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   SHOAL_LOG_JSON: {{ .Values.config.logJson | quote }}
+  SHOAL_ASSISTANT_ENABLED: {{ .Values.config.assistant.enabled | quote }}
+  SHOAL_ASSISTANT_GATEWAY: {{ .Values.config.assistant.gateway | quote }}
+  SHOAL_ASSISTANT_MODEL: {{ .Values.config.assistant.model | quote }}
+  SHOAL_ASSISTANT_EFFORT: {{ .Values.config.assistant.effort | quote }}
+  SHOAL_ASSISTANT_MAX_TURNS: {{ .Values.config.assistant.maxTurns | quote }}

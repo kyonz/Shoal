@@ -21,6 +21,14 @@ config:
   leaseSeconds: 60
   logLevel: INFO
   logJson: true
+  # The chat assistant in the UI (POST /v1/assistant/chat). gateway is a Gateway
+  # resource (in the user's namespace or shared) or a provider plugin name.
+  assistant:
+    enabled: true
+    gateway: anthropic
+    model: claude-opus-5-5
+    effort: medium
+    maxTurns: 16
 
 # Credentials. Leave secretKey/adminToken empty to generate them once (they are
 # kept across upgrades), or point existingSecret at a Secret you manage with keys

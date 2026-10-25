@@ -24,8 +24,10 @@ What you can see and change depends on your role in each namespace. Shoal hides 
 2. Drag a **Set** step from the palette onto the canvas and give it a value, for example `message: "Hello {{ inputs.name }}"`.
 3. Open **Workflow settings** (click an empty part of the canvas) and add an input called `name` of type `string`.
 4. Drag a **Script** step below it and connect the bottom handle of the first step to the top handle of the second. The connection means "run after" (the step's `needs`).
-5. In the script, type `echo "{{ steps.` and pick the upstream output from the autocompletion list.
+5. Switch the script to **Command** and type `echo "{{ steps.` then pick the upstream output from the autocompletion list. (In **Code** mode you write Python, Node or shell instead and pass values in through **Inputs**: see [Script steps](/docs/guides/assistant#script-steps).)
 6. Press <kbd>⌘S</kbd> (or <kbd>Ctrl+S</kbd>) to save. Shoal validates the workflow against the server before it saves and shows any problems on the affected steps.
+
+Prefer to describe it? Open the **Assistant** (<kbd>⌘J</kbd>) and say what you want; it builds the workflow and asks before saving anything. See [The assistant and script steps](/docs/guides/assistant).
 
 Prefer text? Switch to the **YAML** view at any time; both views edit the same document. See [Using the workflow builder](/docs/guides/workflow-builder) for the details.
 

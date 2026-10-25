@@ -1402,6 +1402,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/assistant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the assistant is enabled, and its model */
+        get: operations["assistant_info_v1_assistant_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assistant/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a message or approval decisions to the assistant */
+        post: operations["chat_v1_assistant_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/workflows": {
         parameters: {
             query?: never;
@@ -3011,6 +3045,15 @@ export interface components {
             /** Comment */
             comment?: string | null;
         };
+        /** AssistantInfo */
+        AssistantInfo: {
+            /** Enabled */
+            enabled: boolean;
+            /** Gateway */
+            gateway: string;
+            /** Model */
+            model: string;
+        };
         /** AuditOut */
         AuditOut: {
             /** Id */
@@ -3115,6 +3158,74 @@ export interface components {
             /** Finished At */
             finished_at: string | null;
         };
+        /** ChatIn */
+        ChatIn: {
+            /**
+             * Namespace
+             * @default default
+             */
+            namespace: string;
+            /**
+             * Messages
+             * @description The history exactly as the previous response returned it.
+             */
+            messages?: components["schemas"]["ChatMessage"][];
+            /**
+             * Message
+             * @description The user's new message.
+             */
+            message?: string | null;
+            /**
+             * Decisions
+             * @description Pending action id -> decision.
+             */
+            decisions?: {
+                [key: string]: components["schemas"]["Decision"];
+            };
+            /**
+             * Auto Approve
+             * @description Make changes without asking (the caller's permissions still apply).
+             * @default false
+             */
+            auto_approve: boolean;
+            /**
+             * Page
+             * @description The UI route the user is on, for context.
+             */
+            page?: string | null;
+        };
+        /** ChatMessage */
+        ChatMessage: {
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+            /** Content */
+            content: string | {
+                [key: string]: unknown;
+            }[];
+        };
+        /** ChatOut */
+        ChatOut: {
+            /** Messages */
+            messages: {
+                [key: string]: unknown;
+            }[];
+            /** Pending */
+            pending?: components["schemas"]["PendingAction"][];
+            /** Usage */
+            usage?: {
+                [key: string]: number;
+            };
+            /** Model */
+            model?: string | null;
+            /**
+             * Stopped
+             * @description 'max_turns' when the assistant ran out of turns for this message.
+             */
+            stopped?: string | null;
+        };
         /** DatasetImportIn */
         DatasetImportIn: {
             /**
@@ -3139,6 +3250,13 @@ export interface components {
              * @default append
              */
             mode: string;
+        };
+        /** Decision */
+        Decision: {
+            /** Approve */
+            approve: boolean;
+            /** Note */
+            note?: string | null;
         };
         /** DeliveryOut */
         DeliveryOut: {
@@ -3819,6 +3937,38 @@ export interface components {
             next_cursor?: string | null;
             /** Total */
             total?: number | null;
+        };
+        /** PendingAction */
+        PendingAction: {
+            /** Id */
+            id: string;
+            /** Tool */
+            tool: string;
+            /** Summary */
+            summary: string;
+            /** Method */
+            method: string;
+            /** Path */
+            path: string;
+            /** Namespace */
+            namespace?: string | null;
+            /** Query */
+            query?: {
+                [key: string]: unknown;
+            };
+            /** Body */
+            body?: unknown;
+            /** Yaml */
+            yaml?: string | null;
+            /**
+             * Plan
+             * @description apply_resources: the dry-run outcome per document.
+             */
+            plan?: unknown;
+            /** Kinds */
+            kinds?: {
+                [key: string]: string;
+            }[];
         };
         /** PermissionOut */
         PermissionOut: {
@@ -8029,6 +8179,59 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assistant_info_v1_assistant_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantInfo"];
+                };
+            };
+        };
+    };
+    chat_v1_assistant_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatOut"];
+                };
             };
             /** @description Validation Error */
             422: {
