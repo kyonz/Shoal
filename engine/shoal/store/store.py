@@ -230,6 +230,13 @@ class Store:
             ).scalar_one()
             if count:
                 raise Conflict(f"namespace '{name}' still contains {count} resource(s)")
+            q = select(t.OIDCProvider.name).where(t.OIDCProvider.tenant_id == tenant_id, t.OIDCProvider.default_namespace == name)
+            if provider := (await s.execute(q.limit(1))).scalar_one_or_none():
+                raise Conflict(f"OIDC provider '{provider}' grants its default role in namespace '{name}'; change it first")
+            # What belongs to the namespace goes with it, so a namespace created later with the
+            # same name starts without the old members, secrets, personal credentials or webhook URLs.
+            for table in (t.RoleBinding, t.Secret, t.UserCredential, t.WebhookEndpoint):
+                await s.execute(delete(table).where(table.tenant_id == tenant_id, table.namespace == name))
             await s.execute(delete(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name))
 
     # ------------------------------------------------------------------ resources
