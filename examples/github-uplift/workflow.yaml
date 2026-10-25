@@ -43,7 +43,7 @@ spec:
           {{ steps.uplift.output.pr_body }}
 
           ---
-          Opened by AI Workflow Manager ([run]({{ run.url }})). This PR is merged automatically once approved.
+          Opened by Shoal ([run]({{ run.url }})). This PR is merged automatically once approved.
         labels: [automated]
 
     - id: await_review
@@ -78,7 +78,7 @@ spec:
       with:
         repo: "{{ inputs.repo }}"
         number: "{{ steps.open_pr.output.number }}"
-        body: "Approved, but AI Workflow Manager could not merge: {{ steps.merge.output.reason }}"
+        body: "Approved, but Shoal could not merge: {{ steps.merge.output.reason }}"
 
     - id: nudge
       type: action

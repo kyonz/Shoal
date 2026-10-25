@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# The AWM image: API server, worker and CLI, plus the built UI when frontend/ exists.
+# The Shoal image: API server, worker and CLI, plus the built UI when frontend/ exists.
 #
 #   docker build -f deploy/Dockerfile -t awm .          (from the repository root)
 #   docker run -p 8080:8080 -e AWM_ADMIN_TOKEN=... awm   (serve, with an embedded worker)
@@ -41,7 +41,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --------------------------------------------------------------------------- runtime
 FROM python:${PYTHON_VERSION}-slim
 LABEL org.opencontainers.image.title="awm" \
-      org.opencontainers.image.description="AI Workflow Manager: multi-tenant engine for multi-agent AI workflows" \
+      org.opencontainers.image.description="Shoal: multi-tenant engine for multi-agent AI workflows" \
       org.opencontainers.image.source="https://github.com/kyonz/ai-workflow-manager" \
       org.opencontainers.image.licenses="Apache-2.0"
 # git and ssh for agents and scripts that work on repositories in local sandboxes.

@@ -1,4 +1,4 @@
-"""Starter integration for AI Workflow Manager."""
+"""Starter integration for Shoal."""
 
 from awm_starter.integration import StarterConnection, StarterIntegration
 

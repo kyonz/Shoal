@@ -1,6 +1,6 @@
 # Remote integration in Node.js
 
-A complete AWM integration in ~180 lines of dependency-free Node.js, to show
+A complete Shoal integration in ~180 lines of dependency-free Node.js, to show
 that integrations can be written in any language. It implements the
 `awm.integration/v1` protocol (see [docs/integrations.md](../../docs/integrations.md)).
 

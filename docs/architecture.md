@@ -1,8 +1,8 @@
-# AI Workflow Manager — Architecture
+# Shoal — Architecture
 
 Status: **Draft v1** · Owner: @kyonz · Last updated: 2026-10-25
 
-AI Workflow Manager (AWM) is an open-source, self-hostable platform for defining,
+Shoal is an open-source, self-hostable platform for defining,
 running and governing multi-agent AI workflows. It is API-first, multi-tenant,
 and built from pluggable parts so organisations can swap any layer (sandbox,
 model provider, integration, secret store, orchestrator) without forking.
@@ -40,7 +40,7 @@ first release must satisfy.
 
 - A hosted SaaS control plane (the design allows it; we do not build billing).
 - Training or fine-tuning models.
-- A general-purpose ETL/data pipeline engine. AWM is for agentic work.
+- A general-purpose ETL/data pipeline engine. Shoal is for agentic work.
 
 ---
 
@@ -105,7 +105,7 @@ YAML/JSON, so they can be authored as files (GitOps) or via the API/UI.
 
 A week-long "wait for review" means runs must be durable. We implement a small
 durable state machine on top of the database rather than requiring Temporal,
-because self-hosters should be able to run AWM with just Postgres. The executor
+because self-hosters should be able to run Shoal with just Postgres. The executor
 sits behind the `Orchestrator` protocol so a Temporal (or other) backend can be
 added as a plugin later without touching workflows.
 
@@ -268,7 +268,7 @@ leases.
   tests). A provider implements one async method: `complete(messages, tools,
   …) -> ModelResponse`.
 - **Agent runtimes** (`awm.agent_runtimes`):
-  - `tool-loop` — AWM's own tool-use loop: model ↔ tools until the model
+  - `tool-loop` — Shoal's own tool-use loop: model ↔ tools until the model
     calls the built-in `finish` tool with outputs matching the step schema.
   - `cli` — run an external coding agent CLI (e.g. Claude Code, Codex, Aider)
     inside the sandbox with the prompt, collect structured output from a
@@ -300,7 +300,7 @@ kept out of the model's reach.
     connection);
   - `github-app` — short-lived installation tokens, optionally narrowed to the
     target repository and permissions of the current step;
-  - `aws-sts`, `gcp-wif`, `azure-federated` — workload identity: AWM presents
+  - `aws-sts`, `gcp-wif`, `azure-federated` — workload identity: Shoal presents
     its run identity token and exchanges it for cloud credentials;
   - `vault` — dynamic secrets from HashiCorp Vault/OpenBao.
 - **Scoping and lifetime.** Credentials are resolved per step attempt, scoped
@@ -313,8 +313,8 @@ kept out of the model's reach.
   token never enters the sandbox (backends that support it: SPACE credential
   references, Kubernetes sidecar proxy).
 - **Run identity.** Each agent step receives a signed, short-lived JWT
-  (`iss` = AWM, `sub` = `tenant/run/step/agent`, audience-restricted). It is
-  used to call back into the AWM API with least privilege, as the subject for
+  (`iss` = Shoal, `sub` = `tenant/run/step/agent`, audience-restricted). It is
+  used to call back into the Shoal API with least privilege, as the subject for
   workload-identity federation, and as the caller identity for A2A and MCP.
 - **Human identity.** When a run is started by a user, the user id is carried
   on the run for audit, and policy can require per-user OAuth connections
@@ -326,14 +326,14 @@ kept out of the model's reach.
   Agent2Agent (A2A) protocol. Remote agents are registered as `Agent`
   resources with `runtime: a2a` (agent card URL + credential provider), so
   they work as workflow `agent` steps and as `subagents` of a local agent.
-  AWM fetches and caches the Agent Card, sends the task, streams updates into
+  Shoal fetches and caches the Agent Card, sends the task, streams updates into
   run events, and maps the final artifacts onto the step's declared outputs.
 - **A2A inbound.** Any agent or workflow can be published as an A2A agent:
-  AWM serves its Agent Card (skills derived from the workflow inputs/outputs,
+  Shoal serves its Agent Card (skills derived from the workflow inputs/outputs,
   `securitySchemes` for API keys/OAuth) and maps A2A tasks onto runs,
   including streaming and input-required (approval) states.
 - **MCP.** Agents consume MCP servers as tool sources (stdio inside the
-  sandbox, or remote HTTP with OAuth via the credential providers). AWM also
+  sandbox, or remote HTTP with OAuth via the credential providers). Shoal also
   exposes an MCP server so other agents/IDEs can list and run workflows.
 
 ### 7.3 LLM gateways and model routing
@@ -422,7 +422,7 @@ replace them.
   `answer`, `probabilities` and `confidence` for branching with `if`. A
   `min_confidence` setting routes low-confidence decisions to a human
   `approval` or to an LLM fallback instead of acting.
-- **Where AWM uses decisions natively:**
+- **Where Shoal uses decisions natively:**
   - *Trigger triage* — semantic trigger filters ("is this a reproducible bug
     in scope for automation?") evaluated before a run starts.
   - *Tool-call gating* — in the agent runtime, mutating tool calls are
@@ -470,8 +470,8 @@ class Sandbox(Protocol):
 | `docker` | One container per sandbox via the Docker API. |
 | `kubernetes` | One Pod per sandbox (namespace per tenant optional), `exec` over the K8s API, resource limits, NetworkPolicy, `activeDeadlineSeconds`. Works with gVisor/Kata runtime classes. |
 | `e2b` | E2B cloud sandboxes (and self-hosted E2B) via the `e2b` SDK. |
-| `space` | [Perplexity SPACE](https://github.com/perplexityai/SPACE): self-hosted Firecracker microVM sandboxes over its HTTP API (operations polling, SSE command streams, `files:read`/`files:write`, idempotency keys). Supports **suspend/wake**, which AWM uses to park a sandbox during long `wait` steps. |
-| `remote` | Generic adapter for any provider that implements the small AWM Remote Sandbox HTTP contract. |
+| `space` | [Perplexity SPACE](https://github.com/perplexityai/SPACE): self-hosted Firecracker microVM sandboxes over its HTTP API (operations polling, SSE command streams, `files:read`/`files:write`, idempotency keys). Supports **suspend/wake**, which Shoal uses to park a sandbox during long `wait` steps. |
+| `remote` | Generic adapter for any provider that implements the small Shoal Remote Sandbox HTTP contract. |
 
 SPACE also ships an E2B compatibility wrapper, so the `e2b` backend can target
 a SPACE deployment by pointing the E2B domain at it.
@@ -537,7 +537,7 @@ contract, so they double as reference implementations.
   `POST /actions/{name}`, `POST /resources/{name}/query`,
   `POST /webhooks/verify` and `POST /webhooks/parse`, receiving the resolved
   connection config per call. Tenants register one with a
-  `RemoteIntegration` connection (`url`, auth token); AWM adapts it to the same
+  `RemoteIntegration` connection (`url`, auth token); Shoal adapts it to the same
   `Integration` interface, so actions become steps and agent tools
   automatically.
 - **Catalogue and marketplace.** Installed integrations (built-in, Python
@@ -661,7 +661,7 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **OIDC sign-in.** Generic OpenID Connect (Okta, Microsoft Entra ID, Google,
   Keycloak, Auth0, Dex): authorization-code flow with PKCE, ID tokens verified
   against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
-  AWM session tokens afterwards. Claims map to the user record and optionally
+  Shoal session tokens afterwards. Claims map to the user record and optionally
   to role bindings (`groups` claim → group membership). Configured per tenant
   (several providers allowed) plus a bootstrap admin token for first setup.
 - **SCIM 2.0 provisioning.** `/scim/v2/Users`, `/scim/v2/Groups`,
@@ -682,9 +682,9 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 
 ### 11.1 Initiator attribution and delegated authority
 
-AWM is usually operated by a platform team, so its credentials (a GitHub App,
+Shoal is usually operated by a platform team, so its credentials (a GitHub App,
 a service account) can reach repositories the person who triggered a run
-cannot. AWM therefore tracks *who drove the work* separately from *which
+cannot. Shoal therefore tracks *who drove the work* separately from *which
 credential performed it*, and lets policy decide what the run may do.
 
 - **Initiator.** Every run records an initiator: the user behind the API key
@@ -714,7 +714,7 @@ credential performed it*, and lets policy decide what the run may do.
   - *Forced ownership* — assign the PR to the initiator and/or request their
     review, or assign to the repository's CODEOWNERS.
   - *Merge gating* — when the initiator lacks write access to the target
-    repository, AWM will not use the App's broader rights to merge on its
+    repository, Shoal will not use the App's broader rights to merge on its
     own. It requires an approval from someone who does have write access
     (checked per reviewer), and optionally an *agent-assisted merge check*:
     a reviewer agent step that checks the diff against policy and posts its
@@ -953,4 +953,4 @@ new plugin needs no frontend changes.
 
 ## 18. Open questions
 
-- Product name (working name: AWM).
+- ~~Product name~~ — decided: **Shoal**. The Python package, CLI, `AWM_*` settings and `awm.dev/v1` apiVersion keep their `awm` names until a later release.

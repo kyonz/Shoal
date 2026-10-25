@@ -1,4 +1,4 @@
-# Deploying AWM
+# Deploying Shoal
 
 One image runs everything: `awm serve` (API, optionally with an embedded worker) and
 `awm worker`. Workers and API servers are stateless; all state is in Postgres.

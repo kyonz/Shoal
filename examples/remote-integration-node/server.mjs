@@ -1,6 +1,6 @@
-// A remote AWM integration in plain Node.js (no dependencies).
+// A remote Shoal integration in plain Node.js (no dependencies).
 //
-// It speaks the awm.integration/v1 protocol, so AWM treats it like any built-in:
+// It speaks the awm.integration/v1 protocol, so Shoal treats it like any built-in:
 // its actions become workflow steps and agent tools, its resources feed campaign
 // targets, and its webhooks fire triggers. The "incidents" backend is in memory
 // to keep the example self-contained; a real service would call its provider API

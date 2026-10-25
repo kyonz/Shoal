@@ -1,0 +1,23 @@
+name: Integration request
+description: Ask for an integration with another system (Linear, Slack, GitLab, ...).
+labels: [integration, enhancement, triage]
+body:
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: e.g. Linear
+    validations:
+      required: true
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: What should it do?
+      description: Which triggers (events that start a workflow), actions and metadata queries do you need?
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Integrations can be written in any language with the remote protocol, or in Python with the SDK.
+        See [docs/integrations.md](https://github.com/kyonz/ai-workflow-manager/blob/main/docs/integrations.md).
