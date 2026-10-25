@@ -290,6 +290,7 @@ function UserMenu() {
         <MenuSeparator />
         <MenuLabel>Account</MenuLabel>
         <MenuItem onSelect={() => navigate("/admin/api-keys")}>My API keys</MenuItem>
+        {me?.actor?.startsWith("user:") && <MenuItem onSelect={() => navigate("/settings/credentials")}>Connected accounts</MenuItem>}
         <MenuItem onSelect={() => navigate("/docs")}>Documentation</MenuItem>
         <MenuSeparator />
         <MenuItem icon={<LogOut />} onSelect={() => void signOut()}>

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, KeyRound, PlugZap, Save, Trash2, Webhook, XCircle } from "lucide-react";
+import { CheckCircle2, KeyRound, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -19,7 +19,6 @@ import {
   Field,
   Input,
   JsonBlock,
-  NativeSelect,
   Page,
   PageHeader,
   Skeleton,
@@ -30,7 +29,8 @@ import {
   useConfirm,
 } from "@/components/ui";
 import { Expandable, SchemaTable } from "./IntegrationDetail";
-import { Crumb, ErrorList, IntegrationMark, NAME_RE, SecretDialog, VersionsPanel, YamlPanel, useConnectionCapabilities, useSecrets, useYamlSync } from "./shared";
+import { ConnectLink, MyCredentialCard, WhoConnects, pickPersonal, userFields, type PersonalSpec } from "./PersonalCredentials";
+import { Crumb, ErrorList, IntegrationMark, NAME_RE, SecretPicker, VersionsPanel, YamlPanel, useConnectionCapabilities, useYamlSync } from "./shared";
 
 export default function ConnectionEditor() {
   const ns = useNs();
@@ -52,29 +52,35 @@ export default function ConnectionEditor() {
   const [integration, setIntegration] = useState(params.get("integration") ?? "");
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [personal, setPersonal] = useState<PersonalSpec>({});
   const [tab, setTab] = useState("settings");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (existing.data && !loaded) {
-      const s = existing.data.spec as { integration: string; config?: Record<string, unknown>; secrets?: Record<string, string> };
+      const s = existing.data.spec as unknown as { integration: string; config?: Record<string, unknown>; secrets?: Record<string, string> } & PersonalSpec;
       setName(existing.data.metadata.name);
       setDescription(existing.data.metadata.description ?? "");
       setIntegration(s.integration);
       setConfig(s.config ?? {});
       setSecrets(s.secrets ?? {});
+      setPersonal(pickPersonal(s));
       setLoaded(true);
     }
   }, [existing.data, loaded]);
 
   const catalog: IntegrationCatalog | undefined = integrations.data?.find((i) => i.key === integration);
-  const spec = useMemo(() => ({ integration, ...(Object.keys(config).length ? { config } : {}), ...(Object.keys(secrets).length ? { secrets } : {}) }), [integration, config, secrets]);
+  const spec = useMemo(
+    () => ({ integration, ...(Object.keys(config).length ? { config } : {}), ...(Object.keys(secrets).length ? { secrets } : {}), ...personal }),
+    [integration, config, secrets, personal],
+  );
   const yaml = useYamlSync("Connection", name, description, spec, (p) => {
     setDescription(p.description ?? "");
-    const s = p.spec as { integration?: string; config?: Record<string, unknown>; secrets?: Record<string, string> };
+    const s = p.spec as { integration?: string; config?: Record<string, unknown>; secrets?: Record<string, string> } & PersonalSpec;
     if (s.integration) setIntegration(s.integration);
     setConfig(s.config ?? {});
     setSecrets(s.secrets ?? {});
+    setPersonal(pickPersonal(s));
   });
 
   const nameError = isNew && name && !NAME_RE.test(name) ? "Lowercase letters, digits and dashes; start and end with a letter or digit." : undefined;
@@ -120,6 +126,7 @@ export default function ConnectionEditor() {
   if (isNew && !integration) return <PickIntegration integrations={integrations.data ?? []} onPick={setIntegration} loading={integrations.isLoading} />;
 
   const secretFields = catalog?.secret_fields ?? Object.keys(secrets);
+  const personalFields = userFields({ ...personal, secrets });
 
   return (
     <Page>
@@ -171,10 +178,24 @@ export default function ConnectionEditor() {
                 </div>
               </Card>
               <Card>
-                <CardHeader title="Credentials" description="Secret fields point at namespace secrets, so values never appear in the resource." />
+                <CardHeader
+                  title={personal.credentials === "per_user" ? "Shared settings" : personal.credentials === "per_user_or_shared" ? "Shared credential (fallback)" : "Credentials"}
+                  description={
+                    personal.credentials === "per_user"
+                      ? "Each person supplies their own credential. Secret fields that are not theirs still come from namespace secrets."
+                      : "Secret fields point at namespace secrets, so values never appear in the resource."
+                  }
+                />
                 <div className="space-y-3.5 p-4">
                   {secretFields.length ? (
-                    secretFields.map((f) => (
+                    secretFields.map((f) =>
+                      personal.credentials === "per_user" && personalFields.includes(f) ? (
+                        <Field key={f} label={humanize(f)}>
+                          <div className="flex h-8 items-center gap-2 rounded-lg border border-dashed border-border px-2.5 text-xs text-muted">
+                            <UserRound className="size-3.5" /> Each person supplies their own
+                          </div>
+                        </Field>
+                      ) : (
                       <SecretPicker
                         key={f}
                         ns={ns}
@@ -189,12 +210,14 @@ export default function ConnectionEditor() {
                           setSecrets(next);
                         }}
                       />
-                    ))
+                      ),
+                    )
                   ) : (
                     <p className="text-[13px] text-muted">This integration takes no secrets.</p>
                   )}
                 </div>
               </Card>
+              <WhoConnects ns={ns} value={personal} onChange={setPersonal} secretFields={secretFields} disabled={!canWrite} />
               <Card>
                 <CardHeader title="Settings" description="Non-secret configuration, rendered from the integration's schema." />
                 <div className="p-4">
@@ -224,7 +247,12 @@ export default function ConnectionEditor() {
             )}
           </Tabs>
         </div>
-        <aside className="space-y-4">{!isNew && <ConnectionSidebar ns={ns} name={name} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}</aside>
+        <aside className="space-y-4">
+          {!isNew && (existing.data?.spec as PersonalSpec | undefined)?.credentials && (existing.data?.spec as PersonalSpec).credentials !== "shared" && (
+            <MyCredentialCard ns={ns} connection={name} spec={existing.data!.spec as PersonalSpec} />
+          )}
+          {!isNew && <ConnectionSidebar ns={ns} name={name} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}
+        </aside>
       </div>
     </Page>
   );
@@ -248,68 +276,6 @@ function PickIntegration({ integrations, onPick, loading }: { integrations: Inte
         ))}
       </div>
     </Page>
-  );
-}
-
-const CREATE = "__create__";
-
-function SecretPicker({ ns, field, value, onChange, description, disabled }: {
-  ns: string;
-  field: string;
-  value: string | undefined;
-  onChange: (v: string | undefined) => void;
-  description?: string;
-  disabled?: boolean;
-}) {
-  const { can } = useAuth();
-  const secrets = useSecrets(ns, can("secrets:read", ns));
-  const [dialog, setDialog] = useState<"new" | "set" | null>(null);
-  const names = (secrets.data ?? []).map((s) => s.name);
-  const missing = !!value && !!secrets.data && !names.includes(value);
-  return (
-    <Field label={humanize(field)} description={description}>
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <KeyRound className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-faint" />
-          <NativeSelect
-            disabled={disabled}
-            className={cn("pl-8 font-mono text-xs", missing && "border-warn")}
-            value={value ?? ""}
-            onChange={(e) => {
-              if (e.target.value === CREATE) setDialog("new");
-              else onChange(e.target.value || undefined);
-            }}
-          >
-            <option value="">— not set —</option>
-            {missing && <option value={value}>{value} (missing)</option>}
-            {names.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-            {can("secrets:write", ns) && <option value={CREATE}>+ Create a new secret…</option>}
-          </NativeSelect>
-        </div>
-        {missing && can("secrets:write", ns) && (
-          <Button variant="secondary" onClick={() => setDialog("set")}>
-            Set value
-          </Button>
-        )}
-      </div>
-      {missing && (
-        <p className="mt-1 flex items-center gap-1 text-xs text-warn">
-          <AlertTriangle className="size-3" /> Secret “{value}” does not exist in {ns} yet.
-        </p>
-      )}
-      <SecretDialog
-        ns={ns}
-        open={!!dialog}
-        onOpenChange={(o) => !o && setDialog(null)}
-        initialName={dialog === "set" ? value : `${field.replace(/_/g, "-")}`}
-        lockName={dialog === "set"}
-        onSaved={(n) => onChange(n)}
-      />
-    </Field>
   );
 }
 
@@ -376,13 +342,28 @@ function ConnectionActions({ ns, name, catalog }: { ns: string; name: string; ca
   const key = caps.data?.integration ?? catalog?.key ?? "";
   return (
     <div className="space-y-5">
-      <ErrorList error={caps.error} />
-      <p className="text-[13px] text-muted">
-        What workflows and agents can do through this connection. Use them as <code className="font-mono">action</code> steps or agent tools.
-      </p>
+      {caps.error instanceof ApiError && caps.error.status === 428 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-info/25 bg-info-soft px-3 py-2 text-[13px] text-info">
+          <KeyRound className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1">This connection uses each person's own credential, so its tools are listed with yours.</span>
+          <ConnectLink ns={ns} connection={name} />
+        </div>
+      ) : (
+        <ErrorList error={caps.error} />
+      )}
+      {key === "mcp" ? (
+        <p className="text-[13px] text-muted">
+          The tools this MCP server offers right now. Give an agent all of them with <code className="font-mono">mcp:{name}</code>, or one with{" "}
+          <code className="font-mono">mcp:{name}.&lt;tool&gt;</code>. Workflows can also call them as <code className="font-mono">action</code> steps.
+        </p>
+      ) : (
+        <p className="text-[13px] text-muted">
+          What workflows and agents can do through this connection. Use them as <code className="font-mono">action</code> steps or agent tools.
+        </p>
+      )}
       <Card>
         {actions.map((a) => (
-          <Expandable key={a.name} title={`${key}.${a.name}`} description={a.description} badges={a.mutating ? <Badge tone="warn">Mutating</Badge> : <Badge>Read-only</Badge>}>
+          <Expandable key={a.name} title={key === "mcp" ? `mcp:${name}.${a.name}` : `${key}.${a.name}`} description={a.description} badges={a.mutating ? <Badge tone="warn">Mutating</Badge> : <Badge>Read-only</Badge>}>
             <div className="grid gap-4 lg:grid-cols-2">
               <div>
                 <div className="mb-1.5 text-[11px] font-semibold tracking-wider text-faint uppercase">Input</div>
@@ -395,7 +376,7 @@ function ConnectionActions({ ns, name, catalog }: { ns: string; name: string; ca
             </div>
           </Expandable>
         ))}
-        {!actions.length && <EmptyState title="No actions" description="This connection's integration exposes no actions." />}
+        {!actions.length && <EmptyState title={key === "mcp" ? "No tools" : "No actions"} description={key === "mcp" ? "The server listed no tools, or the allow-list filters them all out." : "This connection's integration exposes no actions."} />}
       </Card>
       {resources.length > 0 && (
         <Card>
