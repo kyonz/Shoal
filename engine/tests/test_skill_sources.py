@@ -221,3 +221,26 @@ async def test_registry_source_against_a_served_skill_source(api, engine, repo):
     assert (await api.put("/v1/namespaces/shared/secrets/registry-token", json={"value": "nope"})).status_code == 200
     r = await api.get("/v1/namespaces/default/skill-sources/remote/skills")
     assert r.status_code == 502 and r.json()["code"] == "skill_source_error"
+
+
+async def test_update_check_fetches_now_and_ignores_other_skills_commits(api, repo):
+    body = {"spec": {"source": "git", "config": {"url": str(repo), "ref": "main"}}}  # default 5-minute branch cache
+    assert (await api.put("/v1/skill-sources/cached", json=body)).status_code == 201
+    for skill in ("skills/pdf", "skills/docx"):
+        r = await api.post("/v1/namespaces/default/skill-imports", json={"source": "cached", "skill": skill})
+        assert r.status_code == 201, r.text
+    imports = (await api.get("/v1/namespaces/default/skill-imports", params={"check": True})).json()
+    assert {i["name"]: i["update_available"] for i in imports} == {"pdf": False, "docx": False}
+
+    # a commit that only touches pdf: the check sees it at once, and docx (versioned by commit) is not flagged
+    commit_v2(repo)
+    imports = (await api.get("/v1/namespaces/default/skill-imports", params={"check": True})).json()
+    by_name = {i["name"]: i for i in imports}
+    assert by_name["pdf"]["update_available"] is True and by_name["pdf"]["latest_version"] == "1.1.0"
+    assert by_name["docx"]["update_available"] is False
+    assert by_name["docx"]["latest_version"] != by_name["docx"]["version"]  # the commit moved, the skill did not
+
+    (repo / "skills" / "docx" / "SKILL.md").write_text("---\nname: docx\ndescription: Edit Word documents.\n---\nBody v2\n")
+    git(repo, "commit", "-qam", "docx v2")
+    imports = (await api.get("/v1/namespaces/default/skill-imports", params={"check": True})).json()
+    assert {i["name"]: i["update_available"] for i in imports}["docx"] is True
