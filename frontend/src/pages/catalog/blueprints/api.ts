@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, rawJson, type Resource } from "@/api/client";
 
 export interface BlueprintParam {
@@ -139,4 +139,93 @@ export function resourceRef(r: AppliedResource | string): AppliedResource {
   if (typeof r !== "string") return r;
   const [kind, name] = r.includes("/") ? r.split("/", 2) : ["", r];
   return { kind, name, outcome: "" };
+}
+
+// --------------------------------------------------------------------------- save a workflow as a blueprint
+
+export interface FindingChoice {
+  enabled?: boolean;
+  name?: string;
+  description?: string;
+  default?: unknown;
+}
+
+export interface SaveAsBlueprintBody {
+  blueprint?: string;
+  target: "new" | "existing";
+  version?: string;
+  title?: string;
+  summary?: string;
+  readme?: string;
+  tags?: string[];
+  categories?: string[];
+  namespaces?: string[];
+  status?: "draft" | "published";
+  include?: { kind: string; name: string }[];
+  params: Record<string, FindingChoice>;
+  dry_run: boolean;
+}
+
+export interface PackagedResource {
+  kind: string;
+  name: string;
+  namespace: string;
+  reason: string;
+  included: boolean;
+  root: boolean;
+}
+
+export interface Finding {
+  id: string;
+  category: "connection" | "secret" | "credential" | "repository" | "organization" | "jira_project" | "model" | "sandbox" | "cloud_identity";
+  value: string;
+  param: string;
+  type: NonNullable<BlueprintParam["type"]>;
+  integration?: string | null;
+  description: string;
+  default?: unknown;
+  required: boolean;
+  enabled: boolean;
+  locked: boolean;
+  locations: string[];
+}
+
+export interface SaveAsBlueprintResult {
+  blueprint: { apiVersion: string; kind: "Blueprint"; metadata: { name: string; labels?: Record<string, string> }; spec: BlueprintSpec };
+  resources: PackagedResource[];
+  findings: Finding[];
+  stripped: string[];
+  warnings: string[];
+  exists: boolean;
+  previous_version?: string | null;
+  outcome?: string | null;
+  resource_version?: number | null;
+  dry_run: boolean;
+}
+
+const savePath = (ns: string, workflow: string) =>
+  `/v1/namespaces/${ns}/workflows/${encodeURIComponent(workflow)}/save-as-blueprint`;
+
+/** Dry runs as the wizard's choices change; the previous preview stays while the next loads. */
+export function usePackagePreview(ns: string, workflow: string, body: Omit<SaveAsBlueprintBody, "dry_run">, enabled: boolean) {
+  return useQuery({
+    queryKey: ["save-as-blueprint", ns, workflow, body],
+    queryFn: () => rawJson<SaveAsBlueprintResult>(savePath(ns, workflow), { method: "POST", body: JSON.stringify({ ...body, dry_run: true }) }),
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveAsBlueprint(ns: string, workflow: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Omit<SaveAsBlueprintBody, "dry_run">) =>
+      rawJson<SaveAsBlueprintResult>(savePath(ns, workflow), { method: "POST", body: JSON.stringify({ ...body, dry_run: false }) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["resources"] });
+      void qc.invalidateQueries({ queryKey: ["save-as-blueprint"] });
+    },
+  });
 }

@@ -1,8 +1,9 @@
-import { ChevronRight, Download, Pencil, Star } from "lucide-react";
+import { ChevronRight, Download, Megaphone, Pencil, Star, Workflow as WorkflowIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ApiError } from "@/api/client";
-import { useResource } from "@/api/hooks";
+import { usePutResource, useResource } from "@/api/hooks";
+import { toast } from "sonner";
 import { useCan } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
@@ -19,6 +20,8 @@ export default function BlueprintDetailPage() {
   const adoptions = useAdoptions(ns, name);
   const canAdopt = useCan("blueprints:adopt", ns);
   const canPublish = useCan("blueprints:publish");
+  const canFeature = useCan("blueprints:feature");
+  const put = usePutResource("blueprints", ns);
   const [adopting, setAdopting] = useState(false);
 
   if (res.isLoading)
@@ -44,6 +47,16 @@ export default function BlueprintDetailPage() {
   const restricted = !!s.namespaces?.length && !s.namespaces.includes(ns);
   const blocked = s.status === "draft" && !canPublish ? "Drafts cannot be adopted until published." : restricted ? `Only ${s.namespaces!.join(", ")} can adopt this.` : s.status === "deprecated" ? null : null;
   const mine = adoptions.data ?? [];
+  const labels = res.data.metadata.labels ?? {};
+  const from = labels["shoal.dev/from-workflow"] ? { ns: labels["shoal.dev/from-namespace"] ?? ns, name: labels["shoal.dev/from-workflow"] } : null;
+  const setStatus = async (status: "published" | "featured") => {
+    try {
+      await put.mutateAsync({ name: name!, body: { metadata: { description: res.data!.metadata.description, labels }, spec: { ...res.data!.spec, status } } });
+      toast.success(status === "published" ? `Published ${s.title}: every allowed namespace can adopt it` : `Featured ${s.title} in the catalogue`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not change the status");
+    }
+  };
 
   return (
     <Page wide>
@@ -70,10 +83,25 @@ export default function BlueprintDetailPage() {
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-faint">
               {s.author && <span>by {s.author}</span>}
               <span>· updated {relTime(res.data.metadata.updated_at)}</span>
+              {from && (
+                <Link to={nsPath(from.ns, "workflows", from.name)} className="inline-flex items-center gap-1 hover:text-fg">
+                  · <WorkflowIcon className="size-3" /> from {from.ns}/{from.name}
+                </Link>
+              )}
               {(s.tags ?? []).map((t) => <Badge key={t}>{t}</Badge>)}
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {canPublish && s.status === "draft" && (
+              <Button icon={<Megaphone className="size-4" />} loading={put.isPending} onClick={() => void setStatus("published")} title="Let every allowed namespace adopt it">
+                Publish
+              </Button>
+            )}
+            {canFeature && s.status === "published" && (
+              <Button icon={<Star className="size-4" />} loading={put.isPending} onClick={() => void setStatus("featured")} title="Promote it at the top of the catalogue">
+                Feature
+              </Button>
+            )}
             {canPublish && (
               <Button icon={<Pencil className="size-4" />} onClick={() => navigate(nsPath(ns, "blueprints", name!, "edit"))}>
                 Edit

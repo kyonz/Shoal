@@ -48,7 +48,9 @@ app.add_typer(tenants_app, name="tenants")
 app.add_typer(eval_app, name="eval")
 app.add_typer(integrations_app, name="integrations")
 app.add_typer(federation_app, name="federation")
+blueprints_app = typer.Typer(help="Package workflows as blueprints for other teams to adopt.", no_args_is_help=True)
 app.add_typer(skills_app, name="skills")
+app.add_typer(blueprints_app, name="blueprints")
 app.add_typer(db_app, name="db")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -1018,6 +1020,135 @@ def skills_rollback(
     labels = row["metadata"].get("labels") or {}
     origin = f" ({labels['shoal.dev/skill-version']})" if "shoal.dev/skill-version" in labels else ""
     console.print(f"skill/{escape(name)} restored to version {version}{escape(origin)} as version {row['metadata']['version']}")
+
+
+# --------------------------------------------------------------------------- blueprints
+
+
+def _pairs(values: list[str], option: str) -> dict[str, str]:
+    out = {}
+    for item in values:
+        key, sep, value = item.partition("=")
+        if not sep:
+            err.print(f"[red]error:[/red] {option} takes FINDING=VALUE, got '{escape(item)}'")
+            raise typer.Exit(2)
+        out[key] = value
+    return out
+
+
+def _refs(values: list[str], option: str) -> set[tuple[str, str]]:
+    out = set()
+    for item in values:
+        kind, sep, name = item.partition("/")
+        if not sep:
+            err.print(f"[red]error:[/red] {option} takes KIND/NAME (e.g. agent/bugfixer), got '{escape(item)}'")
+            raise typer.Exit(2)
+        out.add((_resolve_kind(kind)[0], name))
+    return out
+
+
+def _print_package(result: dict[str, Any]) -> None:
+    spec = result["blueprint"]["spec"]
+    name = result["blueprint"]["metadata"]["name"]
+    previous = f" (current: {result['previous_version']})" if result.get("previous_version") else ""
+    console.print(f"[bold]blueprint/{escape(name)}[/bold] {escape(spec['version'])}{escape(previous)} · {spec['status']}")
+    console.print("\n[bold]Resources[/bold]")
+    for r in result["resources"]:
+        mark = "[green]+[/green]" if r["included"] else "[dim]-[/dim]"
+        where = " (shared)" if r["namespace"] == "shared" else ""
+        console.print(f"  {mark} {r['kind'].lower()}/{escape(r['name'])}{where}  [dim]{escape(r['reason'])}[/dim]")
+    if result["findings"]:
+        console.print("\n[bold]Hard-coded values[/bold] (FINDING -> parameter)")
+        for f in result["findings"]:
+            target = f"params.{f['param']}" if f["enabled"] else "[dim]kept as is[/dim]"
+            value = "[red]credential removed[/red]" if f["locked"] else escape(f["value"])
+            default = f" = {escape(str(f['default']))}" if f["enabled"] and f.get("default") is not None else ""
+            console.print(f"  {escape(f['id'])}: {value} -> {target} ({f['type']}){escape(default)}")
+            for loc in f["locations"]:
+                console.print(f"      {escape(loc)}", style="dim")
+    for loc in result["stripped"]:
+        err.print(f"[yellow]redacted[/yellow] a credential in {escape(loc)}")
+    for warning in result["warnings"]:
+        err.print(f"[yellow]warning:[/yellow] {escape(warning)}")
+
+
+@blueprints_app.command("save")
+def blueprints_save(
+    ctx: typer.Context,
+    workflow: Annotated[str, typer.Argument(help="Workflow to package.")],
+    name: Annotated[str | None, typer.Option("--name", "-b", help="Blueprint name (default: the workflow's).")] = None,
+    new_version: Annotated[bool, typer.Option("--new-version", help="Publish a new version of an existing blueprint.")] = False,
+    version: Annotated[str | None, typer.Option(help="Semantic version (default: 0.1.0, or the next minor version).")] = None,
+    title: Annotated[str | None, typer.Option(help="Catalogue title.")] = None,
+    summary: Annotated[str | None, typer.Option(help="One-line summary.")] = None,
+    readme: Annotated[Path | None, typer.Option("--readme", help="Markdown file for the README.", exists=True)] = None,
+    tag: Annotated[list[str], typer.Option("--tag", help="Tag (repeat).")] = [],  # noqa: B006
+    category: Annotated[list[str], typer.Option("--category", help="Category (repeat).")] = [],  # noqa: B006
+    include: Annotated[list[str], typer.Option("--include", help="Also package KIND/NAME (repeat).")] = [],  # noqa: B006
+    exclude: Annotated[list[str], typer.Option("--exclude", help="Leave KIND/NAME out; it stays a reference (repeat).")] = [],  # noqa: B006
+    param: Annotated[list[str], typer.Option("--param", help="Name the parameter for a finding: FINDING=NAME (repeat).")] = [],  # noqa: B006
+    default: Annotated[list[str], typer.Option("--default", help="Default for a finding's parameter: FINDING=VALUE (repeat).")] = [],  # noqa: B006
+    keep: Annotated[list[str], typer.Option("--keep", help="Keep a finding's value hard-coded (repeat).")] = [],  # noqa: B006
+    publish: Annotated[bool, typer.Option("--publish", help="Publish it (adoptable) instead of saving a draft.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Only show what would be packaged.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Package a workflow, the agents, skills and triggers it uses, as a blueprint.
+
+    Connections, secrets, repositories, Jira projects, models and sandbox profiles written into the
+    workflow become parameters the adopter fills in; clear-text credentials are always removed.
+    Run with --dry-run first to see the finding ids that --param, --default and --keep take.
+    """
+    choices: dict[str, dict[str, Any]] = {}
+    for fid, pname in _pairs(param, "--param").items():
+        choices.setdefault(fid, {})["name"] = pname
+    for fid, value in _pairs(default, "--default").items():
+        choices.setdefault(fid, {})["default"] = value
+    for fid in keep:
+        choices.setdefault(fid, {})["enabled"] = False
+    body: dict[str, Any] = {"blueprint": name, "target": "existing" if new_version else "new", "version": version,
+                            "title": title, "summary": summary, "params": choices}
+    if readme:
+        body["readme"] = readme.read_text()
+    for key, values in (("tags", tag), ("categories", category)):
+        if values:
+            body[key] = values
+    if publish:
+        body["status"] = "published"
+    body = {k: v for k, v in body.items() if v is not None}
+    with api(ctx, namespace) as client:
+        path = f"/v1/namespaces/{quote(client.target.namespace)}/workflows/{quote(workflow)}/save-as-blueprint"
+        if include or exclude:
+            preview = client.request("POST", path, json={**body, "dry_run": True})
+            chosen = {(r["kind"], r["name"]) for r in preview["resources"] if r["included"] and not r.get("root")}
+            chosen = (chosen | _refs(include, "--include")) - _refs(exclude, "--exclude")
+            body["include"] = [{"kind": k, "name": n} for k, n in sorted(chosen)]
+        preview = client.request("POST", path, json={**body, "dry_run": True})
+        if unknown := set(choices) - {f["id"] for f in preview["findings"]}:
+            err.print(f"[red]error:[/red] no such findings: {escape(', '.join(sorted(unknown)))} (see --dry-run)")
+            raise typer.Exit(2)
+        if dry_run:
+            if output is Format.table:
+                _print_package(preview)
+            else:
+                emit(preview, output)
+            return
+        if output is Format.table:
+            _print_package(preview)
+        if not yes and not typer.confirm("\nSave this blueprint?"):
+            raise typer.Exit(1)
+        result = client.request("POST", path, json=body)
+    if output is not Format.table:
+        emit(result, output)
+        return
+    spec = result["blueprint"]["spec"]
+    console.print(f"blueprint/{escape(result['blueprint']['metadata']['name'])} {spec['version']} {result['outcome']} "
+                  f"({spec['status']})")
+    if spec["status"] == "draft":
+        console.print("a draft: blueprint publishers can adopt it to try it; publish it from the catalogue "
+                      "(or save with --publish) so other teams can", style="dim")
 
 
 # --------------------------------------------------------------------------- server processes

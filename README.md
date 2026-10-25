@@ -260,7 +260,7 @@ class, an entry point and a contract test), so new ones install without engine c
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
-- **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue.
+- **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue. Any workflow can be saved as one: Shoal finds the connections, secrets, repositories and other team-specific values in it, turns them into parameters and strips credentials.
 
 ### Quality
 - **Evals** score workflows against datasets, gate CI on regressions (`shoal eval run --fail-under`) and export results to Braintrust or Langfuse.
