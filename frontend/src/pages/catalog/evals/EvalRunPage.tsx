@@ -29,6 +29,7 @@ import {
 } from "@/components/ui";
 import { isMissingEndpoint, isTerminal, pct, useCancelEvalRun, useEvalRun, type Comparison, type EvalResult } from "./api";
 import { NewerServerNotice } from "./EvalExtension";
+import { ExportRunButton } from "./Platforms";
 
 function Delta({ value }: { value: number | null | undefined }) {
   if (value == null || !isFinite(value)) return <span className="text-faint">—</span>;
@@ -150,6 +151,8 @@ export default function EvalRunPage() {
             >
               Cancel
             </Button>
+          ) : done && canRun ? (
+            <ExportRunButton ns={ns} runId={r.id} evalSpec={evalRes.data?.spec} />
           ) : null
         }
       />

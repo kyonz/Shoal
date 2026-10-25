@@ -116,7 +116,7 @@ export const KINDS: Record<string, KindConfig> = {
     icon: FlaskConical,
     blurb: "Datasets and graders that measure a workflow's quality so changes are scored, not assumed.",
     order: ["description", "workflow", "threshold", "concurrency", "cases", "graders"],
-    hidden: ["cases", "graders"],
+    hidden: ["cases", "graders", "sinks", "dataset"],
     template: {
       workflow: "",
       threshold: 0.8,
