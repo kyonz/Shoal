@@ -15,7 +15,7 @@ from shoal.core.errors import NotFound
 from shoal.core.expressions import ExpressionError, render, truthy
 from shoal.core.ids import new_id
 from shoal.core.models import RunStatus, Trigger
-from shoal.core.scope import current_namespace, use_namespace
+from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import IntegrationEvent
 from shoal.store import tables as t
 
@@ -106,15 +106,27 @@ class TriggerService:
                         conn_row = await self.engine.store.get_resource_row(tenant_id, "Connection", connection)
                     except NotFound:
                         conn_row = None
-                    # The trigger's namespace must resolve its connection to the one that received the event
-                    # (an organisation connection not shared with the namespace does not resolve).
-                    if conn_row is None or conn_row.namespace != connection_namespace:
+                    if conn_row is not None and conn_row.namespace != connection_namespace:
                         continue
+                    if conn_row is None and connection_namespace == SHARED_NAMESPACE and not await self._shared_with(
+                        tenant_id, connection, row.namespace
+                    ):
+                        continue  # an organisation connection that is not shared with this namespace
                 outcome = self.evaluate(trigger, event)
                 if not outcome["matched"] and not outcome.get("error"):
                     continue
                 fired.append({**await self._fire(tenant_id, trigger, event, outcome), "namespace": row.namespace})
         return fired
+
+    async def _shared_with(self, tenant_id: str, connection: str, namespace: str) -> bool:
+        try:
+            shared = await self.engine.store.get_resource_row(
+                tenant_id, "Connection", connection, namespace=SHARED_NAMESPACE, fallback=False
+            )
+        except NotFound:
+            return True
+        allowed = (shared.document.get("spec") or {}).get("namespaces") or []
+        return not allowed or namespace in allowed
 
     async def _fire(
         self, tenant_id: str, trigger: Trigger, event: IntegrationEvent, outcome: dict[str, Any]
