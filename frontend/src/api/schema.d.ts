@@ -422,6 +422,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/federation/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Links */
+        get: operations["list_links_v1_federation_links_get"];
+        put?: never;
+        /** Federate a tenant (operator) */
+        post: operations["create_link_v1_federation_links_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/federation/links/{tenant}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Link */
+        get: operations["get_link_v1_federation_links__tenant__get"];
+        put?: never;
+        post?: never;
+        /** Revoke the link; the member keeps running on its own */
+        delete: operations["revoke_v1_federation_links__tenant__delete"];
+        options?: never;
+        head?: never;
+        /** Change the access the hub asks for */
+        patch: operations["patch_link_v1_federation_links__tenant__patch"];
+        trace?: never;
+    };
+    "/v1/federation/links/{tenant}/enrollment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue a new enrollment token */
+        post: operations["reissue_v1_federation_links__tenant__enrollment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/federation/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Member enrollment (authenticated by the one-time token) */
+        post: operations["enroll_v1_federation_enroll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/federation/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tenant connector long-poll (authenticated by the link credential) */
+        post: operations["tunnel_v1_federation_tunnel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/federation/membership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Membership */
+        get: operations["get_membership_v1_federation_membership_get"];
+        /** Join a federation hub */
+        put: operations["join_v1_federation_membership_put"];
+        post?: never;
+        /** Leave the hub; this deployment keeps running on its own */
+        delete: operations["leave_v1_federation_membership_delete"];
+        options?: never;
+        head?: never;
+        /** Change what the hub may do */
+        patch: operations["patch_membership_v1_federation_membership_patch"];
+        trace?: never;
+    };
     "/v1/namespaces": {
         parameters: {
             query?: never;
@@ -3054,6 +3162,28 @@ export interface components {
              */
             created_at: string;
         };
+        /** EnrollIn */
+        EnrollIn: {
+            /** Token */
+            token: string;
+            /**
+             * Max Mode
+             * @enum {string}
+             */
+            max_mode: "read" | "read_write";
+            /** Namespaces */
+            namespaces?: string[];
+            /**
+             * Visibility
+             * @default full
+             * @enum {string}
+             */
+            visibility: "full" | "metadata";
+            /** Member */
+            member?: {
+                [key: string]: unknown;
+            };
+        };
         /** EvalResultOut */
         EvalResultOut: {
             /** Id */
@@ -3282,6 +3412,23 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** GrantIn */
+        GrantIn: {
+            /** Role */
+            role: string;
+            /**
+             * Subject Kind
+             * @enum {string}
+             */
+            subject_kind: "hub_user" | "hub_group";
+            /**
+             * Subject Id
+             * @description Hub user email (or service actor such as 'sa:terraform') or hub group name.
+             */
+            subject_id: string;
+            /** Namespace */
+            namespace?: string | null;
+        };
         /** GroupIn */
         GroupIn: {
             /** Display Name */
@@ -3325,6 +3472,130 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** JoinIn */
+        JoinIn: {
+            /** Hub Url */
+            hub_url: string;
+            /**
+             * Token
+             * @description Enrollment token from the hub operator.
+             */
+            token: string;
+            /**
+             * Max Mode
+             * @description The most this member lets the hub do.
+             * @default read
+             * @enum {string}
+             */
+            max_mode: "read" | "read_write";
+            /**
+             * Namespaces
+             * @description Namespaces exposed to the hub (empty: all).
+             */
+            namespaces?: string[];
+            /**
+             * Visibility
+             * @description 'metadata' hides run inputs, outputs and step data from the hub.
+             * @default full
+             * @enum {string}
+             */
+            visibility: "full" | "metadata";
+            /**
+             * Grants
+             * @description Role bindings for hub people and groups, made on join.
+             */
+            grants?: components["schemas"]["GrantIn"][];
+        };
+        /** LinkCreated */
+        LinkCreated: {
+            link: components["schemas"]["LinkOut"];
+            /**
+             * Enrollment Token
+             * @description Single use; give it to the member's admin for `shoal federation join`.
+             */
+            enrollment_token: string;
+            /**
+             * Enrollment Expires At
+             * Format: date-time
+             */
+            enrollment_expires_at: string;
+        };
+        /** LinkIn */
+        LinkIn: {
+            /**
+             * Tenant
+             * @description Slug of an empty tenant whose data will live in a member deployment.
+             */
+            tenant: string;
+            /**
+             * Mode
+             * @description What the hub asks for; the member's ceiling can lower it.
+             * @default read_write
+             * @enum {string}
+             */
+            mode: "read" | "read_write";
+        };
+        /** LinkOut */
+        LinkOut: {
+            /** Id */
+            id: string;
+            /** Tenant */
+            tenant: string;
+            /**
+             * Status
+             * @description pending (waiting for enrollment), active or revoked.
+             */
+            status: string;
+            /** Connected */
+            connected: boolean;
+            /**
+             * Requested Mode
+             * @enum {string}
+             */
+            requested_mode: "read" | "read_write";
+            /**
+             * Member Mode
+             * @description The member's ceiling.
+             */
+            member_mode?: ("read" | "read_write") | null;
+            /**
+             * Effective Mode
+             * @enum {string}
+             */
+            effective_mode: "read" | "read_write";
+            /**
+             * Namespaces
+             * @description Namespaces the member exposes (empty: all).
+             */
+            namespaces: string[];
+            /**
+             * Visibility
+             * @enum {string}
+             */
+            visibility: "full" | "metadata";
+            /**
+             * Member
+             * @description Version, URL and rollups the member reports.
+             */
+            member: {
+                [key: string]: unknown;
+            };
+            /** Last Seen At */
+            last_seen_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** LinkPatch */
+        LinkPatch: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "read" | "read_write";
+        };
         /** LoginProvider */
         LoginProvider: {
             /** Name */
@@ -3366,6 +3637,51 @@ export interface components {
             subject_name: string;
             /** Namespace */
             namespace: string | null;
+        };
+        /** MembershipOut */
+        MembershipOut: {
+            /** Hub Url */
+            hub_url: string;
+            /** Link Id */
+            link_id: string;
+            /**
+             * Max Mode
+             * @enum {string}
+             */
+            max_mode: "read" | "read_write";
+            /**
+             * Hub Mode
+             * @description What the hub currently asks for.
+             */
+            hub_mode?: ("read" | "read_write") | null;
+            /**
+             * Effective Mode
+             * @enum {string}
+             */
+            effective_mode: "read" | "read_write";
+            /** Namespaces */
+            namespaces: string[];
+            /**
+             * Visibility
+             * @enum {string}
+             */
+            visibility: "full" | "metadata";
+            /** Last Connected At */
+            last_connected_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MembershipPatch */
+        MembershipPatch: {
+            /** Max Mode */
+            max_mode?: ("read" | "read_write") | null;
+            /** Namespaces */
+            namespaces?: string[] | null;
+            /** Visibility */
+            visibility?: ("full" | "metadata") | null;
         };
         /** NamespaceIn */
         NamespaceIn: {
@@ -3650,9 +3966,10 @@ export interface components {
             role: string;
             /**
              * Subject Kind
+             * @description hub_user and hub_group name people and groups from a federation hub (email or service actor, group name).
              * @enum {string}
              */
-            subject_kind: "user" | "group";
+            subject_kind: "user" | "group" | "hub_user" | "hub_group";
             /** Subject Id */
             subject_id: string;
             /**
@@ -4028,6 +4345,27 @@ export interface components {
             event_type?: string | null;
             /** Data */
             data?: {
+                [key: string]: unknown;
+            };
+        };
+        /** TunnelIn */
+        TunnelIn: {
+            /** Responses */
+            responses?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Wait
+             * @default 20
+             */
+            wait: number;
+            /**
+             * Limit
+             * @default 20
+             */
+            limit: number;
+            /** Report */
+            report?: {
                 [key: string]: unknown;
             };
         };
@@ -5039,6 +5377,359 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_links_v1_federation_links_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkOut"][];
+                };
+            };
+        };
+    };
+    create_link_v1_federation_links_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_link_v1_federation_links__tenant__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_v1_federation_links__tenant__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_link_v1_federation_links__tenant__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reissue_v1_federation_links__tenant__enrollment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enroll_v1_federation_enroll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tunnel_v1_federation_tunnel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TunnelIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_membership_v1_federation_membership_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipOut"];
+                };
+            };
+        };
+    };
+    join_v1_federation_membership_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JoinIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leave_v1_federation_membership_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    patch_membership_v1_federation_membership_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MembershipPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

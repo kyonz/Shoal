@@ -95,12 +95,17 @@ function RunViewer() {
 
 function StreamPill({ state, terminal }: { state: StreamState; terminal: boolean }) {
   if (terminal || state === "ended") return null;
-  const live = state === "live";
+  const look = {
+    live: { tip: "Receiving live updates", label: "Live", cls: "border-ok/25 bg-ok-soft text-ok" },
+    polling: { tip: "Live events aren't forwarded for this tenant yet, so the run refreshes every few seconds", label: "Refreshing", cls: "border-info/25 bg-info-soft text-info" },
+    connecting: { tip: "Connecting to the live stream…", label: "Connecting", cls: "border-border bg-subtle text-muted" },
+    reconnecting: { tip: "Reconnecting to the live stream…", label: "Reconnecting", cls: "border-warn/25 bg-warn-soft text-warn" },
+  }[state];
   return (
-    <Tooltip content={live ? "Receiving live updates" : "Reconnecting to the live stream…"}>
-      <span className={cn("flex h-6 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium", live ? "border-ok/25 bg-ok-soft text-ok" : "border-warn/25 bg-warn-soft text-warn")}>
-        <span className={cn("size-1.5 rounded-full bg-current", live && "animate-pulse")} />
-        {live ? "Live" : "Reconnecting"}
+    <Tooltip content={look.tip}>
+      <span className={cn("flex h-6 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium", look.cls)}>
+        <span className={cn("size-1.5 rounded-full bg-current", state === "live" && "animate-pulse")} />
+        {look.label}
       </span>
     </Tooltip>
   );

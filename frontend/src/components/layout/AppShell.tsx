@@ -1,5 +1,6 @@
-import { Check, ChevronsUpDown, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plus, Search, Sun, UserRound } from "lucide-react";
+import { Check, ChevronsUpDown, CloudOff, Lock, RefreshCw, ShieldQuestion, X, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plus, Search, Sun, UserRound } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useNamespaces } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
@@ -9,6 +10,7 @@ import { useTheme } from "@/lib/theme";
 import { Button, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Popover, Tooltip } from "@/components/ui";
 import { CommandPalette, useCommandPalette } from "./CommandPalette";
 import { NAV } from "./nav";
+import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, federationMessage, useFederatedLink, useFederationState } from "@/lib/federation";
 import shoalIcon from "@/assets/brand/shoal-icon.svg";
 import shoalLogo from "@/assets/brand/shoal-logo.svg";
 import shoalLogoDark from "@/assets/brand/shoal-logo-dark.svg";
@@ -152,6 +154,7 @@ export function AppShell() {
           <ThemeToggle />
           <UserMenu />
         </header>
+        <FederationBanner />
         <main className={cn("min-h-0 flex-1", fullBleed ? "overflow-hidden" : "overflow-y-auto")}>
           <Outlet />
         </main>
@@ -292,4 +295,46 @@ function UserMenu() {
       </MenuContent>
     </Menu>
   );
+}
+
+/** Tenant-wide state of a federated organisation: member offline, or a read-only link. */
+function FederationBanner() {
+  const qc = useQueryClient();
+  const { me } = useAuth();
+  const { disconnected, forbidden, readOnly, dismissedReadOnly, dismissReadOnly } = useFederationState();
+  const link = useFederatedLink(!!me?.is_system_admin, me?.tenant?.slug);
+  if (disconnected)
+    return (
+      <div role="status" className="flex items-center gap-2.5 border-b border-warn/25 bg-warn-soft px-4 py-2 text-[13px] text-warn">
+        <CloudOff className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">Deployment offline.</b> {federationMessage(FEDERATION_DISCONNECTED)}
+        </span>
+        <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={() => void qc.refetchQueries({ type: "active" })}>
+          Retry
+        </Button>
+      </div>
+    );
+  if (link && forbidden)
+    return (
+      <div role="status" className="flex items-center gap-2.5 border-b border-info/25 bg-info-soft px-4 py-2 text-[13px] text-info">
+        <ShieldQuestion className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">{me?.tenant?.name} decides who gets in.</b> Its deployment doesn't give the hub operator any access by default. Ask its admin to grant a role to the hub person{" "}
+          <code className="rounded bg-panel/60 px-1 font-mono text-[12px]">{me?.actor}</code>, for example{" "}
+          <code className="rounded bg-panel/60 px-1 font-mono text-[12px]">--grant viewer=hub_user:{me?.actor}</code> when joining, or a role binding under Admin console › Roles.
+        </span>
+      </div>
+    );
+  if (readOnly && !dismissedReadOnly)
+    return (
+      <div role="status" className="flex items-center gap-2.5 border-b border-info/25 bg-info-soft px-4 py-2 text-[13px] text-info">
+        <Lock className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">Read-only.</b> {federationMessage(FEDERATION_READ_ONLY)}
+        </span>
+        <Button size="icon-sm" variant="ghost" aria-label="Dismiss" icon={<X className="size-3.5" />} onClick={dismissReadOnly} />
+      </div>
+    );
+  return null;
 }

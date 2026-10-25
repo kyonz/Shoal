@@ -17,6 +17,8 @@ export interface SseOptions {
   onError?: (err: unknown) => void;
   /** Called when the server ends the stream on purpose (e.g. run finished). */
   onEnd?: () => void;
+  /** The server cannot stream this resource (HTTP 501, e.g. through a federation hub); the stream stops. */
+  onUnsupported?: () => void;
   lastEventId?: string;
 }
 
@@ -52,6 +54,10 @@ export function subscribe(url: string, opts: SseOptions): () => void {
         const headers: Record<string, string> = { Accept: "text/event-stream", ...credentials.headers() };
         if (lastId) headers["Last-Event-ID"] = lastId;
         const response = await fetch(url, { headers, credentials: "include", signal: controller.signal });
+        if (response.status === 501) {
+          opts.onUnsupported?.();
+          return;
+        }
         if (!response.ok || !response.body) throw new Error(`stream failed: HTTP ${response.status}`);
         attempt = 0;
         opts.onOpen?.();

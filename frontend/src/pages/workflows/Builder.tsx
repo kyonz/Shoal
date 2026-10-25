@@ -36,7 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { Link, useBlocker, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { ApiError, applyYaml } from "@/api/client";
-import { useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
+import { type IntegrationCatalog, useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { nsPath, useNs } from "@/lib/ns";
@@ -59,6 +59,9 @@ import { WorkflowSettings } from "./builder/WorkflowSettings";
 import { YamlPane } from "./builder/YamlPane";
 
 type View = "canvas" | "split" | "yaml";
+
+// A stable fallback: a fresh [] on every render would re-run validation and re-feed the canvas forever.
+const NO_INTEGRATIONS: IntegrationCatalog[] = [];
 
 export default function BuilderPage() {
   return (
@@ -83,7 +86,7 @@ function Builder() {
   const canRun = can("runs:create", ns);
   const resource = useResource("workflows", ns, isNew ? undefined : routeName);
   const put = usePutResource("workflows", ns);
-  const { data: integrations = [] } = useIntegrations();
+  const { data: integrations = NO_INTEGRATIONS } = useIntegrations();
   const agents = useResources("agents", ns);
   const workflows = useResources("workflows", ns);
   const flow = useReactFlow();
@@ -151,7 +154,7 @@ function Builder() {
   // Server-side validation via a dry-run apply, debounced.
   useEffect(() => {
     if (!canWrite || !spec.steps.length) {
-      setServerIssues([]);
+      setServerIssues((cur) => (cur.length ? [] : cur));
       return;
     }
     const doc = toYaml(toDocument(meta.name || "draft-preview", meta.description, meta.labels, spec));

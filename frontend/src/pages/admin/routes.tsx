@@ -14,6 +14,7 @@ const AuthSettings = lazy(() => import("./AuthSettings"));
 const ApiKeys = lazy(() => import("./ApiKeys"));
 const Identities = lazy(() => import("./Identities"));
 const Audit = lazy(() => import("./Audit"));
+const Federation = lazy(() => import("./Federation"));
 
 /** Admin console: /admin/* */
 export const adminRoutes: RouteObject[] = [
@@ -106,6 +107,14 @@ export const adminRoutes: RouteObject[] = [
         element: (
           <Lazy>
             <Audit />
+          </Lazy>
+        ),
+      },
+      {
+        path: "federation",
+        element: (
+          <Lazy>
+            <Federation />
           </Lazy>
         ),
       },

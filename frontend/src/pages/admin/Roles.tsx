@@ -33,6 +33,9 @@ import {
 } from "@/components/ui";
 import {
   Avatar,
+  isGroupKind,
+  subjectKindLabel,
+  type Subject,
   RoleSelect,
   SubjectPicker,
   useAction,
@@ -493,9 +496,9 @@ function BindingsTab() {
                 <Tr key={b.id}>
                   <Td>
                     <div className="flex items-center gap-2.5">
-                      <Avatar name={label} group={b.subject_kind === "group"} className="size-6" />
+                      <Avatar name={label} group={isGroupKind(b.subject_kind)} className="size-6" />
                       <span className="font-medium">{label}</span>
-                      <span className="text-xs text-faint">{s?.kind === "service" ? "service account" : b.subject_kind}</span>
+                      <span className="text-xs text-faint">{subjectKindLabel(b.subject_kind, s?.kind === "service")}</span>
                     </div>
                   </Td>
                   <Td>
@@ -542,7 +545,7 @@ function BindingsTab() {
 function GrantDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const namespaces = useNamespaces();
   const roles = useRoles(open);
-  const [subject, setSubject] = useState<{ kind: "user" | "group"; id: string } | null>(null);
+  const [subject, setSubject] = useState<Subject | null>(null);
   const [role, setRole] = useState("");
   const [scope, setScope] = useState("");
   const grant = useAction(
