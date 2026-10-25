@@ -182,7 +182,7 @@ spec:
 | `agent` | Run an agent in a sandbox until it returns structured outputs (validated against the declared schema). |
 | `action` | Call an integration action (e.g. `github.create_pull_request`, `jira.transition`). |
 | `script` | Run a command in a sandbox (deterministic glue, test runs). |
-| `wait` | Durable wait: for a duration, until a time, or until a condition/event (polled or event-driven) with a timeout. |
+| `wait` | Durable wait: for a duration, until a time, until a condition/event (polled or event-driven), or for a **signal** carrying data, with a timeout. |
 | `approval` | Human-in-the-loop gate, resolved via API/UI with optional assignees. |
 | `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
 | `map` | Fan out a sub-list of steps over a list with a concurrency limit. |
@@ -251,6 +251,19 @@ step:  pending → running → waiting? → succeeded | failed | skipped | cance
 - `wait` steps with conditions are re-evaluated on each wake (e.g. "PR approved
   or merged"), with an absolute `timeout` (e.g. `7d`) and an `on_timeout`
   branch.
+- **Signals** send data into a running workflow. A `wait` step with
+  `signal: {name: build.done, match: "{{ signal.ok }}"}` resumes when a signal
+  with that name (and a payload matching `match`) arrives, and outputs its
+  `payload`. Signals come from `POST /v1/runs/{id}/signals/{name}` (permission
+  `runs:signal`, audited), `shoal signal <run> <name> -d '{…}'`, or the run's
+  **callback URL** `{{ run.signal_url }}/<name>`, an unauthenticated URL
+  carrying an HMAC token for systems that can only call back a URL. Named
+  signals are stored (`run_signals`) until a step takes them, so a reply that
+  beats the workflow to its wait is not lost; each signal is taken once, and
+  non-matching ones stay queued. `signal: {event: "github:pr:{{ … }}"}` instead
+  takes the next integration event with that wake key while the step waits,
+  with the event as payload. `max_wait` and `on_timeout` apply as for
+  conditions.
 - Long-running agent steps heartbeat; if a worker dies its lease expires and
   another worker resumes from the last checkpoint (the agent step restarts its
   attempt; sandbox state is reattached when the backend supports it).

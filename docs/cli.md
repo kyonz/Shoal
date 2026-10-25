@@ -46,6 +46,7 @@ shoal run hello --inputs-file inputs.yaml --wait   # exit 0 only if the run succ
 shoal logs run_01... -f
 shoal get run run_01...
 shoal cancel run_01...
+shoal signal run_01... build.done -d '{"ok": true}'   # resume a wait step with data
 ```
 
 ## Secrets

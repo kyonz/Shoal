@@ -17,6 +17,7 @@ from shoal.core.models import (
 )
 from shoal.integrations.base import IntegrationError
 from shoal.runtime.context import Completed, StepContext, StepResult, Suspended
+from shoal.runtime.signals import event_key, signal_key
 
 
 class SetHandler:
@@ -83,6 +84,8 @@ class WaitHandler:
         assert isinstance(step, WaitStep)
         now = ctx.now()
 
+        if step.signal is not None:
+            return await self._signal(ctx, step, now)
         if step.condition is None:
             if step.duration is not None:
                 until = ctx.deadline("until", step.duration)
@@ -95,6 +98,7 @@ class WaitHandler:
             return Suspended(wake_at=until, reason=f"waiting until {until.isoformat()}")
 
         cond = step.condition
+        assert cond is not None
         deadline = ctx.deadline("deadline", step.max_wait) if step.max_wait else None
         ctx.state["polls"] = ctx.state.get("polls", 0) + 1
         result: dict[str, Any] | None = None
@@ -127,6 +131,31 @@ class WaitHandler:
         keys = [k for k in (ctx.render(cond.wake_on) or []) if k]
         await ctx.emit("wait.polled", {"satisfied": False, "next_poll": next_poll.isoformat()})
         return Suspended(wake_at=next_poll, wait_keys=keys, reason="condition not met")
+
+    async def _signal(self, ctx: StepContext, step: WaitStep, now: datetime) -> StepResult:
+        sig = step.signal
+        assert sig is not None
+        if sig.name:
+            name = sig.name
+            wait_key = signal_key(ctx.run.id, name)
+        else:
+            if "event" not in ctx.state:  # render once so the key is stable across resumes
+                ctx.state["event"] = str(ctx.render(sig.event))
+            name = wait_key = event_key(ctx.state["event"])
+        match = (lambda payload: ctx.truthy(sig.match, signal=payload)) if sig.match else None
+        row = await ctx.engine.signals.take(ctx.run.id, name, ctx.step.id, match)
+        if row is not None:
+            return Completed({
+                "received": True, "timed_out": False, "signal": row.id, "name": sig.name or ctx.state["event"],
+                "payload": row.data.get("payload"), "source": row.source, "sender": row.sender,
+                "received_at": row.created_at.isoformat(),
+            })
+        deadline = ctx.deadline("deadline", step.max_wait) if step.max_wait else None
+        if deadline is not None and now >= deadline:
+            if step.on_timeout == "fail":
+                raise StepError(f"no '{sig.name or ctx.state['event']}' signal within {step.max_wait}")
+            return Completed({"received": False, "timed_out": True, "payload": None})
+        return Suspended(wake_at=deadline, wait_keys=[wait_key], reason=f"waiting for signal {sig.name or ctx.state['event']}")
 
 
 class ApprovalHandler:

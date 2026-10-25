@@ -479,6 +479,25 @@ def cancel(ctx: typer.Context, run_id: Annotated[str, typer.Argument(help="Run i
     console.print(f"run {result['id']} {styled(result['status'])} (cancel requested)")
 
 
+@app.command()
+def signal(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id.")],
+    name: Annotated[str, typer.Argument(help="Signal name, as in the wait step's `signal: {name: ...}`.")],
+    data: Annotated[str | None, typer.Option("--data", "-d", help="Payload: JSON, or plain text.")] = None,
+) -> None:
+    """Send a signal (data) to a run; a wait step for it resumes."""
+    payload: Any = None
+    if data is not None:
+        try:
+            payload = json.loads(data)
+        except ValueError:
+            payload = data
+    with api(ctx) as client:
+        result = client.request("POST", f"/v1/runs/{quote(run_id)}/signals/{quote(name)}", json={"payload": payload})
+    console.print(f"signal {result['id']} sent to run {run_id}")
+
+
 # --------------------------------------------------------------------------- secrets
 
 SECRET_COLUMNS = [("NAME", lambda s: s["name"]), ("NAMESPACE", lambda s: s["namespace"]), ("UPDATED", lambda s: age(s["updated_at"]))]

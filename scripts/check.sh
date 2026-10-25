@@ -4,7 +4,7 @@
 #   scripts/check.sh                 # all sections
 #   scripts/check.sh engine helm     # only some: engine frontend terraform helm image
 #
-# Needs uv; go, terraform, helm, kubeconform, node and docker are used when
+# Needs uv; go, helm, kubeconform, node and docker are used when
 # installed and their sections are skipped (with a warning) when not.
 set -euo pipefail
 
