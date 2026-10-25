@@ -37,7 +37,9 @@ app = typer.Typer(
 secrets_app = typer.Typer(help="Manage namespace secrets (values are write-only).", no_args_is_help=True)
 tenants_app = typer.Typer(help="Create and manage tenants (instance admins or the admin token).", no_args_is_help=True)
 eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_help=True)
-integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_args_is_help=True)
+integrations_app = typer.Typer(
+    help="Build integrations with the open SDK, and register them for your organisation.", no_args_is_help=True
+)
 db_app = typer.Typer(help="Database schema migrations (runs where the server runs; uses SHOAL_DATABASE_URL).", no_args_is_help=True)
 federation_app = typer.Typer(help="Federated tenants: link them on the hub, join from the member.", no_args_is_help=True)
 skills_app = typer.Typer(help="Browse skill sources (marketplaces) and import, upgrade or roll back skills.", no_args_is_help=True)
@@ -1072,6 +1074,73 @@ def integrations_new(
     console.print(f"Created integration project in {escape(str(target))}")
 
 
+@integrations_app.command("list")
+def integrations_list(ctx: typer.Context, namespace: Namespace = None, output: Output = Format.table) -> None:
+    """Integrations this namespace can connect: installed ones and the ones your organisation registered."""
+    with api(ctx, namespace) as client:
+        data = client.get("/v1/integrations", namespace=client.target.namespace)
+    emit(data, output, [
+        ("KEY", lambda i: i["key"]), ("TITLE", lambda i: i["title"]), ("SOURCE", lambda i: i.get("source")),
+        ("LEVELS", lambda i: ",".join(i.get("connection_scopes") or [])), ("ACTIONS", lambda i: len(i["actions"])),
+    ], name=lambda i: i["key"])
+
+
+@integrations_app.command("register")
+def integrations_register(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Key to register it under (actions are called <name>.<action>).")],
+    url: Annotated[str | None, typer.Option(help="Remote integration service base URL (https).")] = None,
+    token_secret: Annotated[str | None, typer.Option(help="Secret in `shared` with the bearer token for the service.")] = None,
+    package: Annotated[str | None, typer.Option(help="Installed package: entry point name, distribution, or module:Class.")] = None,
+    scope: Annotated[list[str] | None, typer.Option(
+        "--scope", help="Where connections may live: org and/or namespace (repeat; default: what the integration allows)."
+    )] = None,
+    allow_namespace: Annotated[list[str] | None, typer.Option(
+        "--allow-namespace", help="Only these namespaces may see and connect it (repeat; default: all)."
+    )] = None,
+    title: Annotated[str | None, typer.Option(help="Display name (default: the manifest's).")] = None,
+    allow_insecure: Annotated[bool, typer.Option("--allow-insecure", help="Permit plain http to a non-loopback host.")] = False,
+    output: Output = Format.table,
+) -> None:
+    """Register a custom integration for the organisation; Shoal pulls its manifest."""
+    if bool(url) == bool(package):
+        err.print("[red]error:[/red] give exactly one of --url or --package")
+        raise typer.Exit(2)
+    spec: dict[str, Any] = {"source": "remote" if url else "package", "url": url, "token_secret": token_secret,
+                            "package": package, "title": title, "connection_scopes": scope or [],
+                            "namespaces": allow_namespace or []}
+    if allow_insecure:
+        spec["allow_insecure"] = True
+    with api(ctx) as client:
+        row = client.request("PUT", f"/v1/custom-integrations/{quote(name)}",
+                             json={"spec": {k: v for k, v in spec.items() if v not in (None, [])}})
+    if output is not Format.table:
+        emit(row, output)
+        return
+    _print_custom_status(name, row.get("status") or {})
+
+
+@integrations_app.command("refresh")
+def integrations_refresh(
+    ctx: typer.Context, name: Annotated[str, typer.Argument(help="Registered integration.")], output: Output = Format.table
+) -> None:
+    """Pull a registered integration's manifest again (after the service or package changed)."""
+    with api(ctx) as client:
+        status = client.request("POST", f"/v1/custom-integrations/{quote(name)}/refresh")
+    if output is not Format.table:
+        emit(status, output)
+        return
+    _print_custom_status(name, status)
+
+
+def _print_custom_status(name: str, status: dict[str, Any]) -> None:
+    if not status.get("ready"):
+        console.print(f"registered [bold]{escape(name)}[/bold], but it is not ready: {escape(str(status.get('error')))}")
+        return
+    console.print(
+        f"registered [bold]{escape(name)}[/bold] ({escape(str(status.get('title')))}): {status.get('actions', 0)} actions, "
+        f"{status.get('events', 0)} events; connections at {' and '.join(status.get('connection_scopes') or [])} level"
+    )
 @integrations_app.command("check")
 def integrations_check(
     url: Annotated[str, typer.Argument(help="Base URL of a running remote integration service.")],

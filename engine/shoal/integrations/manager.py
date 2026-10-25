@@ -1,4 +1,13 @@
-"""Connection resolution, action calls and inbound webhook dispatch."""
+"""Connection resolution, action calls and inbound webhook dispatch.
+
+Integrations come from the process-wide plugin registry (built-ins and installed
+packages) and from each tenant's own registrations (``CustomIntegration``, see
+:mod:`shoal.integrations.custom`); :meth:`IntegrationManager.resolve` looks in both.
+
+Connections live in a namespace (one team's) or in ``shared`` (the organisation's,
+shared to every namespace or only to those in ``spec.namespaces``). Each integration
+says which of the two it allows (``connection_scopes``).
+"""
 
 from __future__ import annotations
 
@@ -8,10 +17,11 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from shoal.core import clock
-from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound, Unauthorized
+from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound, PluginError, Unauthorized
 from shoal.core.models import Connection
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
+from shoal.integrations.custom import CustomIntegrations
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
@@ -26,12 +36,61 @@ INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
 class IntegrationManager:
     def __init__(self, engine: Engine):
         self.engine = engine
+        self.custom = CustomIntegrations(engine)
 
     def get(self, key: str) -> Integration:
+        """An installed integration (built-in or plugin); tenants' own registrations need :meth:`resolve`."""
         return self.engine.plugin("integrations", key)
 
-    def catalog(self) -> list[dict[str, Any]]:
-        return [type(i).catalog() for i in self.engine.registry.available("integrations").values()]
+    async def resolve(self, tenant_id: str, key: str, *, namespace: str | None = None) -> Integration:
+        """The tenant's registered integration ``key``, else the installed one.
+
+        With ``namespace``, a registration limited to other namespaces is not found."""
+        loaded = await self.custom.load(tenant_id, key)
+        if loaded is None:
+            return self.get(key)
+        if not loaded.resource.spec.enabled:
+            raise PluginError(f"integration '{key}' is turned off for this organisation")
+        if namespace is not None and not self.custom.visible(loaded.resource.spec, namespace):
+            raise PluginError(f"integration '{key}' is not available in namespace '{namespace}'")
+        if loaded.integration is None:
+            raise PluginError(f"custom integration '{key}' is not available: {loaded.error}")
+        return loaded.integration
+
+    async def catalog(self, tenant_id: str | None = None, *, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Installed integrations plus, for a tenant, the ones it registered (those visible to ``namespace``)."""
+        out: dict[str, dict[str, Any]] = {
+            key: {**type(i).catalog(), "source": "installed"} for key, i in self.engine.registry.available("integrations").items()
+        }
+        if tenant_id:
+            for loaded in await self.custom.list(tenant_id):
+                spec = loaded.resource.spec
+                if loaded.integration is None or not spec.enabled or not self.custom.visible(spec, namespace):
+                    out.pop(loaded.resource.metadata.name, None)  # a registration of an installed package governs it
+                    continue
+                out[loaded.resource.metadata.name] = {
+                    **type(loaded.integration).catalog(), "source": "custom",
+                    "custom": {"source": spec.source, "url": spec.url, "package": spec.package, "namespaces": spec.namespaces},
+                }
+        return sorted(out.values(), key=lambda c: c["key"])
+
+    async def check_connection(self, tenant_id: str, connection: Connection, namespace: str) -> None:
+        """Apply-time checks: the integration allows connections at this level, and the namespace may use it."""
+        key, scope = connection.spec.integration, ("org" if namespace == SHARED_NAMESPACE else "namespace")
+        if scope == "namespace" and connection.spec.namespaces:
+            raise InvalidRequest("`namespaces` only applies to organisation connections (in the shared namespace)")
+        try:
+            integration = await self.resolve(tenant_id, key, namespace=namespace)
+        except PluginError as exc:
+            if await self.custom.load(tenant_id, key) is not None:
+                raise InvalidRequest(str(exc)) from exc
+            return  # not installed here: kept as written, as before
+        if scope not in integration.connection_scopes:
+            where = "the organisation (admin console)" if scope == "namespace" else "a namespace"
+            raise InvalidRequest(
+                f"{key} connections cannot be created at the {'organisation' if scope == 'org' else 'namespace'} level; "
+                f"create it in {where}"
+            )
 
     async def connection(
         self,
@@ -45,7 +104,7 @@ class IntegrationManager:
         row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
         resource = Connection.model_validate(row.document)
         spec = resource.spec
-        integration = self.get(spec.integration)
+        integration = await self.resolve(tenant_id, spec.integration, namespace=current_namespace())
         values: dict[str, Any] = dict(spec.config)
         user_fields = set(spec.user_fields or spec.secrets)
         if spec.oauth:
@@ -107,7 +166,10 @@ class IntegrationManager:
             *await self.engine.store.list_resources(tenant_id, "Connection"),
             *await self.engine.store.list_resources(tenant_id, "Connection", namespace=SHARED_NAMESPACE),
         ]
-        matches = list(dict.fromkeys(r.name for r in rows if r.document["spec"]["integration"] == integration))
+        ns = current_namespace()
+        matches = list(dict.fromkeys(
+            r.name for r in rows if r.document["spec"]["integration"] == integration and shared_with(r.document, r.namespace, ns)
+        ))
         if len(matches) == 1:
             return matches[0]
         if not matches:
@@ -237,7 +299,7 @@ class IntegrationManager:
         with use_namespace(namespace):
             row = await self.engine.store.get_resource_row(tenant_id, "Connection", name, namespace=namespace)
             resource = Connection.model_validate(row.document)
-            integration = self.get(resource.spec.integration)
+            integration = await self.resolve(tenant_id, resource.spec.integration, namespace=namespace)
             values: dict[str, Any] = dict(resource.spec.config)
             for field, secret_name in resource.spec.secrets.items():
                 value = await self.engine.secrets.get(tenant_id, secret_name)
@@ -289,3 +351,11 @@ class IntegrationManager:
                 await self.engine.store.apply_resource(tenant_id, updated, actor=actor, namespace=namespace,
                                                        message="secrets added by app install")
         return tenant_id, namespace, name, actor, stored, data.get("then")
+
+
+def shared_with(document: dict[str, Any], stored_in: str, namespace: str) -> bool:
+    """Whether a connection stored in ``stored_in`` may be used from ``namespace``."""
+    if stored_in != SHARED_NAMESPACE or namespace == SHARED_NAMESPACE:
+        return True
+    allowed = (document.get("spec") or {}).get("namespaces") or []
+    return not allowed or namespace in allowed

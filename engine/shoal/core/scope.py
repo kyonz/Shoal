@@ -21,8 +21,10 @@ DEFAULT_NAMESPACE = "default"
 SHARED_NAMESPACE = "shared"
 NAMESPACE_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 # Kinds that describe the tenant rather than a team; always stored in `shared`.
-# Gateways, model policies and skill sources are managed centrally by tenant admins.
-TENANT_SCOPED_KINDS = frozenset({"Identity", "Blueprint", "Gateway", "ModelPolicy", "SkillSource", "EvalPlatform"})
+# Gateways, model policies, skill sources, eval platforms and custom integrations are managed centrally by tenant admins.
+TENANT_SCOPED_KINDS = frozenset(
+    {"Identity", "Blueprint", "Gateway", "ModelPolicy", "SkillSource", "EvalPlatform", "CustomIntegration"}
+)
 
 _current: ContextVar[str] = ContextVar("shoal_namespace", default=DEFAULT_NAMESPACE)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from pydantic import TypeAdapter
 
 import shoal
@@ -134,14 +134,20 @@ async def my_permissions(ctx: CtxDep) -> Any:
 # --------------------------------------------------------------------------- catalogues
 
 
-@router.get("/v1/integrations", tags=["catalog"])
-async def integrations(ctx: CtxDep) -> list[dict[str, Any]]:
-    return ctx.engine.integrations.catalog()
+@router.get("/v1/integrations", tags=["catalog"], summary="Installed integrations and the ones the organisation registered")
+async def integrations(ctx: CtxDep, namespace: str | None = Query(
+    None, description="Only the registered integrations this namespace may use (default: all of them)."
+)) -> list[dict[str, Any]]:
+    return await ctx.engine.integrations.catalog(ctx.principal.tenant_id, namespace=namespace)
 
 
 @router.get("/v1/integrations/{key}", tags=["catalog"])
 async def integration(key: str, ctx: CtxDep) -> dict[str, Any]:
-    return type(ctx.engine.integrations.get(key)).catalog()
+    if ctx.principal.tenant_id:
+        found = await ctx.engine.integrations.resolve(ctx.principal.tenant_id, key)
+    else:
+        found = ctx.engine.integrations.get(key)
+    return type(found).catalog()
 
 
 @router.get("/v1/plugins", tags=["catalog"], summary="Installed plugins of every kind")

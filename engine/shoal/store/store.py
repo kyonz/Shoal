@@ -342,6 +342,10 @@ class Store:
         row = await self._resource_row(tenant_id, ns, kind, name)
         if row is None and fallback and ns != SHARED_NAMESPACE:
             row = await self._resource_row(tenant_id, SHARED_NAMESPACE, kind, name)
+            if row is not None and kind == "Connection":  # organisation connections can be limited to some namespaces
+                allowed = (row.document.get("spec") or {}).get("namespaces") or []
+                if allowed and ns not in allowed:
+                    row = None
         if row is None:
             raise NotFound(f"{kind} '{name}' not found")
         return row

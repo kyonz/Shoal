@@ -584,6 +584,10 @@ class ConnectionSpec(Model):
         description="Connection fields each person supplies (default: the fields in `secrets`).",
     )
     oauth: OAuthSpec | None = Field(None, description="Lets people connect with OAuth instead of pasting a token.")
+    namespaces: list[str] = Field(
+        default_factory=list,
+        description="Organisation connections only (stored in `shared`): the namespaces that may use it (empty: all).",
+    )
 
     @model_validator(mode="after")
     def _personal_fields(self) -> ConnectionSpec:
@@ -886,6 +890,48 @@ class SkillSourceSpec(Model):
         return self
 
 
+ConnectionScope = Literal["org", "namespace"]
+
+
+class CustomIntegrationSpec(Model):
+    """An integration the organisation registers itself: a remote service speaking the Shoal
+    integration protocol (``url``) or an installed Python package (``package``). Shoal pulls its
+    manifest (connection settings, auth, actions, resources, events) so connecting to it works like
+    a built-in. Tenant-wide and managed by tenant admins; the token is a secret in ``shared``."""
+
+    source: Literal["remote", "package"] = Field(description="remote: an HTTP service; package: an installed Python package.")
+    title: str | None = Field(None, description="Display name (defaults to the manifest's).")
+    description: str | None = None
+    url: str | None = Field(None, description="remote: base URL of the integration service (https).")
+    token_secret: str | None = Field(None, description="remote: secret in `shared` holding the bearer token Shoal presents.")
+    timeout_seconds: float = Field(30.0, gt=0, le=300)
+    allow_insecure: bool = Field(False, description="remote: permit plain http to a non-loopback host.")
+    package: str | None = Field(
+        None,
+        description="package: the installed plugin (entry point name in `shoal.integrations`), its distribution "
+        "(e.g. shoal-linear), or `module:Class` when the server allows importing integration modules.",
+    )
+    connection_scopes: list[ConnectionScope] = Field(
+        default_factory=list,
+        description="Where connections may live: `org` (shared to namespaces) and/or `namespace` (one team's). "
+        "Empty: whatever the integration declares; otherwise narrows it.",
+    )
+    namespaces: list[str] = Field(default_factory=list, description="Namespaces that may see and connect it (empty: all).")
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _source_fields(self) -> CustomIntegrationSpec:
+        if self.source == "remote" and not self.url:
+            raise ValueError("source: remote needs `url`")
+        if self.source == "package" and not self.package:
+            raise ValueError("source: package needs `package`")
+        if self.source == "remote" and self.package:
+            raise ValueError("`package` only applies to source: package")
+        if self.source == "package" and (self.url or self.token_secret):
+            raise ValueError("`url` and `token_secret` only apply to source: remote")
+        return self
+
+
 class EvalCase(Model):
     name: str
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -1164,6 +1210,12 @@ class SkillSource(ResourceBase):
     plural: ClassVar[str] = "skill-sources"
 
 
+class CustomIntegration(ResourceBase):
+    kind: Literal["CustomIntegration"] = "CustomIntegration"
+    spec: CustomIntegrationSpec
+    plural: ClassVar[str] = "custom-integrations"
+
+
 AnyResource = Annotated[
     Workflow
     | Agent
@@ -1179,7 +1231,8 @@ AnyResource = Annotated[
     | Blueprint
     | Eval
     | SkillSource
-    | EvalPlatform,
+    | EvalPlatform
+    | CustomIntegration,
     Field(discriminator="kind"),
 ]
 
@@ -1187,7 +1240,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform, CustomIntegration,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

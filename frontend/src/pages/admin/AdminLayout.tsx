@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 
 export function AdminLayout() {
   const { can, me } = useAuth();
-  const items = ADMIN_NAV.filter((i) => !i.permission || can(i.permission));
+  const items = ADMIN_NAV.filter((i) => !i.permission || can(i.permission, i.permissionNamespace));
   return (
     <div className="flex min-h-full">
       <aside className="sticky top-0 hidden h-[calc(100vh-3rem)] w-52 shrink-0 flex-col border-r border-border bg-panel/50 px-2 py-4 md:flex">

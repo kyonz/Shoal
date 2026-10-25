@@ -31,6 +31,7 @@ from shoal.core.ids import new_id
 from shoal.core.models import (
     KIND_BY_PLURAL,
     Connection,
+    CustomIntegration,
     ResourceBase,
     SandboxProfile,
     Trigger,
@@ -38,6 +39,7 @@ from shoal.core.models import (
 )
 from shoal.core.scope import SHARED_NAMESPACE, TENANT_SCOPED_KINDS, use_namespace
 from shoal.integrations.base import IntegrationEvent, describe_actions, describe_resources
+from shoal.integrations.manager import shared_with
 from shoal.store import tables as t
 from shoal.triggers import validate_cron
 
@@ -57,7 +59,9 @@ TENANT_VERBS = {"identities": {"read": "identities:read", "write": "identities:w
                 "skill-sources": {"read": "skill-sources:read", "write": "skill-sources:manage",
                                   "delete": "skill-sources:manage"},
                 "eval-platforms": {"read": "eval-platforms:read", "write": "eval-platforms:manage",
-                                   "delete": "eval-platforms:manage"}}
+                                   "delete": "eval-platforms:manage"},
+                "custom-integrations": {"read": "custom-integrations:read", "write": "custom-integrations:manage",
+                                        "delete": "custom-integrations:manage"}}
 
 
 async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
@@ -67,6 +71,10 @@ async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
     if row.kind == "Connection":
         with use_namespace(row.namespace):
             status["webhook_url"] = await ctx.engine.integrations.webhook_url(ctx.tenant_id, row.name)
+    elif row.kind == "CustomIntegration":
+        loaded = await ctx.engine.integrations.custom.load(ctx.tenant_id, row.name)
+        if loaded is not None:
+            status.update(loaded.status())
     elif row.kind == "Trigger" and doc["spec"].get("event") == "schedule" and doc["spec"].get("schedule"):
         with use_namespace(row.namespace):
             state = await ctx.engine.store.get_trigger_state(ctx.tenant_id, row.name)
@@ -138,10 +146,19 @@ def validate_plugin_config(engine: Engine, resource: ResourceBase) -> None:
 MessageQuery = Query(None, max_length=2000, description="Change note stored with the new version.")
 
 
+async def check_apply(ctx: Ctx, resource: ResourceBase, namespace: str) -> None:
+    """Checks that need the tenant's state: connection levels, custom integration sources."""
+    if isinstance(resource, Connection):
+        await ctx.engine.integrations.check_connection(ctx.tenant_id, resource, namespace)
+    elif isinstance(resource, CustomIntegration):
+        await ctx.engine.integrations.custom.check(ctx.tenant_id, resource)
+
+
 async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response,
                message: str | None = None) -> ResourceOut:
     resource = build_resource(kind, name, body)
     validate_plugin_config(ctx.engine, resource)
+    await check_apply(ctx, resource, namespace)
     row, outcome = await ctx.engine.store.apply_resource(
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec), message=message
     )
@@ -359,6 +376,11 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
                 await _require_feature(ctx, resource.metadata.name, doc.get("spec"))
         else:
             await ctx.namespace(ns, f"{plural}:write")
+        try:
+            await check_apply(ctx, resource, ns)
+        except InvalidRequest as exc:
+            results.append(ApplyResult(kind=kind, name=name, namespace=ns, outcome="invalid", error=str(exc)))
+            continue
         parsed.append((resource, ns, strip_nulls(doc.get("spec") or {})))
     if any(r.outcome == "invalid" for r in results):
         raise InvalidRequest("some documents are invalid; nothing was applied", details={"results": [r.model_dump() for r in results]})
@@ -419,6 +441,27 @@ async def delete_secret(namespace: str, name: str, ctx: CtxDep) -> None:
 # --------------------------------------------------------------------------- connections
 
 
+@router.get("/namespaces/{namespace}/org-connections", tags=["connections"], response_model=list[ResourceOut],
+            summary="Organisation connections (in `shared`) this namespace may use")
+async def org_connections(namespace: str, ctx: CtxDep) -> Any:
+    await ctx.namespace(namespace, "connections:read")
+    if namespace == SHARED_NAMESPACE:
+        return []
+    rows = await ctx.engine.store.list_resources(ctx.tenant_id, "Connection", namespace=SHARED_NAMESPACE)
+    return [await to_out(ctx, r) for r in rows if shared_with(r.document, r.namespace, namespace)]
+
+
+@router.post("/custom-integrations/{name}/refresh", tags=["custom-integrations"],
+             summary="Pull a registered integration's manifest again (settings schema, actions, events)")
+async def refresh_custom_integration(name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.require("custom-integrations:manage")
+    loaded = await ctx.engine.integrations.custom.load(ctx.tenant_id, name, refresh=True)
+    if loaded is None:
+        raise NotFound(f"CustomIntegration '{name}' not found")
+    await ctx.audit("customintegration.refreshed", name, ready=loaded.integration is not None)
+    return {"name": name, **loaded.status()}
+
+
 async def _connection(ctx: Ctx, namespace: str, name: str) -> Connection:
     row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace)
     return Connection.model_validate(row.document)
@@ -454,7 +497,7 @@ async def connection_webhook(namespace: str, name: str, ctx: CtxDep) -> dict[str
     with use_namespace(namespace):
         url = await ctx.engine.integrations.webhook_url(ctx.tenant_id, name)
         conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     out: dict[str, Any] = {"url": url, "instructions": integration.webhook_setup_instructions(url)}
     manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name,
                                           config=_plain_config(integration, conn))
@@ -483,7 +526,7 @@ async def connection_setup(
     with use_namespace(namespace):
         url = await ctx.engine.integrations.webhook_url(ctx.tenant_id, name)
         conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     config = _plain_config(integration, conn)
     chosen = None if features is None else [f for f in features.split(",") if f]
     enabled = integration.enabled_features(config, chosen)
@@ -549,7 +592,7 @@ async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]
     """The integration catalogue lists static actions; dynamic integrations (remote) only know theirs per connection."""
     await ctx.namespace(namespace, "connections:read")
     conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     actions, resources = integration.actions, integration.resources
     if not actions and not resources:  # dynamic: ask the connection (needs its secrets, or the caller's own)
         initiator = await _caller(ctx)
@@ -563,7 +606,7 @@ async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]
 async def call_action(namespace: str, name: str, action: str, body: ActionCallIn, ctx: CtxDep) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:use")
     conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     initiator = await _caller(ctx)
     actions = integration.actions
     if not actions:  # dynamic integrations (remote) list their actions per connection

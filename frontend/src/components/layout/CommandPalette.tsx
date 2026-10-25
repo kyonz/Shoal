@@ -120,7 +120,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               </Command.Group>
               <Command.Group heading="Admin console" className={group}>
                 {ADMIN_NAV.filter((i) => i.to !== "/admin" && !NAV.some((g) => g.items.some((n) => n.to === i.to)))
-                  .filter((i) => !i.permission || can(i.permission))
+                  .filter((i) => !i.permission || can(i.permission, i.permissionNamespace))
                   .map((i) => (
                     <Command.Item key={i.to} className={item} keywords={["admin", ...(i.keywords?.split(" ") ?? [])]} onSelect={() => go(i.to)}>
                       <i.icon />

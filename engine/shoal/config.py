@@ -74,6 +74,11 @@ class Settings(BaseSettings):
         description="Operator-wide remote integrations (open integrations protocol) registered at start-up, "
         'e.g. SHOAL_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
     )
+    integration_allow_imports: bool = Field(
+        False,
+        description="Let tenant admins register custom integrations as `module:Class` import paths. Off by default: "
+        "they can still register installed packages (shoal.integrations entry points) and remote services.",
+    )
     integration_blocked_networks: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BLOCKED_NETWORKS),
         description="CIDRs integrations may never call (connection URLs are tenant-set). Defaults to the link-local and "

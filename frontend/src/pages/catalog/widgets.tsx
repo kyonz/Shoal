@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { rawJson } from "@/api/client";
-import { useIntegrations, useVisibleResources, type JsonSchema, type Plural, type VisibleResource } from "@/api/hooks";
+import { useIntegrations, useNamespaces, useVisibleResources, type JsonSchema, type Plural, type VisibleResource } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { CodeEditor, Input, NativeSelect, Segmented } from "@/components/ui";
 import { CLAUDE_MODELS } from "./kinds";
@@ -140,6 +140,52 @@ export function ResourceMultiPicker({ plural, ns, value, onChange, exclude }: {
       >
         <option value="">{options.length ? "+ Add…" : list.length ? "" : "None available"}</option>
         <ResourceOptions items={options} />
+      </select>
+    </div>
+  );
+}
+
+/** Pick namespaces (never `shared`, which is the organisation itself). */
+export function NamespaceMultiPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+  const { data } = useNamespaces();
+  const names = (data ?? []).map((n) => n.name).filter((n) => n !== "shared");
+  return <ChipPicker options={names} value={value} onChange={onChange} />;
+}
+
+/** Several names from a list, shown as removable chips; an empty pick is `undefined`. */
+export function ChipPicker({ options: all, value, onChange }: { options: string[]; value: unknown; onChange: (v: unknown) => void }) {
+  const list = (value as string[] | undefined) ?? [];
+  const options = all.filter((n) => !list.includes(n));
+  const [draft, setDraft] = useState("");
+  const add = (n: string) => {
+    if (!n || list.includes(n)) return;
+    onChange([...list, n]);
+    setDraft("");
+  };
+  return (
+    <div className="flex min-h-8 flex-wrap items-center gap-1 rounded-lg border border-border bg-panel px-1.5 py-1 shadow-card">
+      {list.map((n) => (
+        <span key={n} className="inline-flex h-5 items-center gap-1 rounded bg-accent-soft pr-0.5 pl-1.5 font-mono text-[11px] text-accent">
+          {n}
+          <button type="button" aria-label={`Remove ${n}`} className="rounded p-0.5 hover:text-fg" onClick={() => {
+            const next = list.filter((x) => x !== n);
+            onChange(next.length ? next : undefined);
+          }}>
+            <X className="size-3" />
+          </button>
+        </span>
+      ))}
+      <select
+        value={draft}
+        onChange={(e) => add(e.target.value)}
+        className="h-5 min-w-28 flex-1 cursor-pointer bg-transparent text-[13px] text-muted outline-none"
+      >
+        <option value="">{options.length ? "+ Add…" : list.length ? "" : "None available"}</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
       </select>
     </div>
   );
