@@ -2,6 +2,8 @@
 
 A namespace can bring its own cloud role to Shoal and let chosen workflows and agents use it. When a granted step runs, Shoal gets short-lived credentials for the role and puts them in the step's sandbox. No long-lived cloud key is stored anywhere. AWS IAM roles are supported today. The provider is a plugin (`shoal.credentials`), so GCP and Azure can follow the same shape.
 
+![An AWS role registered as a cloud identity, trusted through web identity](assets/screenshots/connections/cloud-identity.png)
+
 ## Register a role
 
 Namespace admins manage cloud identities (`cloud-identities:write`). Editors can see them and use them in granted workflows, but cannot register roles or change grants.
