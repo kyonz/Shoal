@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from shoal.core.models import KIND_BY_PLURAL
 
-TENANT_PLURALS = ("identities", "blueprints", "gateways", "model-policies", "skill-sources", "custom-integrations")
+TENANT_PLURALS = ("identities", "blueprints", "gateways", "model-policies", "skill-sources", "eval-platforms", "custom-integrations")
 RESOURCE_PLURALS = sorted(p for p in KIND_BY_PLURAL if p not in TENANT_PLURALS)
 
 NAMESPACE_PERMISSIONS: dict[str, str] = {
@@ -58,6 +58,8 @@ TENANT_PERMISSIONS: dict[str, str] = {
     "skill-sources:manage": "Add, configure and remove skill sources (tenant-wide)",
     "custom-integrations:read": "View the integrations the organisation registered",
     "custom-integrations:manage": "Register, configure and remove custom integrations (tenant-wide)",
+    "eval-platforms:read": "View the eval platforms (Braintrust, Langfuse, ...) connected for the tenant",
+    "eval-platforms:manage": "Connect, configure and remove eval platforms (tenant-wide)",
     "audit:read": "Read the audit log",
     "api-keys:manage": "Manage every API key in the tenant",
     "scim:provision": "Provision users and groups over SCIM",

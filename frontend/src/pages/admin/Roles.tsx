@@ -46,6 +46,7 @@ import {
   type Permission,
   type Role,
 } from "./shared";
+import { actorName } from "@/lib/actor";
 
 const NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const VERB_ORDER = [
@@ -507,7 +508,7 @@ function BindingsTab() {
                   <Td>{b.namespace ? <span className="font-mono text-xs">{b.namespace}</span> : <Badge tone="info">Tenant-wide</Badge>}</Td>
                   <Td className="text-muted">
                     {relTime(b.created_at)}
-                    {b.created_by && <span className="ml-1 text-faint">by {b.created_by}</span>}
+                    {b.created_by && <span className="ml-1 text-faint">by {actorName(b.created_by)}</span>}
                   </Td>
                   <Td>
                     {manage && (

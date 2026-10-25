@@ -1,10 +1,10 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Plus, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useId, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { rawJson } from "@/api/client";
-import { useIntegrations, useNamespaces, useResources, type JsonSchema, type Plural } from "@/api/hooks";
+import { useIntegrations, useNamespaces, useVisibleResources, type JsonSchema, type Plural, type VisibleResource } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { CodeEditor, Input, NativeSelect, Segmented } from "@/components/ui";
 import { CLAUDE_MODELS } from "./kinds";
@@ -12,7 +12,7 @@ import { CLAUDE_MODELS } from "./kinds";
 export function useSandboxBackends() {
   return useQuery({
     queryKey: ["catalog", "sandbox-backends"],
-    queryFn: () => rawJson<{ name: string; description: string; config_schema: JsonSchema | null }[]>("/v1/sandbox-backends"),
+    queryFn: () => rawJson<{ name: string; description: string; config_schema: JsonSchema | null; network_controls?: string[] }[]>("/v1/sandbox-backends"),
     staleTime: 300_000,
   });
 }
@@ -60,7 +60,30 @@ export function ModelCombo({ value, onChange }: { value: unknown; onChange: (v: 
   );
 }
 
-/** Pick one resource of a kind in the namespace (free text allowed for shared/fallback names). */
+function resourceLabel(r: VisibleResource) {
+  return `${r.metadata.name}${r.metadata.description ? ` — ${r.metadata.description.slice(0, 60)}` : ""}`;
+}
+
+/** Options for a native select: the namespace's own resources, then a "Shared" group. */
+export function ResourceOptions({ items }: { items: VisibleResource[] }) {
+  const own = items.filter((r) => !r.shared);
+  const shared = items.filter((r) => r.shared);
+  const options = (list: VisibleResource[]) =>
+    list.map((r) => (
+      <option key={r.metadata.name} value={r.metadata.name}>
+        {resourceLabel(r)}
+      </option>
+    ));
+  if (!shared.length) return <>{options(own)}</>;
+  return (
+    <>
+      {own.length > 0 && <optgroup label="This namespace">{options(own)}</optgroup>}
+      <optgroup label="Shared">{options(shared)}</optgroup>
+    </>
+  );
+}
+
+/** Pick one resource of a kind visible from the namespace (its own, then the shared namespace's). */
 export function ResourcePicker({ plural, ns, value, onChange, placeholder = "None" }: {
   plural: Plural;
   ns: string;
@@ -68,19 +91,14 @@ export function ResourcePicker({ plural, ns, value, onChange, placeholder = "Non
   onChange: (v: unknown) => void;
   placeholder?: string;
 }) {
-  const { data } = useResources(plural, ns);
-  const names = (data ?? []).map((r) => r.metadata.name);
+  const { data, isLoading } = useVisibleResources(plural, ns);
   const v = (value as string | undefined) ?? "";
+  const missing = v && !isLoading && !data.some((r) => r.metadata.name === v);
   return (
     <NativeSelect value={v} onChange={(e) => onChange(e.target.value || undefined)}>
       <option value="">{placeholder}</option>
-      {v && !names.includes(v) && <option value={v}>{v} (not in this namespace)</option>}
-      {(data ?? []).map((r) => (
-        <option key={r.metadata.name} value={r.metadata.name}>
-          {r.metadata.name}
-          {r.metadata.description ? ` — ${r.metadata.description}` : ""}
-        </option>
-      ))}
+      {missing && <option value={v}>{v} (not found)</option>}
+      <ResourceOptions items={data} />
     </NativeSelect>
   );
 }
@@ -93,9 +111,38 @@ export function ResourceMultiPicker({ plural, ns, value, onChange, exclude }: {
   onChange: (v: unknown) => void;
   exclude?: string;
 }) {
-  const { data } = useResources(plural, ns);
-  const names = (data ?? []).map((r) => r.metadata.name).filter((n) => n !== exclude);
-  return <ChipPicker options={names} value={value} onChange={onChange} />;
+  const { data } = useVisibleResources(plural, ns);
+  const list = (value as string[] | undefined) ?? [];
+  const options = data.filter((r) => !list.includes(r.metadata.name) && r.metadata.name !== exclude);
+  const [draft, setDraft] = useState("");
+  const add = (n: string) => {
+    if (!n || list.includes(n)) return;
+    onChange([...list, n]);
+    setDraft("");
+  };
+  return (
+    <div className="flex min-h-8 flex-wrap items-center gap-1 rounded-lg border border-border bg-panel px-1.5 py-1 shadow-card">
+      {list.map((n) => (
+        <span key={n} className="inline-flex h-5 items-center gap-1 rounded bg-accent-soft pr-0.5 pl-1.5 font-mono text-[11px] text-accent">
+          {n}
+          <button type="button" aria-label={`Remove ${n}`} className="rounded p-0.5 hover:text-fg" onClick={() => {
+            const next = list.filter((x) => x !== n);
+            onChange(next.length ? next : undefined);
+          }}>
+            <X className="size-3" />
+          </button>
+        </span>
+      ))}
+      <select
+        value={draft}
+        onChange={(e) => add(e.target.value)}
+        className="h-5 min-w-28 flex-1 cursor-pointer bg-transparent text-[13px] text-muted outline-none"
+      >
+        <option value="">{options.length ? "+ Add…" : list.length ? "" : "None available"}</option>
+        <ResourceOptions items={options} />
+      </select>
+    </div>
+  );
 }
 
 /** Pick namespaces (never `shared`, which is the organisation itself). */
@@ -140,7 +187,6 @@ export function ChipPicker({ options: all, value, onChange }: { options: string[
           </option>
         ))}
       </select>
-      {!options.length && all.length === 0 && <Plus className="size-3 text-faint" />}
     </div>
   );
 }
@@ -210,11 +256,14 @@ export interface ToolGroup {
 /** What an agent can be given: built-in tools, MCP servers (whole or per tool) and integration actions. */
 export function useToolOptions(ns: string): ToolGroup[] {
   const integrations = useIntegrations();
-  const connections = useResources("connections", ns);
-  const mcp = (connections.data ?? []).filter((c) => (c.spec as { integration?: string }).integration === "mcp").map((c) => c.metadata.name);
+  // MCP servers are connections; the engine also finds the shared namespace's.
+  const connections = useVisibleResources("connections", ns);
+  const servers = connections.data.filter((c) => (c.spec as { integration?: string }).integration === "mcp");
+  const mcp = servers.map((c) => c.metadata.name);
   const tools = useQueries({
     queries: mcp.map((name) => ({
       queryKey: ["mcp-tools", ns, name],
+      // Asked through `ns` so a shared server is listed with the credentials a run here would use.
       queryFn: () => rawJson<{ actions: { name: string; description: string }[] }>(`/v1/namespaces/${ns}/connections/${encodeURIComponent(name)}/actions`),
       retry: false,
       staleTime: 60_000,
@@ -224,7 +273,7 @@ export function useToolOptions(ns: string): ToolGroup[] {
   mcp.forEach((name, i) => {
     const list = tools[i]?.data?.actions ?? [];
     groups.push({
-      label: `MCP server: ${name}`,
+      label: `MCP server: ${name}${servers[i].shared ? " (shared)" : ""}`,
       options: [
         { value: `mcp:${name}`, label: `mcp:${name} (all ${list.length ? `${list.length} ` : ""}tools)` },
         ...list.map((a) => ({ value: `mcp:${name}.${a.name}`, label: `mcp:${name}.${a.name}${a.description ? ` — ${a.description.slice(0, 60)}` : ""}` })),

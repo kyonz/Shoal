@@ -7,15 +7,19 @@ Admins can see who has connected what and revoke it, never the values.
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qs, quote, urlsplit
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from shoal.api.deps import Ctx, CtxDep, EngineDep
-from shoal.core.errors import Forbidden, InvalidRequest, NotFound
+from shoal.api.deps import SESSION_COOKIE, Ctx, CtxDep, EngineDep
+from shoal.auth.oauth import BINDING_COOKIE, STATE_TTL, OAuthFlows
+from shoal.auth.sessions import verify_session
+from shoal.core.errors import Forbidden, InvalidRequest, NotFound, ShoalError
 from shoal.core.models import Connection
 from shoal.store import tables as t
 
@@ -52,6 +56,7 @@ def _owner(ctx: Ctx) -> str:
 
 
 async def _personal_connection(ctx: Ctx, namespace: str, name: str) -> Connection:
+    await ctx.namespace(namespace, "connections:read")
     row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace, fallback=False)
     connection = Connection.model_validate(row.document)
     if connection.spec.credentials == "shared":
@@ -91,23 +96,65 @@ async def delete_credential(namespace: str, connection: str, ctx: CtxDep) -> Res
     return Response(status_code=204)
 
 
-@router.post("/v1/me/credentials/{namespace}/{connection}/oauth", response_model=OAuthStart, summary="Connect my account with OAuth")
-async def start_oauth(namespace: str, connection: str, ctx: CtxDep) -> Any:
+@router.post(
+    "/v1/me/credentials/{namespace}/{connection}/oauth", response_model=OAuthStart, summary="Connect my account with OAuth",
+    description="Open the URL in a browser that is signed in to Shoal as you (or the one that made this call).",
+)
+async def start_oauth(namespace: str, connection: str, ctx: CtxDep, response: Response) -> Any:
     owner = _owner(ctx)
     conn = await _personal_connection(ctx, namespace, connection)
     if conn.spec.oauth is None:
         raise InvalidRequest(f"connection '{connection}' has no OAuth settings; paste a token instead")
-    return OAuthStart(authorize_url=ctx.engine.oauth.start(ctx.tenant_id, owner, namespace, connection, conn.spec.oauth))
+    url = ctx.engine.oauth.start(ctx.tenant_id, owner, namespace, connection, conn.spec.oauth)
+    state = parse_qs(urlsplit(url).query)["state"][0]
+    response.set_cookie(
+        BINDING_COOKIE, OAuthFlows.binding(state), max_age=int(STATE_TTL.total_seconds()), path="/v1/oauth/callback",
+        httponly=True, secure=ctx.engine.settings.public_url.startswith("https://"), samesite="lax",
+    )
+    return OAuthStart(authorize_url=url)
+
+
+async def _signed_in_as(request: Request, engine: Any, tenant_id: str, owner: str) -> bool:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return False
+    try:
+        claims = verify_session(engine.settings, token)
+        user = await engine.directory.get_user(claims["tid"], claims["sub"])
+    except ShoalError:
+        return False
+    return user.tenant_id == tenant_id and user.active and f"user:{user.username}" == owner
 
 
 @router.get("/v1/oauth/callback", include_in_schema=False)
-async def oauth_callback(engine: EngineDep, code: str | None = None, state: str | None = None, error: str | None = None) -> Any:
+async def oauth_callback(
+    request: Request, engine: EngineDep, code: str | None = None, state: str | None = None, error: str | None = None
+) -> Any:
     ui = f"{engine.settings.public_url.rstrip('/')}/settings/credentials"
     if error or not code or not state:
-        return RedirectResponse(f"{ui}?error={error or 'missing_code'}", status_code=303)
+        return RedirectResponse(f"{ui}?error={quote(error or 'missing_code')}", status_code=303)
+    data = engine.oauth.read_state(state)
+    bound = hmac.compare_digest(request.cookies.get(BINDING_COOKIE, ""), OAuthFlows.binding(state))
+    if not bound and not await _signed_in_as(request, engine, data["t"], data["o"]):
+        # Someone else's authorize link: connecting would file this browser's account under them.
+        await engine.store.audit(data["t"], data["o"], "credential.oauth_refused", f"{data['n']}/{data['c']}", outcome="denied",
+                                 namespace=data["n"], reason="browser not signed in as the owner")
+        return RedirectResponse(f"{ui}?error=sign_in_required", status_code=303)
     tenant_id, owner, namespace, connection = await engine.oauth.callback(code, state)
     await engine.store.audit(tenant_id, owner, "credential.set", f"{namespace}/{connection}", namespace=namespace, kind="oauth")
     return RedirectResponse(f"{ui}?connected={namespace}/{connection}", status_code=303)
+
+
+@router.get("/v1/install/callback", include_in_schema=False)
+async def install_callback(engine: EngineDep, code: str | None = None, state: str | None = None, error: str | None = None) -> Any:
+    """Where an app install (e.g. Add to Slack) returns; stores the token as the connection's secret."""
+    base = engine.settings.public_url.rstrip("/")
+    if error or not code or not state:
+        return RedirectResponse(f"{base}/?install_error={error or 'missing_code'}", status_code=303)
+    tenant_id, namespace, connection, actor, fields, then = await engine.integrations.install_callback(code, state)
+    await engine.store.audit(tenant_id, actor, "connection.installed", f"{namespace}/{connection}", namespace=namespace, fields=fields)
+    page = "/setup" if then == "setup" else ""
+    return RedirectResponse(f"{base}/ns/{namespace}/connections/{connection}{page}?installed=1", status_code=303)
 
 
 @router.get("/v1/users/{username}/credentials", response_model=list[CredentialOut], summary="Who connected what (admins)")

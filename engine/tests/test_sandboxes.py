@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -152,6 +153,7 @@ class FakeContainer:
 
     def put_archive(self, directory, data):
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            self.owners = {(m.uid, m.gid) for m in tar.getmembers()}
             tar.extractall(self._local(directory), filter="data")
 
     def get_archive(self, path):
@@ -191,6 +193,7 @@ async def test_docker_backend_against_fake_daemon(tmp_path):
 
     await sandbox.write_file("dir/x.txt", "hello")
     assert await sandbox.read_file("dir/x.txt") == b"hello"
+    assert created[0].owners == {(os.getuid(), os.getgid())}  # the image user's, so a non-root user can overwrite it
     result = await sandbox.exec("cat dir/x.txt; echo err >&2; exit 3")
     assert (result.exit_code, result.stdout, result.stderr) == (3, "hello", "err\n")
     try:
@@ -235,7 +238,18 @@ async def test_kubernetes_backend_lifecycle_against_fake_api(tmp_path, monkeypat
         async def __aexit__(self, *exc):
             return False
 
+    class FakeNetworking:
+        def __init__(self, api=None):
+            pass
+
+        async def create_namespaced_network_policy(self, namespace, manifest):
+            calls.append(("create-netpol", namespace, manifest))
+
+        async def delete_namespaced_network_policy(self, name, namespace):
+            calls.append(("delete-netpol", namespace, name))
+
     monkeypatch.setattr(client, "CoreV1Api", FakeCore)
+    monkeypatch.setattr(client, "NetworkingV1Api", FakeNetworking)
     monkeypatch.setattr(client, "ApiClient", FakeApiClient)
     real_sleep = asyncio.sleep
     monkeypatch.setattr(k8s.asyncio, "sleep", lambda s: real_sleep(0))
@@ -274,6 +288,40 @@ async def test_kubernetes_backend_lifecycle_against_fake_api(tmp_path, monkeypat
         pass
     await sandbox.close()
     assert calls[-1][0] == "delete"
+    assert not [c for c in calls if "netpol" in c[0]]  # egress allowed: no policy
+
+    calls.clear()
+    sandbox = await backend.create(SandboxSpec(**{**spec.model_dump(), "network": {"egress": "deny"}}))
+    (kind, _, policy), (then, _, pod) = calls[:2]
+    assert (kind, then) == ("create-netpol", "create")  # the policy exists before the pod
+    name = pod["metadata"]["name"]
+    assert policy["spec"] == {"podSelector": {"matchLabels": {"shoal.dev/sandbox": name}}, "policyTypes": ["Egress"], "egress": []}
+    assert pod["metadata"]["labels"]["shoal.dev/sandbox"] == name
+    await sandbox.close()
+    assert calls[-2:] == [("delete", "shoal-acme", name), ("delete-netpol", "shoal-acme", name)]
+
+
+async def test_profiles_a_backend_cannot_enforce_are_refused(engine, tenant):
+    from shoal.core.models import parse_resource
+
+    def doc(kind, name, spec):
+        return parse_resource({"apiVersion": "shoal.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
+
+    await engine.store.apply_resource(tenant.id, doc("SandboxProfile", "locked", {"backend": "local", "network": {"egress": "deny"}}))
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "sh", {"steps": [
+        {"id": "go", "type": "script", "sandbox": "locked", "run": "curl https://example.com"}]}))
+    run = await engine.executor.start_run(tenant.id, "sh", {})
+    await engine.run_until_idle()
+    run = await engine.store.get_run(tenant.id, run.id)
+    assert run.status == "failed"
+    assert "sandbox backend 'local' cannot enforce network.egress: deny" in run.error["message"]
+
+    from shoal.core.models import NetworkPolicy
+    from shoal.sandbox.docker import DockerBackend
+    from shoal.sandbox.remote import RemoteBackend
+    assert DockerBackend().network_gap(NetworkPolicy(egress="deny")) is None
+    assert "allow_hosts" in DockerBackend().network_gap(NetworkPolicy(egress="deny", allow_hosts=["pypi.org"]))
+    assert RemoteBackend().network_gap(NetworkPolicy(egress="deny", allow_hosts=["pypi.org"])) is None
 
 
 async def test_e2b_backend_against_fake_sdk(tmp_path, monkeypatch):

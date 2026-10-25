@@ -1,0 +1,15 @@
+# A Slack app for approvals and questions. Create the app from the manifest shown on the
+# connection page, store its signing secret, then "Install app" (or paste a bot token):
+#   shoal secrets set slack-signing-secret ... && shoal secrets set slack-client-secret ...
+apiVersion: shoal.dev/v1
+kind: Connection
+metadata:
+  name: slack
+spec:
+  integration: slack
+  config:
+    default_channel: "#deploys"
+    client_id: "REPLACE.ME"
+  secrets:
+    signing_secret: slack-signing-secret
+    client_secret: slack-client-secret

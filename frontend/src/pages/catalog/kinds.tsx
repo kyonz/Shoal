@@ -1,5 +1,5 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, Cloud, FlaskConical, Library, Puzzle, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Cloud, FlaskConical, Gauge, Library, Puzzle, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
 import { nsPath } from "@/lib/ns";
 
@@ -116,7 +116,7 @@ export const KINDS: Record<string, KindConfig> = {
     icon: FlaskConical,
     blurb: "Datasets and graders that measure a workflow's quality so changes are scored, not assumed.",
     order: ["description", "workflow", "threshold", "concurrency", "cases", "graders"],
-    hidden: ["cases", "graders"],
+    hidden: ["cases", "graders", "sinks", "dataset"],
     template: {
       workflow: "",
       threshold: 0.8,
@@ -125,6 +125,22 @@ export const KINDS: Record<string, KindConfig> = {
     },
     summary: (s) =>
       [s.workflow, Array.isArray(s.cases) ? `${s.cases.length} cases` : null].filter(Boolean).join(" · ") || undefined,
+  },
+  "eval-platforms": {
+    plural: "eval-platforms",
+    kind: "EvalPlatform",
+    label: "Eval platforms",
+    singular: "eval platform",
+    icon: Gauge,
+    blurb: "Braintrust, Langfuse and other eval platforms, connected once for the whole organisation. Evals pick one by name to export results and import datasets; keys come from secrets in the shared namespace.",
+    order: ["description"],
+    hidden: ["sink", "config"],
+    template: { sink: "braintrust", config: { project: "", api_key_secret: "braintrust-api-key" } },
+    admin: true,
+    summary: (s) => {
+      const c = (s.config as { project?: string } | undefined) ?? {};
+      return [s.sink, c.project ? `project ${c.project}` : null].filter(Boolean).join(" · ") || undefined;
+    },
   },
   blueprints: {
     plural: "blueprints",

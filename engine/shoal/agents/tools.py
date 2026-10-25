@@ -211,10 +211,13 @@ class Toolbox:
             def make(full: str = full):  # bind loop variable
                 async def run(args: dict[str, Any]) -> str:
                     ctx = self.inv.ctx
-                    connection_name = connection or ctx.connection_for(full.split(".")[0])
-                    await ctx.emit("agent.action", {"action": full, "params": args})
+                    connection_name = await ctx.engine.integrations.resolve_name(
+                        ctx.tenant_id, integration_key, connection or ctx.connection_for(integration_key)
+                    )
+                    await ctx.emit("agent.action", {"action": full, "connection": connection_name, "params": args})
                     result = await ctx.engine.integrations.call(
-                        ctx.tenant_id, full, args, connection=connection_name, initiator=ctx.run.initiator, run_id=ctx.run.id
+                        ctx.tenant_id, full, args, connection=connection_name, initiator=ctx.run.initiator, run_id=ctx.run.id,
+                        step_id=ctx.step.id,
                     )
                     return json.dumps(result, default=str)
 

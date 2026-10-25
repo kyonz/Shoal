@@ -239,20 +239,30 @@ class ModelRouter:
                 raise StepError(f"no rule in model policy '{policy_name}' matched", details=info)
             seed = f"{ctx.run.id}:{ctx.step.id}:{ctx.attempt}"
             effort = provider_config.get("effort")
+            skipped: list[str] = []
             for candidate in self.order(rule, seed):
                 if not self.permitted(candidate.model, default_policy, policy):
                     continue
-                targets.append(
-                    await self.gateway_target(
+                gateway = candidate.gateway or agent.provider
+                try:
+                    target = await self.gateway_target(
                         tenant,
-                        candidate.gateway or agent.provider,
+                        gateway,
                         candidate.model,
                         effort=candidate.effort or effort,
+                        overrides=provider_config,
                         redactor=ctx.redactor,
                         rule=f"{policy_name}/{rule.name}",
                     )
-                )
+                except StepError as exc:  # a misconfigured candidate falls back like an unavailable one
+                    skipped.append(f"{gateway}/{candidate.model}: {exc}")
+                    await ctx.emit("model.fallback", {"gateway": gateway, "model": candidate.model,
+                                                      "rule": f"{policy_name}/{rule.name}", "reason": str(exc)[:500]})
+                    continue
+                targets.append(target)
             info["policy"] = policy_name
+            if skipped and not targets:
+                raise StepError(f"no usable candidate in model policy '{policy_name}': {'; '.join(skipped)}", details=info)
         else:
             if self.permitted(agent.model, default_policy):
                 targets.append(

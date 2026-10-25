@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from shoal.auth.accounts import Accounts
 from shoal.auth.directory import Directory
 from shoal.auth.oauth import OAuthFlows
 from shoal.auth.oidc import OIDCService
@@ -37,6 +38,7 @@ from shoal.federation import FederationHub, FederationMember
 from shoal.identity import IdentityService
 from shoal.integrations.manager import IntegrationManager
 from shoal.integrations.remote import register_remote_integration
+from shoal.interactions import InteractionService
 from shoal.llm.router import ModelRouter
 from shoal.plugins.registry import Registry, factory
 from shoal.runtime.events import EventBus
@@ -132,11 +134,13 @@ class Engine:
         self.directory = Directory(self.store)
         self.authz = Authorizer(self)
         self.oidc = OIDCService(self)
+        self.accounts = Accounts(self)
         self.events = EventBus(self.store)
         self.secrets = SecretManager(self, self.settings.secret_providers)
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
         self.identities = IdentityService(self)
+        self.interactions = InteractionService(self)
         self.workload = WorkloadIssuer(self.settings)
         self.cloud = CloudIdentities(self)
         self.models = ModelRouter(self)

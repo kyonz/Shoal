@@ -19,7 +19,7 @@ import re
 from datetime import timedelta
 from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from shoal.core.duration import Duration
 
@@ -130,6 +130,18 @@ class RetryPolicy(Model):
         """Delay before ``attempt`` (2 = first retry)."""
         seconds = self.backoff.total_seconds() * (self.backoff_factor ** max(0, attempt - 2))
         return timedelta(seconds=min(seconds, self.max_backoff.total_seconds()))
+
+
+def _no_clear_text_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """Decision provider settings name secrets (``api_key_secret``); they never hold a credential literally."""
+    bad = [k for k in credential_fields(config)
+           if not k.endswith("_secret") and isinstance(config[k], str) and "{{" not in config[k]]
+    if bad:
+        raise ValueError(f"provider_config {bad} look like credentials; name a secret instead, e.g. api_key_secret")
+    return config
+
+
+DecisionConfig = Annotated[dict[str, Any], AfterValidator(_no_clear_text_keys)]
 
 
 class StepBase(Model):
@@ -264,18 +276,47 @@ class WaitStep(StepBase):
         return self
 
 
+class ApprovalNotify(Model):
+    """Also ask for the decision through an integration (e.g. Slack buttons); answers resolve the step."""
+
+    integration: str | None = Field(None, description="Integration key, e.g. 'slack' (or name a `connection`).")
+    connection: str | None = Field(None, description="Connection to use; defaults to the workflow's for the integration.")
+    to: str | None = Field(None, description="Where to ask: a channel ('#deploys', 'C0123') or a person ('U0123', an email). "
+                                             "Expressions allowed.")
+    with_: dict[str, Any] = Field(default_factory=dict, alias="with", description="Integration-specific options.")
+
+    @model_validator(mode="after")
+    def _target(self) -> ApprovalNotify:
+        if not (self.integration or self.connection):
+            raise ValueError("notify entries need an `integration` or a `connection`")
+        return self
+
+
 class ApprovalStep(StepBase):
-    """Human-in-the-loop gate resolved through the API or UI."""
+    """Human-in-the-loop gate resolved through the API, the UI or an integration (`notify`)."""
 
     type: Literal["approval"] = "approval"  # type: ignore[misc]
     message: str
-    approvers: list[str] = Field(default_factory=list)
+    approvers: list[str] = Field(
+        default_factory=list,
+        description="Who may decide, besides needing 'runs:approve': identity names, usernames, emails or "
+        "'group:<name>'. Empty: anyone with 'runs:approve'.",
+    )
+    notify: list[ApprovalNotify] = Field(default_factory=list, description="Ask through integrations too (Slack).")
     max_wait: Duration | None = None
     on_timeout: Literal["reject", "approve"] = "reject"
+    on_reject: Literal["fail", "continue"] = Field(
+        "fail",
+        description="'fail' ends the run when the step is rejected (or expires rejected); "
+        "'continue' succeeds with approved: false so later steps can branch on it.",
+    )
 
 
 class WorkflowCallStep(StepBase):
-    """Run another workflow as a child run, optionally once per item (fan-out)."""
+    """Run another workflow as a child run, optionally once per item (fan-out).
+
+    A failed child fails the step; with ``retry:``, a retry runs only the failed children again.
+    """
 
     type: Literal["workflow"] = "workflow"  # type: ignore[misc]
     workflow: str
@@ -314,7 +355,7 @@ class DecideStep(StepBase):
 
     type: Literal["decide"] = "decide"  # type: ignore[misc]
     provider: str | None = Field(None, description="Decision provider plugin (jev, llm); defaults to settings.")
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field(description="Text or JSON (expressions allowed) the questions are about.")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     min_confidence: float | None = Field(None, ge=0, le=1)
@@ -328,7 +369,7 @@ class GradeStep(StepBase):
 
     type: Literal["grade"] = "grade"  # type: ignore[misc]
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     subject: Any = Field(description="What to grade (expression).")
     instructions: str
     levels: list[str] = Field(min_length=2, description="Ordered rubric levels, worst first.")
@@ -432,7 +473,7 @@ class ToolGuardSpec(Model):
     """Screen mutating tool calls with a decision model before they run (§7.5)."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "write_file", "edit_file", "*__*"],
         description="Glob patterns of tool names to screen.",
@@ -447,12 +488,13 @@ class AgentSpec(Model):
     description: str | None = None
     provider: str = "anthropic"
     model: str = "claude-opus-5-5"
-    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop or cli.")
+    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop, cli (a coding agent CLI in the sandbox) or a2a.")
     instructions: str = Field("", description="System prompt.")
     skills: list[str] = Field(default_factory=list)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "read_file", "write_file", "list_files"],
-        description="Built-in tools, integration actions ('github.create_pull_request', 'github.*').",
+        description="Built-in tools (shell, read_file, ...), integration actions ('github.create_pull_request', 'github.*') "
+        "and MCP servers ('mcp:<connection>' for all its tools, 'mcp:<connection>.<tool>' for one).",
     )
     subagents: list[str] = Field(default_factory=list, description="Agents this agent may delegate to.")
     credentials: list[str] = Field(
@@ -489,8 +531,12 @@ class SkillSpec(Model):
 
 
 class NetworkPolicy(Model):
-    egress: Literal["allow", "deny"] = "allow"
-    allow_hosts: list[str] = Field(default_factory=list)
+    """Enforced by the sandbox backend; a backend that cannot enforce a policy refuses to start the sandbox."""
+
+    egress: Literal["allow", "deny"] = Field("allow", description="'deny' blocks all outbound traffic.")
+    allow_hosts: list[str] = Field(
+        default_factory=list, description="Only these hosts may be reached (needs a backend that supports it, e.g. remote)."
+    )
 
 
 class SandboxProfileSpec(Model):
@@ -555,10 +601,18 @@ class TriageSpec(Model):
     """Semantic trigger filter: ask a decision model about the event before starting a run."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field("{{ event }}", description="What the questions are about (expressions allowed).")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
+
+
+class TriggerRateLimit(Model):
+    """Fire at most ``max`` times per ``per``, overall or per ``key`` (e.g. per Slack user or channel)."""
+
+    max: int = Field(ge=1)
+    per: Duration
+    key: str | None = Field(None, description="Expression over `event`, e.g. '{{ event.user }}'; omitted, the whole trigger.")
 
 
 class TriggerSpec(Model):
@@ -576,6 +630,12 @@ class TriggerSpec(Model):
         "allow", description="'skip' does not fire while a run started by this trigger is still active."
     )
     filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
+    match: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured filters the connection's integration understands (Slack: channels, mentioned, "
+        "contains, regex, users, groups, threads, ...). See the integration's `trigger_filter_schema`.",
+    )
+    rate_limit: TriggerRateLimit | None = None
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
     triage: TriageSpec | None = None
@@ -711,6 +771,11 @@ GATEWAY_ONLY = frozenset({"base_url", "headers", "api_key", "endpoint", "url", "
 
 def credential_fields(values: dict[str, Any]) -> list[str]:
     return sorted(k for k in values if CREDENTIAL_NAME.search(k))
+
+
+def endpoint_fields(values: dict[str, Any]) -> list[str]:
+    """Settings that choose where a request (and its credentials) goes: ``host``, ``url``, ``api_url``, ..."""
+    return sorted(k for k in values if k in ("host", "url") or k.endswith(("_url", "_host")))
 
 
 class GatewaySpec(Model):
@@ -875,12 +940,45 @@ class EvalCase(Model):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Carried to results and eval sinks.")
 
 
-class EvalDatasetRef(Model):
+class EvalPlatformSpec(Model):
+    """An eval platform connected once by an admin (tenant-wide, ``eval-platforms:manage``).
+
+    Evals point at it with ``platform: <name>`` instead of repeating sink settings.
+    Credentials are secret names in the tenant's ``shared`` namespace.
+    """
+
+    description: str | None = None
+    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    config: dict[str, Any] = Field(
+        default_factory=dict, description="Sink settings; credentials as secret names (api_key_secret, secret_key_secret)."
+    )
+
+    @model_validator(mode="after")
+    def _no_clear_text_credentials(self) -> EvalPlatformSpec:
+        leaked = [k for k in credential_fields(self.config) if not k.endswith("_secret")]
+        if leaked:
+            raise ValueError(f"config keys {leaked} look like credentials: store them as secrets and use <name>_secret")
+        return self
+
+
+class _PlatformOrSink(Model):
+    sink: str | None = Field(None, description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    platform: str | None = Field(None, description="An EvalPlatform; its sink and settings apply, `config` overrides them.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
+
+    @model_validator(mode="after")
+    def _one_target(self) -> _PlatformOrSink:
+        if bool(self.sink) == bool(self.platform):
+            raise ValueError("set exactly one of `sink` or `platform`")
+        if self.platform and (endpoints := endpoint_fields(self.config)):
+            raise ValueError(f"{', '.join(endpoints)}: an eval platform's endpoints are set on the platform only")
+        return self
+
+
+class EvalDatasetRef(_PlatformOrSink):
     """Cases imported from an eval platform (``shoal.eval_sinks`` plugin) each time the eval runs."""
 
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
     name: str = Field(description="Dataset name on the platform.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
     limit: int | None = Field(None, ge=1)
 
 
@@ -935,11 +1033,8 @@ class Grader(Model):
         return self
 
 
-class EvalSinkRef(Model):
+class EvalSinkRef(_PlatformOrSink):
     """Export each finished eval run (traces and scores) to an eval platform."""
-
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
 
 
 class EvalGate(Model):
@@ -973,6 +1068,12 @@ class EvalSpec(Model):
     from_runs: EvalRunQuery | None = None
     graders: list[Grader] = Field(min_length=1)
     threshold: float = Field(0.8, ge=0, le=1, description="A case passes when its weighted score is at least this.")
+    require_success: bool | None = Field(
+        None,
+        description="A case whose workflow run did not succeed scores 0 and fails, whatever its graders say "
+        "(their scores are still recorded). Defaults to true for cases and false for from_runs, which picks "
+        "run statuses itself; set false to grade runs that are expected to fail.",
+    )
     concurrency: int = Field(5, ge=1)
     decision_provider: str | None = None
     gate: EvalGate = Field(default_factory=EvalGate)
@@ -1097,6 +1198,12 @@ class Eval(ResourceBase):
     plural: ClassVar[str] = "evals"
 
 
+class EvalPlatform(ResourceBase):
+    kind: Literal["EvalPlatform"] = "EvalPlatform"
+    spec: EvalPlatformSpec
+    plural: ClassVar[str] = "eval-platforms"
+
+
 class SkillSource(ResourceBase):
     kind: Literal["SkillSource"] = "SkillSource"
     spec: SkillSourceSpec
@@ -1124,6 +1231,7 @@ AnyResource = Annotated[
     | Blueprint
     | Eval
     | SkillSource
+    | EvalPlatform
     | CustomIntegration,
     Field(discriminator="kind"),
 ]
@@ -1132,7 +1240,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, CustomIntegration,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform, CustomIntegration,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

@@ -84,8 +84,8 @@ class Store:
 
     # ------------------------------------------------------------------ tenants
 
-    async def create_tenant(self, slug: str, name: str | None = None) -> t.Tenant:
-        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug)
+    async def create_tenant(self, slug: str, name: str | None = None, *, description: str | None = None) -> t.Tenant:
+        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug, description=description)
         try:
             async with self.session() as s:
                 s.add(tenant)
@@ -230,6 +230,13 @@ class Store:
             ).scalar_one()
             if count:
                 raise Conflict(f"namespace '{name}' still contains {count} resource(s)")
+            q = select(t.OIDCProvider.name).where(t.OIDCProvider.tenant_id == tenant_id, t.OIDCProvider.default_namespace == name)
+            if provider := (await s.execute(q.limit(1))).scalar_one_or_none():
+                raise Conflict(f"OIDC provider '{provider}' grants its default role in namespace '{name}'; change it first")
+            # What belongs to the namespace goes with it, so a namespace created later with the
+            # same name starts without the old members, secrets, personal credentials or webhook URLs.
+            for table in (t.RoleBinding, t.Secret, t.UserCredential, t.WebhookEndpoint):
+                await s.execute(delete(table).where(table.tenant_id == tenant_id, table.namespace == name))
             await s.execute(delete(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name))
 
     # ------------------------------------------------------------------ resources
@@ -616,6 +623,17 @@ class Store:
             raise NotFound(f"step '{step_id}' not found")
         return step
 
+    async def update_step_if_unchanged(self, step: t.StepRun, **values: Any) -> bool:
+        """Compare-and-set: update the step only if nobody saved it since it was read."""
+        values["updated_at"] = utcnow()
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.StepRun)
+                .where(t.StepRun.id == step.id, t.StepRun.updated_at == step.updated_at)
+                .values(**values)
+            )
+            return bool(result.rowcount)
+
     async def save_step(self, step: t.StepRun) -> None:
         step.updated_at = utcnow()
         async with self.session() as s:
@@ -717,6 +735,18 @@ class Store:
         except IntegrityError:
             return False
 
+    async def recent_deliveries(
+        self, tenant_id: str, namespace: str, trigger_name: str, *, since: datetime, status: str | None = None
+    ) -> list[t.TriggerDelivery]:
+        q = select(t.TriggerDelivery).where(
+            t.TriggerDelivery.tenant_id == tenant_id, t.TriggerDelivery.namespace == namespace,
+            t.TriggerDelivery.trigger_name == trigger_name, t.TriggerDelivery.created_at >= since,
+        )
+        if status:
+            q = q.where(t.TriggerDelivery.status == status)
+        async with self.session() as s:
+            return list((await s.execute(q.limit(10000))).scalars().all())
+
     async def update_delivery(self, delivery_id: str, **values: Any) -> None:
         async with self.session() as s:
             await s.execute(update(t.TriggerDelivery).where(t.TriggerDelivery.id == delivery_id).values(**values))
@@ -768,9 +798,14 @@ class Store:
             )
             return bool(result.rowcount)
 
-    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None) -> None:
+    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None, *, schedule: str | None = None) -> None:
+        """Set the next fire time; ``schedule`` records the cron and time zone it was computed from."""
         async with self.session() as s:
-            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(next_fire_at=next_fire_at))
+            values: dict[str, Any] = {"next_fire_at": next_fire_at}
+            if schedule is not None:
+                state = await s.get(t.TriggerState, state_id)
+                values["cursor"] = {**((state.cursor if state else None) or {}), "schedule": schedule}
+            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(**values))
 
     # ------------------------------------------------------------------ campaigns
 
@@ -860,11 +895,19 @@ class Store:
             return {status: int(n) for status, n in (await s.execute(q)).all()}
 
     async def campaign_cost(self, campaign_id: str) -> float:
+        """Spend so far: finished targets plus what their runs still in flight have used."""
         q = select(func.coalesce(func.sum(t.CampaignTarget.cost_usd), 0.0)).where(
             t.CampaignTarget.campaign_id == campaign_id
         )
+        running = select(t.Run.usage).where(
+            t.Run.campaign_id == campaign_id,
+            t.Run.campaign_target_id.is_not(None),
+            t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+        )
         async with self.session() as s:
-            return float((await s.execute(q)).scalar_one())
+            finished = float((await s.execute(q)).scalar_one())
+            in_flight = sum(float((usage or {}).get("cost_usd", 0) or 0) for usage in (await s.execute(running)).scalars())
+        return finished + in_flight
 
     async def runs_started_since(self, campaign_id: str, since: datetime) -> int:
         q = select(func.count()).select_from(t.CampaignTarget).where(
@@ -961,8 +1004,13 @@ class Store:
         since: datetime | None = None,
         until: datetime | None = None,
         before: int | None = None,
+        namespaces: Sequence[str] | None = None,
     ) -> Any:
         q = select(t.AuditEntry).where(t.AuditEntry.tenant_id == tenant_id)
+        if namespaces is not None:  # tenant-wide entries too, except those about other namespaces
+            e = t.AuditEntry
+            q = q.where(or_(e.namespace.in_(namespaces),
+                            and_(e.namespace.is_(None), or_(~e.action.startswith("namespace."), e.target.in_(namespaces)))))
         if action:
             q = q.where(t.AuditEntry.action.startswith(action))
         if actor:

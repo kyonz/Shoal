@@ -23,9 +23,9 @@ function ToAdmin({ plural }: { plural: string }) {
 }
 
 const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "cloud-identities", "evals"];
-const admin: CatalogPlural[] = ["gateways", "model-policies", "skill-sources", "custom-integrations"];
+const admin: CatalogPlural[] = ["gateways", "model-policies", "skill-sources", "eval-platforms", "custom-integrations"];
 
-/** Tenant-wide kinds edited in the admin console: /admin/gateways, /admin/model-policies, /admin/skill-sources, /admin/custom-integrations. */
+/** Tenant-wide kinds edited in the admin console: gateways, model policies, skill sources, eval platforms, custom integrations. */
 export const adminCatalogRoutes: RouteObject[] = admin.flatMap((plural): RouteObject[] => [
   { path: plural, element: <Lazy><List plural={plural} /></Lazy> },
   { path: `${plural}/new`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },

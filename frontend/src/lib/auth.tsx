@@ -10,7 +10,11 @@ interface AuthState {
   perms: PermissionSummary | undefined;
   loading: boolean;
   signedIn: boolean;
+  /** Signed in, but refused: a suspended tenant or a deactivated account (the server's problem detail). */
+  refused: string | null;
   can: (permission: string, namespace?: string) => boolean;
+  /** Instance roles: admins manage tenants and accounts, auditors read them. The admin token counts as an admin. */
+  instance: { admin: boolean; reader: boolean };
   signInWithToken: (token: string, tenant?: string | null) => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -61,13 +65,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       perms: summary,
       loading: me.isLoading || (hasTenant && perms.isLoading && !me.data?.is_system_admin),
       signedIn: !!me.data && !unauthorized,
+      refused: me.error instanceof ApiError && me.error.status === 403 ? me.error.detail : null,
       can: (p, ns) => can(summary, p, ns),
+      instance: instanceAccess(me.data),
       signInWithToken,
       signOut,
     };
   }, [me.data, me.error, me.isLoading, perms.data, perms.isLoading, hasTenant, signInWithToken, signOut]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+export function instanceAccess(me: Schemas["Me"] | undefined): { admin: boolean; reader: boolean } {
+  const admin = !!me && (me.is_system_admin || me.instance_role === "instance-admin");
+  return { admin, reader: admin || me?.instance_role === "instance-auditor" };
 }
 
 export function useAuth(): AuthState {

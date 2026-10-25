@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from shoal.core import clock
-from shoal.core.errors import Conflict, CredentialRequired, NotFound, StepError
+from shoal.core.errors import Conflict, CredentialRequired, Forbidden, NotFound, StepError
 from shoal.core.expressions import ExpressionError, referenced_secrets, render
 from shoal.core.ids import new_id
 from shoal.core.models import (
@@ -36,12 +36,15 @@ from shoal.store import tables as t
 from shoal.store.store import new_step_row
 
 if TYPE_CHECKING:
+    from shoal.auth.rbac import Principal
     from shoal.engine import Engine
 
 log = logging.getLogger(__name__)
 
 # Waits longer than this park run-scoped sandboxes (suspend) to free compute.
 SUSPEND_THRESHOLD = timedelta(minutes=10)
+# A run whose passes keep raising backs off (30s, 1m, 2m, ... up to an hour) and fails after this many.
+MAX_ADVANCE_ERRORS = 10
 _DONE_OK = (StepStatus.succeeded, StepStatus.skipped)
 
 
@@ -77,6 +80,8 @@ class Executor:
         labels: dict[str, str] | None = None,
         initiator: dict[str, Any] | None = None,
     ) -> t.Run:
+        if (await self.store.get_tenant(tenant_id)).status == "suspended":
+            raise Forbidden("this tenant is suspended; no new runs start until an instance admin resumes it")
         row = await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
         document = row.document
         if version is not None and version != row.version:
@@ -132,13 +137,10 @@ class Executor:
         heartbeat = asyncio.create_task(self._heartbeat(run_id, worker_id))
         try:
             await self._advance(run_id)
-        except Exception:
+        except Exception as exc:
             log.exception("error advancing run %s", run_id)
-            # Back off so a poison run does not spin; the error is visible in events.
             with contextlib.suppress(Exception):
-                run = await self.store.get_run(None, run_id)
-                await self.engine.events.emit(run, "run.error", {"message": "internal error while advancing"})
-                await self.store.update_run(run_id, next_wake_at=clock.now() + timedelta(seconds=30))
+                await self._advance_failed(run_id, exc)
         finally:
             heartbeat.cancel()
             await self.store.release_lease(run_id, worker_id)
@@ -157,8 +159,31 @@ class Executor:
         if RunStatus(run.status).terminal:
             await self.store.update_run(run.id, next_wake_at=None)
             return
+        failing = "_advance_errors" in (run.state or {})
         with use_namespace(run.namespace):
             await self._advance_run(run)
+        if failing:  # a pass went through: forget the earlier errors
+            fresh = await self.store.get_run(None, run.id)
+            await self.store.update_run(run.id, state={k: v for k, v in fresh.state.items() if k != "_advance_errors"})
+
+    async def _advance_failed(self, run_id: str, exc: Exception) -> None:
+        """Back off a run whose pass raised, so a poison run does not spin; fail it after repeated errors."""
+        run = await self.store.get_run(None, run_id)
+        if RunStatus(run.status).terminal:
+            return
+        errors = int((run.state or {}).get("_advance_errors", 0)) + 1
+        await self.store.update_run(run_id, state={**(run.state or {}), "_advance_errors": errors})
+        if errors >= MAX_ADVANCE_ERRORS:
+            message = f"internal error while advancing ({type(exc).__name__}), {errors} times in a row"
+            with use_namespace(run.namespace):
+                await self._finish(run, WorkflowSpec.model_validate(run.workflow), RunStatus.failed, {"message": message})
+            return
+        delay = timedelta(seconds=min(30 * 2 ** (errors - 1), 3600))
+        await self.engine.events.emit(
+            run, "run.error",
+            {"message": "internal error while advancing", "attempt": errors, "retry_in_seconds": delay.total_seconds()},
+        )
+        await self.store.update_run(run_id, next_wake_at=clock.now() + delay)
 
     async def _advance_run(self, run: t.Run) -> None:
         spec = WorkflowSpec.model_validate(run.workflow)
@@ -421,16 +446,6 @@ class Executor:
     # ------------------------------------------------------------------ finish
 
     async def _cancel(self, run: t.Run, spec: WorkflowSpec) -> None:
-        rows = await self.store.get_steps(run.id)
-        for row in rows:
-            if not StepStatus(row.status).terminal:
-                row.status = StepStatus.cancelled
-                row.finished_at = clock.now()
-                row.wake_at = None
-                await self.store.save_step(row)
-        for child in await self.store.list_runs(run.tenant_id, parent_run_id=run.id, limit=1000):
-            if not RunStatus(child.status).terminal:
-                await self.request_cancel(run.tenant_id, child.id)
         await self._finish(run, spec, RunStatus.cancelled, {"message": "cancelled"})
 
     async def request_cancel(self, tenant_id: str, run_id: str) -> t.Run:
@@ -441,22 +456,62 @@ class Executor:
         return run
 
     async def submit_approval(
-        self, tenant_id: str, run_id: str, step_id: str, *, approved: bool, by: str | None, comment: str | None = None
+        self,
+        tenant_id: str,
+        run_id: str,
+        step_id: str,
+        *,
+        approved: bool,
+        by: str | None,
+        comment: str | None = None,
+        decider: Principal | None = None,
     ) -> t.StepRun:
-        """Record a human decision for a step waiting on approval and wake the run."""
+        """Record a human decision for a step waiting on approval and wake the run.
+
+        When the step names ``approvers``, ``decider`` (the caller) must be one of them.
+        """
         run = await self.store.get_run(tenant_id, run_id)
         row = await self.store.get_step(run.id, step_id)
         if row.status != StepStatus.waiting or not row.state.get("requested"):
             raise Conflict(f"step '{step_id}' is not waiting for approval")
         if row.state.get("decision"):
             raise Conflict(f"step '{step_id}' was already decided")
+        approvers = next((s.get("approvers") or [] for s in run.workflow.get("steps", []) if s.get("id") == step_id), [])
+        if approvers and decider is not None and not await self.may_approve(tenant_id, approvers, decider):
+            raise Forbidden(
+                f"{decider.display_name or decider.actor} is not an approver of step '{step_id}'",
+                details={"approvers": approvers},
+            )
         decision = {"approved": approved, "by": by, "comment": comment, "at": clock.now().isoformat()}
-        row.state = {**row.state, "decision": decision}
-        await self.store.save_step(row)
+        if not await self.store.update_step_if_unchanged(row, state={**row.state, "decision": decision}):
+            raise Conflict(f"step '{step_id}' changed while deciding (decided by someone else?); reload and try again")
+        row = await self.store.get_step(run.id, step_id)
         await self.engine.events.emit(run, "approval.decided", decision, step_id=step_id)
         await self.store.wake_by_keys(tenant_id, [f"approval:{run.id}:{step_id}"])
         await self.store.wake_run(run.id)
         return row
+
+    async def may_approve(self, tenant_id: str, approvers: list[str], principal: Principal) -> bool:
+        """Whether ``principal`` is one of ``approvers``: emails or actors (``user:`` optional), or ``group:<name>``."""
+        if principal.is_system_admin:
+            return True
+        me = {v.lower() for v in (principal.actor, principal.email, principal.user_id) if v}
+        groups: set[str] | None = None
+        for entry in approvers:
+            kind, _, value = entry.strip().partition(":")
+            if kind == "group" and value:
+                if groups is None:
+                    groups = set()
+                    if principal.user_id:
+                        directory = self.engine.directory
+                        for group_id in await directory.groups_of(principal.user_id):
+                            group = await directory.get_group(tenant_id, group_id)
+                            groups |= {group.id.lower(), group.display_name.lower()}
+                if value.lower() in groups:
+                    return True
+            elif (value if kind == "user" and value else entry.strip()).lower() in me:
+                return True
+        return False
 
     async def _finish(
         self,
@@ -476,14 +531,17 @@ class Executor:
                 outputs = Redactor(list((secrets or {}).values()))(outputs)
             except ExpressionError as exc:
                 status, error = RunStatus.failed, {"message": f"failed to compute outputs: {exc}"}
-        if status != RunStatus.succeeded and rows:
-            # cancel steps that never got to run
-            for row in rows.values():
-                if row.status in (StepStatus.pending, StepStatus.waiting, StepStatus.running):
+        if status != RunStatus.succeeded:
+            # cancel steps that never got to run or were still waiting, and child runs still in flight
+            for row in (rows or {r.step_id: r for r in await self.store.get_steps(run.id)}).values():
+                if not StepStatus(row.status).terminal:
                     row.status = StepStatus.cancelled
                     row.finished_at = clock.now()
                     row.wake_at = None
                     await self.store.save_step(row)
+            for child in await self.store.list_runs(run.tenant_id, parent_run_id=run.id, limit=1000):
+                if not RunStatus(child.status).terminal:
+                    await self.request_cancel(run.tenant_id, child.id)
         now = clock.now()
         run.status, run.outputs, run.error, run.finished_at = status, outputs, error, now
         await self.store.update_run(

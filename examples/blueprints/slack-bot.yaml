@@ -1,0 +1,152 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: slack-bot
+  description: A Slack channel bot that answers in threads
+spec:
+  title: Slack bot
+  summary: Wire a Slack channel to an agent. When someone mentions the bot (or writes a matching message), it reads the
+    thread and answers there.
+  version: 1.0.0
+  status: featured
+  author: Shoal
+  tags:
+  - slack
+  - bot
+  - agent
+  categories:
+  - support
+  readme: |
+    1. Create a Slack connection and install the app (the connection page has the manifest and an Install button).
+    2. Invite the app to the channel, adopt this blueprint and pick the channel.
+    3. Mention the bot in the channel. It reacts with :eyes:, reads the thread, answers in it and lets the
+       person who asked rate the answer with buttons.
+
+    Tune who and what it answers in the trigger's Slack filters (mentions, words, a regex, people or groups,
+    threads) and its rate limit. Change the agent's instructions to give it a personality and knowledge.
+  params:
+    slack:
+      type: connection
+      integration: slack
+      description: Slack connection (the app must be in the channel).
+    channel:
+      type: string
+      description: 'Channel to wire, e.g. #help (or a channel id).'
+    instructions:
+      type: string
+      default: You are a friendly, concise teammate. Answer from the conversation; say so when you are not sure.
+      description: How the bot should behave.
+  resources:
+  - kind: Agent
+    metadata:
+      name: '{{ prefix }}slack-bot'
+    spec:
+      description: Answers questions asked in Slack.
+      provider: anthropic
+      model: claude-sonnet-5-5
+      instructions: '{{ params.instructions }}'
+      tools: []
+      limits:
+        max_turns: 10
+        timeout: 5m
+        budget_usd: 1
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}slack-answer'
+      description: Read a Slack thread, answer in it, and ask whether the answer helped.
+    spec:
+      inputs:
+        channel:
+          type: string
+        ts:
+          type: string
+          description: The message to answer (event.reply_ts keeps threads together).
+        question:
+          type: string
+      connections:
+        slack: '{{ params.slack }}'
+      defaults:
+        agent: '{{ prefix }}slack-bot'
+      steps:
+      - id: ack
+        type: action
+        action: slack.add_reaction
+        with:
+          channel: '{{ inputs.channel }}'
+          ts: '{{ inputs.ts }}'
+          name: eyes
+      - id: thread
+        type: action
+        action: slack.get_conversation
+        with:
+          channel: '{{ inputs.channel }}'
+          thread_ts: '{{ inputs.ts }}'
+          limit: 30
+      - id: think
+        type: agent
+        prompt: |
+          A Slack conversation, oldest first:
+
+          {{ steps.thread.output.transcript }}
+
+          Answer the latest question ({{ inputs.question }}) in Slack mrkdwn, in a few sentences.
+        outputs:
+          answer:
+            type: string
+      - id: reply
+        type: action
+        action: slack.reply
+        with:
+          channel: '{{ inputs.channel }}'
+          ts: '{{ inputs.ts }}'
+          text: '{{ steps.think.output.answer }}'
+          signal: feedback
+          after_click: disable
+          blocks:
+          - type: section
+            text:
+              type: mrkdwn
+              text: '{{ steps.think.output.answer }}'
+          - type: actions
+            elements:
+            - type: button
+              action_id: helpful
+              text:
+                type: plain_text
+                text: Helpful
+              value: 'yes'
+            - type: button
+              action_id: not_helpful
+              text:
+                type: plain_text
+                text: Not helpful
+              value: 'no'
+      - id: feedback
+        type: wait
+        signal:
+          name: feedback
+        max_wait: 1d
+        on_timeout: continue
+      outputs:
+        answer: '{{ steps.think.output.answer }}'
+        helpful: '{{ steps.feedback.output.payload.value if steps.feedback.output.received else none }}'
+  - kind: Trigger
+    metadata:
+      name: '{{ prefix }}slack-bot'
+    spec:
+      workflow: '{{ prefix }}slack-answer'
+      connection: '{{ params.slack }}'
+      event: message
+      match:
+        channels:
+        - '{{ params.channel }}'
+        mentioned: true
+      rate_limit:
+        max: 5
+        per: 1m
+        key: '{{ event.user }}'
+      inputs:
+        channel: '{{ event.channel }}'
+        ts: '{{ event.reply_ts }}'
+        question: '{{ event.command_text }}'
+      dedupe_key: '{{ event.event_id }}'

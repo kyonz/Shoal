@@ -8,7 +8,7 @@ import { plural } from "@/lib/format";
 import { Badge, Button, Card, EmptyState, ErrorNotice, Input, Page, PageHeader, Skeleton } from "@/components/ui";
 import { IntegrationMark } from "./shared";
 
-const BUILTIN = new Set(["github", "jira", "webhook", "schedule", "http"]);
+const BUILTIN = new Set(["github", "jira", "slack", "webhook", "schedule", "http"]);
 
 export default function Integrations() {
   const ns = useNs();

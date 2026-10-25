@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 import httpx
 import yaml
@@ -106,9 +107,13 @@ def _add_usage(total: dict[str, float], usage: dict[str, float]) -> dict[str, fl
 
 
 def _check_path(path: str) -> str:
-    if not isinstance(path, str) or not path.startswith("/v1/") or ".." in path:
+    if not isinstance(path, str):
         raise ValueError("path must be an API path starting with /v1/")
-    if path.startswith(BLOCKED_PREFIXES):
+    # Check the path as the router will see it: it decodes %-escapes, so /v1/%61ssistant is /v1/assistant.
+    decoded = unquote(path)
+    if not decoded.startswith("/v1/") or ".." in decoded or "//" in decoded or "%" in decoded:
+        raise ValueError("path must be an API path starting with /v1/")
+    if decoded.startswith(BLOCKED_PREFIXES):
         raise ValueError(f"{path} is not available to the assistant")
     return path
 
@@ -131,13 +136,13 @@ class Assistant:
     """One chat turn: runs the model and tools until it answers or needs approval."""
 
     def __init__(self, model: ModelClient, api: httpx.AsyncClient, openapi: dict[str, Any], *,
-                 namespace: str, actor: str, page: str | None = None, max_turns: int = 16,
+                 namespace: str, actor: str, page: str | None = None, context: str | None = None, max_turns: int = 16,
                  max_tokens: int = 16000, auto_approve: bool = False):
         self.model = model
         self.api = api
         self.openapi = openapi
         self.namespace = namespace
-        self.system = f"{SYSTEM}\n# Context\n\n{context_note(namespace, page, actor)}\n"
+        self.system = f"{SYSTEM}\n# Context\n\n{context_note(namespace, page, actor, context)}\n"
         self.max_turns = max_turns
         self.max_tokens = max_tokens
         self.auto_approve = auto_approve

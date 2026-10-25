@@ -10,7 +10,7 @@ module and pytest runs the checks::
 
 For a service in any language, run the remote checks against it::
 
-    python -m shoal.sdk.testing.contract https://linear-integration.internal --token $TOKEN
+    shoal integrations check https://linear-integration.internal --token $TOKEN
 """
 
 from __future__ import annotations
@@ -122,6 +122,11 @@ def check_integration(integration: Integration | type[Integration]) -> list[str]
     for definition in cls.resources.values():
         if not inspect.iscoroutinefunction(getattr(cls, definition.method, None)):
             problems.append(f"resource {definition.name!r} ({definition.method}) must be async")
+    if cls.parse_webhook is not Integration.parse_webhook and cls.verify_webhook is Integration.verify_webhook:
+        problems.append(
+            "parse_webhook is implemented but verify_webhook is not: every delivery would be accepted "
+            "(verify a signature or token, and return False when no secret is configured)"
+        )
     try:
         catalog = cls.catalog()
     except Exception as exc:  # schema generation failures are the usual cause

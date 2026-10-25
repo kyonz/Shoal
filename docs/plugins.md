@@ -29,6 +29,7 @@ resource that selects the plugin (a SandboxProfile's `config`, a Gateway's `conf
 | `shoal.agent_runtimes` | `AgentRuntime` | Runs an agent: tool loop, CLI agent, remote agent | | Any A2A agent via `a2a` |
 | `shoal.credentials` | `CredentialProvider` | Issues short-lived cloud credentials for a CloudIdentity | | |
 | `shoal.orchestrators` | `Orchestrator` | Drives runs: the built-in Postgres executor, or Temporal | | |
+| `shoal.skill_sources` | `SkillSource` | Marketplaces that skills are imported from | `check_skill_source` | `shoal.skill-source/v1`, served for any source by `shoal.sdk.skill_server` |
 
 `check_entry_point(group, name)` checks that an installed package exposes the plugin in the right
 group and that it subclasses the right base.
@@ -73,6 +74,8 @@ the lookup order with `SHOAL_SECRET_PROVIDERS`.
 
 Implement `export_eval`, `export_trace` and `import_dataset`, and describe the settings in
 `config_schema` (JSON Schema). Use `self.client(base_url)` for HTTP so tests can mock it.
+Optionally implement `test_connection` (a cheap call returning `{"ok": bool, "detail": ...}`)
+and `list_datasets` (names), which back the eval platform test and dataset picker.
 Braintrust and Langfuse are the reference implementations.
 
 ## Decision providers (`shoal.decision_providers`)

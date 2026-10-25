@@ -35,7 +35,7 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 secrets_app = typer.Typer(help="Manage namespace secrets (values are write-only).", no_args_is_help=True)
-tenants_app = typer.Typer(help="Create and list tenants (needs the system admin token).", no_args_is_help=True)
+tenants_app = typer.Typer(help="Create and manage tenants (instance admins or the admin token).", no_args_is_help=True)
 eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_help=True)
 integrations_app = typer.Typer(
     help="Build integrations with the open SDK, and register them for your organisation.", no_args_is_help=True
@@ -52,6 +52,12 @@ app.add_typer(integrations_app, name="integrations")
 app.add_typer(federation_app, name="federation")
 app.add_typer(skills_app, name="skills")
 app.add_typer(db_app, name="db")
+triggers_app = typer.Typer(help="Fire triggers by hand.", no_args_is_help=True)
+campaigns_app = typer.Typer(help="Launch campaigns and follow, pause, resume, cancel or retry their runs.", no_args_is_help=True)
+blueprints_app = typer.Typer(help="Adopt blueprints from the tenant's catalogue into a namespace.", no_args_is_help=True)
+app.add_typer(triggers_app, name="triggers")
+app.add_typer(campaigns_app, name="campaigns")
+app.add_typer(blueprints_app, name="blueprints")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -362,7 +368,16 @@ def delete(
         else:
             path = _resource_path(kind_name, plural, ns, name)
         client.request("DELETE", path)
-    console.print(f"{plural.rstrip('s')}/{escape(name)} deleted")
+    console.print(f"{_singular(plural)}/{escape(name)} deleted")
+
+
+def _singular(plural: str) -> str:
+    """'model-policies' -> 'model-policy', 'workflows' -> 'workflow'."""
+    if plural == "ns":
+        return "namespace"
+    if plural.endswith("ies"):
+        return plural[:-3] + "y"
+    return plural.removesuffix("s")
 
 
 # --------------------------------------------------------------------------- runs
@@ -435,6 +450,8 @@ def _follow(client: Client, run_id: str, *, show: bool, step: str | None = None)
             break
         if show:
             print_event(data)
+        if data.get("type") == "approval.requested" and data.get("step_id"):
+            err.print(f"waiting for approval: shoal approve {run_id} {escape(data['step_id'])} (or --reject)")
     final = client.get(f"/v1/runs/{quote(run_id)}")
     err.print(f"run {final['id']} {styled(final['status'])}")
     return final
@@ -486,6 +503,29 @@ def cancel(ctx: typer.Context, run_id: Annotated[str, typer.Argument(help="Run i
 
 
 @app.command()
+def approve(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id.")],
+    step: Annotated[str | None, typer.Argument(help="Approval step id (default: the run's only waiting approval).")] = None,
+    reject: Annotated[bool, typer.Option("--reject", help="Reject instead of approving.")] = False,
+    comment: Annotated[str | None, typer.Option("--comment", "-m", help="Comment recorded with the decision.")] = None,
+) -> None:
+    """Approve (or --reject) a run's approval step."""
+    with api(ctx) as client:
+        if step is None:
+            run = client.get(f"/v1/runs/{quote(run_id)}")
+            waiting = [s["step_id"] for s in run.get("steps") or [] if s["type"] == "approval" and s["status"] == "waiting"]
+            if len(waiting) != 1:
+                found = ", ".join(waiting) if waiting else "none"
+                err.print(f"[red]error:[/red] name the approval step; waiting approvals in {escape(run_id)}: {escape(found)}")
+                raise typer.Exit(2)
+            step = waiting[0]
+        client.request("POST", f"/v1/runs/{quote(run_id)}/steps/{quote(step)}/approval",
+                       json={"approved": not reject, "comment": comment})
+    console.print(f"step {escape(step)} {'rejected' if reject else 'approved'} (run {escape(run_id)})")
+
+
+@app.command()
 def signal(
     ctx: typer.Context,
     run_id: Annotated[str, typer.Argument(help="Run id.")],
@@ -502,6 +542,206 @@ def signal(
     with api(ctx) as client:
         result = client.request("POST", f"/v1/runs/{quote(run_id)}/signals/{quote(name)}", json={"payload": payload})
     console.print(f"signal {result['id']} sent to run {run_id}")
+
+
+@app.command()
+def rerun(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id to start again, with the same inputs and workflow version.")],
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Stream the new run's events until it finishes.")] = False,
+    wait: Annotated[bool, typer.Option("--wait", "-w", help="Wait for the new run to finish without streaming.")] = False,
+) -> None:
+    """Start a run again with the same inputs. With --follow or --wait, exit 1 unless it succeeds."""
+    with api(ctx) as client:
+        started = client.request("POST", f"/v1/runs/{quote(run_id)}/rerun")
+        err.print(f"run [bold]{started['id']}[/bold] started ({escape(started['workflow_name'])}@v{started['workflow_version']}, rerun of {escape(run_id)})")
+        if not (follow or wait):
+            return
+        final = _follow(client, started["id"], show=follow)
+        if final.get("outputs"):
+            console.print_json(json.dumps(final["outputs"], default=str))
+    raise typer.Exit(0 if final["status"] == "succeeded" else 1)
+
+
+def _parse_pairs(pairs: list[str], what: str) -> dict[str, Any]:
+    """key=value pairs; values parse as JSON when they can."""
+    values: dict[str, Any] = {}
+    for pair in pairs:
+        key, sep, raw = pair.partition("=")
+        if not sep or not key:
+            err.print(f"[red]error:[/red] {what} must be key=value, got '{escape(pair)}'")
+            raise typer.Exit(2)
+        try:
+            values[key] = json.loads(raw)
+        except ValueError:
+            values[key] = raw
+    return values
+
+
+# --------------------------------------------------------------------------- triggers
+
+
+@triggers_app.command("fire")
+def triggers_fire(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Trigger name.")],
+    data: Annotated[str | None, typer.Option("--data", "-d", help="Event payload as JSON ({{ event }} in the trigger).")] = None,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Fire a trigger now, as if its event had arrived."""
+    try:
+        payload = json.loads(data) if data else {}
+    except ValueError as exc:
+        err.print(f"[red]error:[/red] --data must be JSON: {escape(str(exc))}")
+        raise typer.Exit(2) from exc
+    if not isinstance(payload, dict):
+        err.print("[red]error:[/red] --data must be a JSON object")
+        raise typer.Exit(2)
+    with api(ctx, namespace) as client:
+        result = client.request("POST", f"/v1/namespaces/{quote(client.target.namespace)}/triggers/{quote(name)}/fire", json={"data": payload})
+    if output is not Format.table:
+        emit(result, output, name=lambda r: r.get("run_id") or r.get("campaign_id") or r["trigger"])
+        return
+    started = result.get("run_id") or result.get("campaign_id")
+    detail = f": started {started}" if started else f" ({result['reason']})" if result.get("reason") else ""
+    console.print(f"trigger {escape(name)} {styled(result['status'])}{escape(detail)}")
+    if result["status"] not in ("fired", "skipped", "duplicate"):
+        raise typer.Exit(1)
+
+
+# --------------------------------------------------------------------------- campaigns
+
+CAMPAIGN_COLUMNS = [
+    ("ID", lambda c: c["id"]),
+    ("NAME", lambda c: c["name"]),
+    ("STATUS", lambda c: styled(c["status"])),
+    ("PROGRESS", lambda c: _progress(c["stats"])),
+    ("AGE", lambda c: age(c["created_at"])),
+    ("STARTED BY", lambda c: c.get("created_by")),
+]
+
+
+def _progress(stats: dict[str, Any]) -> str:
+    total = stats.get("total") or 0
+    done = sum(stats.get(k) or 0 for k in ("succeeded", "failed", "skipped", "cancelled"))
+    failed = stats.get("failed") or 0
+    return f"{done}/{total}" + (f" ({failed} failed)" if failed else "")
+
+
+@campaigns_app.command("launch")
+def campaigns_launch(
+    ctx: typer.Context,
+    campaign: Annotated[str, typer.Argument(help="Campaign resource name.")],
+    inputs: Annotated[list[str] | None, typer.Option("--input", "-i", help="Extra or override workflow input key=value.")] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Name for this campaign run.")] = None,
+    paused: Annotated[bool, typer.Option("--paused", help="Create the run without starting it ('campaigns resume' starts it).")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Launch a campaign: one workflow run per target."""
+    body = {"name": name, "inputs": _parse_pairs(inputs or [], "--input"), "start": not paused}
+    with api(ctx, namespace) as client:
+        row = client.request("POST", f"/v1/namespaces/{quote(client.target.namespace)}/campaigns/{quote(campaign)}/launch", json=body)
+    if output is not Format.table:
+        emit(row, output, name=lambda c: c["id"])
+        return
+    console.print(f"campaign run [bold]{row['id']}[/bold] {styled(row['status'])} ({escape(campaign)})")
+
+
+@campaigns_app.command("list")
+def campaigns_list(
+    ctx: typer.Context,
+    status: Annotated[str | None, typer.Option(help="Only campaign runs with this status.")] = None,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """List campaign runs in a namespace."""
+    with api(ctx, namespace) as client:
+        rows = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/campaign-runs", status=status)
+    emit(rows, output, CAMPAIGN_COLUMNS, name=lambda c: c["id"])
+
+
+@campaigns_app.command("get")
+def campaigns_get(
+    ctx: typer.Context,
+    campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")],
+    output: Output = Format.table,
+) -> None:
+    """Show a campaign run and its progress."""
+    with api(ctx) as client:
+        row = client.get(f"/v1/campaign-runs/{quote(campaign_id)}")
+    if output is not Format.table:
+        emit(row, output, name=lambda c: c["id"])
+        return
+    console.print(f"[bold]{row['id']}[/bold]  {escape(row['name'])}  {styled(row['status'])}")
+    console.print(f"namespace {escape(row['namespace'])} · started by {escape(row.get('created_by') or '-')} · {age(row['created_at'])} ago")
+    stats = row["stats"]
+    counts = ", ".join(f"{k} {stats[k]}" for k in ("pending", "running", "succeeded", "failed", "skipped", "cancelled") if stats.get(k))
+    console.print(f"progress {_progress(row['stats'])}" + (f" · {escape(counts)}" if counts else ""))
+    if row.get("error"):
+        console.print(f"[red]error:[/red] {escape(json.dumps(row['error'], default=str))}")
+
+
+def _campaign_operation(ctx: typer.Context, campaign_id: str, operation: str) -> None:
+    with api(ctx) as client:
+        row = client.request("POST", f"/v1/campaign-runs/{quote(campaign_id)}/{operation}")
+    console.print(f"campaign run {row['id']} {styled(row['status'])}")
+
+
+@campaigns_app.command("pause")
+def campaigns_pause(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Stop starting new targets; runs in flight carry on."""
+    _campaign_operation(ctx, campaign_id, "pause")
+
+
+@campaigns_app.command("resume")
+def campaigns_resume(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Start (or carry on) a paused campaign run."""
+    _campaign_operation(ctx, campaign_id, "resume")
+
+
+@campaigns_app.command("cancel")
+def campaigns_cancel(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Cancel a campaign run and its runs in flight."""
+    _campaign_operation(ctx, campaign_id, "cancel")
+
+
+@campaigns_app.command("retry")
+def campaigns_retry(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Run the failed targets again."""
+    _campaign_operation(ctx, campaign_id, "retry")
+
+
+# --------------------------------------------------------------------------- blueprints
+
+
+@blueprints_app.command("adopt")
+def blueprints_adopt(
+    ctx: typer.Context,
+    blueprint: Annotated[str, typer.Argument(help="Blueprint name in the tenant's catalogue.")],
+    params: Annotated[list[str] | None, typer.Option("--param", "-p", help="Blueprint parameter key=value.")] = None,
+    prefix: Annotated[str, typer.Option(help="Prefix for the names of the resources it creates.")] = "",
+    version: Annotated[str | None, typer.Option("--version", help="Blueprint version (default: the current one).")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be created; write nothing.")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Adopt a blueprint: create its workflows, agents, triggers and other resources in a namespace."""
+    body = {"params": _parse_pairs(params or [], "--param"), "prefix": prefix, "version": version, "dry_run": dry_run}
+    with api(ctx, namespace) as client:
+        ns = client.target.namespace
+        result = client.request("POST", f"/v1/namespaces/{quote(ns)}/blueprints/{quote(blueprint)}/adopt", json=body)
+    if output is not Format.table:
+        emit(result, output)
+        return
+    suffix = " (dry run)" if dry_run else ""
+    for r in result["resources"]:
+        console.print(f"{r['kind'].lower()}/{escape(r['name'])} ({escape(ns)}) {r.get('outcome') or 'adopted'}{suffix}")
+    for r in result.get("removed") or []:
+        console.print(f"{r['kind'].lower()}/{escape(r['name'])} ({escape(ns)}) removed{suffix}")
+    if result.get("adoption"):
+        console.print(f"adoption {result['adoption']['id']} of {escape(blueprint)} v{escape(result['adoption']['blueprint_version'])}")
 
 
 # --------------------------------------------------------------------------- secrets
@@ -579,7 +819,7 @@ def credentials_connect(ctx: typer.Context, connection: Annotated[str, typer.Arg
     namespace, _, name = connection.rpartition("/")
     with api(ctx) as client:
         result = client.request("POST", f"/v1/me/credentials/{quote(namespace or 'default')}/{quote(name)}/oauth")
-    console.print(f"Open this URL to connect {connection}:\n{result['authorize_url']}")
+    console.print(f"Open this URL in a browser signed in to Shoal as you, to connect {connection}:\n{result['authorize_url']}")
 
 
 @credentials_app.command("remove")
@@ -671,6 +911,112 @@ def eval_get(ctx: typer.Context, eval_run_id: Annotated[str, typer.Argument(help
         _print_eval(row)
     else:
         emit(row, output, name=lambda r: r["id"])
+
+
+def _pct(value: Any) -> str | None:
+    return None if value is None else f"{value:.0%}"
+
+
+def _score(value: Any) -> str | None:
+    return None if value is None else f"{value:.3f}"
+
+
+def _signed(value: Any) -> str | None:
+    return None if value is None else f"{value:+.3f}"
+
+
+EVAL_RUN_COLUMNS = [
+    ("ID", lambda r: r["id"]),
+    ("EVAL", lambda r: r["eval_name"]),
+    ("STATUS", lambda r: styled(r["status"])),
+    ("WORKFLOW", lambda r: f"{len(r['variants'])} variants" if len(r.get("variants") or []) > 1 else f"v{r['workflow_version']}"),
+    ("SCORE", lambda r: _score((r.get("summary") or {}).get("score"))),
+    ("PASS RATE", lambda r: _pct((r.get("summary") or {}).get("pass_rate"))),
+    ("GATE", lambda r: None if "passed" not in (r.get("gate") or {}) else ("passed" if r["gate"]["passed"] else "failed")),
+    ("AGE", lambda r: age(r["created_at"])),
+]
+
+
+@eval_app.command("list")
+def eval_list(
+    ctx: typer.Context,
+    name: Annotated[str | None, typer.Argument(help="Only runs of this eval.")] = None,
+    status: Annotated[str | None, typer.Option(help="Comma-separated statuses, e.g. running,completed.")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=200)] = 20,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """List eval runs, newest first."""
+    params = {"eval": name, "status": status, "limit": limit}
+    with api(ctx, namespace) as client:
+        page = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/eval-runs", **params)
+    emit(page["items"], output, EVAL_RUN_COLUMNS, name=lambda r: r["id"])
+
+
+@eval_app.command("cancel")
+def eval_cancel(ctx: typer.Context, eval_run_id: Annotated[str, typer.Argument(help="Eval run id.")]) -> None:
+    """Cancel a running eval run and the workflow runs it started."""
+    with api(ctx) as client:
+        row = client.request("POST", f"/v1/eval-runs/{quote(eval_run_id)}/cancel")
+    console.print(f"eval run {escape(row['id'])} {styled(row['status'])}")
+
+
+CASE_DIFF_COLUMNS = [
+    ("CASE", lambda c: c["case"]),
+    ("BASELINE", lambda c: _score(c["baseline"])),
+    ("CANDIDATE", lambda c: _score(c["candidate"])),
+    ("DELTA", lambda c: _signed(c["delta"])),
+]
+
+
+@eval_app.command("compare")
+def eval_compare(
+    ctx: typer.Context,
+    eval_run_id: Annotated[str, typer.Argument(help="Candidate eval run id.")],
+    baseline: Annotated[str, typer.Argument(help="Baseline eval run id.")],
+    output: Output = Format.table,
+) -> None:
+    """Case-by-case diff of an eval run against a baseline run."""
+    with api(ctx) as client:
+        diff = client.get(f"/v1/eval-runs/{quote(eval_run_id)}/compare", baseline=baseline)
+    if output is not Format.table:
+        emit(diff, output)
+        return
+    for variant, d in (diff.get("variants") or {}).items():
+        b, c = d.get("baseline") or {}, d.get("candidate") or {}
+        console.print(f"[bold]{escape(variant)}[/bold]  v{b.get('workflow_version')} {_score(b.get('score'))} -> "
+                      f"v{c.get('workflow_version')} {_score(c.get('score'))}  delta {_signed(d.get('delta'))} "
+                      f"over {d.get('shared_cases')} shared cases")
+        if d.get("regressions"):
+            console.print(f"  [red]regressed:[/red] {escape(', '.join(d['regressions']))}")
+        if d.get("improvements"):
+            console.print(f"  [green]improved:[/green] {escape(', '.join(d['improvements']))}")
+        changed = [x for x in d.get("cases") or [] if x["delta"]]
+        if changed:
+            emit(changed, Format.table, CASE_DIFF_COLUMNS)
+
+
+SCORE_COLUMNS = [
+    ("VERSION", lambda v: f"v{v['workflow_version']}"),
+    ("RUNS", lambda v: v["runs"]),
+    ("MEAN SCORE", lambda v: _score(v["mean_score"])),
+    ("LATEST", lambda v: _score((v.get("latest") or {}).get("score"))),
+    ("PASS RATE", lambda v: _pct((v.get("latest") or {}).get("pass_rate"))),
+    ("LATEST RUN", lambda v: (v.get("latest") or {}).get("eval_run_id")),
+]
+
+
+@eval_app.command("scores")
+def eval_scores(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Eval name.")],
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Scores per workflow version across completed runs of an eval."""
+    with api(ctx, namespace) as client:
+        data = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/evals/{quote(name)}/scores")
+    emit(data["versions"], output, SCORE_COLUMNS, name=lambda v: str(v["workflow_version"]))
 
 
 def _print_eval(row: dict[str, Any]) -> None:
@@ -778,6 +1124,25 @@ def _print_custom_status(name: str, status: dict[str, Any]) -> None:
         f"registered [bold]{escape(name)}[/bold] ({escape(str(status.get('title')))}): {status.get('actions', 0)} actions, "
         f"{status.get('events', 0)} events; connections at {' and '.join(status.get('connection_scopes') or [])} level"
     )
+@integrations_app.command("check")
+def integrations_check(
+    url: Annotated[str, typer.Argument(help="Base URL of a running remote integration service.")],
+    token: Annotated[
+        str | None, typer.Option("--token", envvar="SHOAL_INTEGRATION_TOKEN", help="The service's bearer token.")
+    ] = None,
+) -> None:
+    """Run the integration contract checks against a remote integration service (any language)."""
+    import asyncio
+
+    from shoal.sdk.testing.contract import check_remote_service
+
+    problems = asyncio.run(check_remote_service(url, token))
+    for problem in problems:
+        err.print(f"[red]FAIL[/red] {escape(problem)}")
+    if problems:
+        err.print(f"{len(problems)} problem(s)")
+        raise typer.Exit(1)
+    console.print(f"{escape(url)} passes the integration contract")
 
 
 # --------------------------------------------------------------------------- tenants
@@ -807,7 +1172,37 @@ def tenants_list(ctx: typer.Context, output: Output = Format.table) -> None:
     """List tenants."""
     with api(ctx) as client:
         emit(client.get("/v1/tenants"), output, [("SLUG", lambda t: t["slug"]), ("NAME", lambda t: t.get("name")),
+                                                  ("STATUS", lambda t: t.get("status", "active")),
                                                   ("AGE", lambda t: age(t.get("created_at")))], name=lambda t: t["slug"])
+
+
+@tenants_app.command("suspend")
+def tenants_suspend(ctx: typer.Context, slug: Annotated[str, typer.Argument()]) -> None:
+    """Suspend a tenant: its members are locked out and no new runs start (data is kept)."""
+    with api(ctx) as client:
+        client.request("PATCH", f"/v1/tenants/{slug}", json={"status": "suspended"})
+    console.print(f"tenant [bold]{escape(slug)}[/bold] suspended")
+
+
+@tenants_app.command("resume")
+def tenants_resume(ctx: typer.Context, slug: Annotated[str, typer.Argument()]) -> None:
+    """Resume a suspended tenant."""
+    with api(ctx) as client:
+        client.request("PATCH", f"/v1/tenants/{slug}", json={"status": "active"})
+    console.print(f"tenant [bold]{escape(slug)}[/bold] resumed")
+
+
+@tenants_app.command("add-member")
+def tenants_add_member(
+    ctx: typer.Context,
+    slug: Annotated[str, typer.Argument()],
+    email: Annotated[str, typer.Argument(help="The person's email; they are invited if they have not signed in yet.")],
+    role: Annotated[str, typer.Option(help="Role in that tenant, granted tenant-wide.")] = "tenant-admin",
+) -> None:
+    """Give someone a role in a tenant."""
+    with api(ctx) as client:
+        member = client.request("POST", f"/v1/tenants/{slug}/members", json={"email": email, "role": role})
+    console.print(f"{escape(member['username'])} now has {', '.join(member['roles'])} in [bold]{escape(slug)}[/bold]")
 
 
 # --------------------------------------------------------------------------- database

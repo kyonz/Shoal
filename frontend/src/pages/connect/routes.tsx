@@ -13,6 +13,8 @@ const TriggerEditor = lazy(() => import("./TriggerEditor"));
 const Campaigns = lazy(() => import("./Campaigns"));
 const CampaignEditor = lazy(() => import("./CampaignEditor"));
 const CampaignRun = lazy(() => import("./CampaignRun"));
+const SlackBuilder = lazy(() => import("./SlackBuilder"));
+const AppSetup = lazy(() => import("./AppSetup"));
 
 /** The shared namespace's connections and secrets are organisation configuration: they live in the admin console. */
 function NamespaceOnly({ children }: { children: ReactNode }) {
@@ -29,7 +31,9 @@ export const connectRoutes: RouteObject[] = [
   { path: "connections", element: <NamespaceOnly><Connections /></NamespaceOnly> },
   { path: "connections/new", element: <NamespaceOnly><ConnectionEditor key="new" /></NamespaceOnly> },
   { path: "connections/:name", element: <NamespaceOnly><ConnectionEditor /></NamespaceOnly> },
+  { path: "connections/:name/setup", element: <NamespaceOnly><AppSetup /></NamespaceOnly> },
   { path: "secrets", element: <NamespaceOnly><Secrets /></NamespaceOnly> },
+  { path: "slack/builder", element: <Lazy><SlackBuilder /></Lazy> },
   { path: "triggers", element: <Lazy><Triggers /></Lazy> },
   { path: "triggers/new", element: <Lazy><TriggerEditor key="new" /></Lazy> },
   { path: "triggers/:name", element: <Lazy><TriggerEditor /></Lazy> },

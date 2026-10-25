@@ -245,6 +245,10 @@ async def test_oidc_rejects_bad_tokens(idp_world):
     engine, tenant, idp = idp_world
     with pytest.raises(Forbidden, match="domain"):
         await sign_in(engine, tenant, idp, {"sub": "x", "email": "eve@evil.test"})
+    with pytest.raises(Forbidden, match="domain"):  # an address the provider has not verified proves nothing
+        await sign_in(engine, tenant, idp, {"sub": "y", "email": "eve@acme.test", "email_verified": False})
+    denied = await engine.store.list_audit(tenant.id, action="auth.login", outcome="denied")
+    assert [e.actor for e in denied] == ["oidc:eve@acme.test", "oidc:eve@evil.test"]
     url = await engine.oidc.begin(tenant.id, "okta", "https://shoal.test/cb")
     state = parse_qs(urlparse(url).query)["state"][0]
     idp.codes["c1"] = {"sub": "x", "email": "eve@acme.test", "nonce": "wrong"}
