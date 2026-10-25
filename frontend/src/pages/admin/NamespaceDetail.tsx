@@ -31,6 +31,7 @@ import {
   useConfirm,
 } from "@/components/ui";
 import { adminKeys, Avatar, isGroupKind, KV, RoleSelect, type Subject, type SubjectKind, subjectKindLabel, SubjectPicker, useAction, useRoles } from "./shared";
+import { actorName } from "@/lib/actor";
 
 export default function NamespaceDetail() {
   const { name = "" } = useParams();
@@ -255,7 +256,7 @@ export default function NamespaceDetail() {
               {ns.data && (
                 <div className="rounded-lg border border-border px-3 py-1">
                   <KV label="Created">{dateTime(ns.data.created_at)}</KV>
-                  <KV label="Created by">{ns.data.created_by ?? "—"}</KV>
+                  <KV label="Created by">{actorName(ns.data.created_by, "—")}</KV>
                 </div>
               )}
               {can("namespaces:create") && (
@@ -276,7 +277,7 @@ export default function NamespaceDetail() {
                   <div className="text-muted">
                     {protectedNs
                       ? "The default and shared namespaces cannot be deleted."
-                      : "Removes everything in it: workflows, agents, connections, secrets and run history."}
+                      : "Only an empty namespace can be deleted: remove its resources first. Its members, secrets and people's connected accounts are deleted with it."}
                   </div>
                 </div>
                 <Button

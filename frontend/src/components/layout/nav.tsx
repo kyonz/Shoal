@@ -10,6 +10,7 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  Gauge,
   Library,
   Network,
   Plug,
@@ -75,18 +76,10 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
-    label: "Configure",
-    items: [
-      { label: "Sandboxes", to: "sandbox-profiles", icon: Boxes, namespaced: true, permission: "sandbox-profiles:read", keywords: "docker kubernetes e2b space" },
-      { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
-      { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read", keywords: "routing fallback" },
-      { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read", keywords: "marketplace git registry" },
-    ],
-  },
-  {
     label: "Organisation",
     items: [
       { label: "Blueprints", to: "blueprints", icon: Store, namespaced: true, permission: "blueprints:read", keywords: "marketplace templates adopt" },
+      { label: "Sandboxes", to: "sandbox-profiles", icon: Boxes, namespaced: true, permission: "sandbox-profiles:read", keywords: "docker kubernetes e2b space" },
       { label: "Identities", to: "/admin/identities", icon: Network, namespaced: false, permission: "identities:read", keywords: "people github jira attribution" },
       { label: "Admin console", to: "/admin", icon: ShieldCheck, namespaced: false, keywords: "users groups roles oidc scim audit api keys" },
       { label: "Docs", to: "/docs", icon: BookOpen, namespaced: false, keywords: "help guide reference" },
@@ -104,9 +97,10 @@ export const ADMIN_NAV: NavItem[] = [
   { label: "Sign-in & SCIM", to: "/admin/auth", icon: KeyRound, namespaced: false, permission: "auth:manage" },
   { label: "API keys", to: "/admin/api-keys", icon: KeyRound, namespaced: false },
   { label: "Identities", to: "/admin/identities", icon: GitBranch, namespaced: false, permission: "identities:read" },
-  { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read" },
-  { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read" },
-  { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read" },
+  { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
+  { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read", keywords: "routing fallback" },
+  { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read", keywords: "marketplace git registry" },
+  { label: "Eval platforms", to: "/admin/eval-platforms", icon: Gauge, namespaced: false, permission: "eval-platforms:read", keywords: "braintrust langfuse evals experiments datasets" },
   { label: "Federation", to: "/admin/federation", icon: Globe, namespaced: false, permission: "federation:manage" },
   { label: "Audit log", to: "/admin/audit", icon: Activity, namespaced: false, permission: "audit:read" },
 ];

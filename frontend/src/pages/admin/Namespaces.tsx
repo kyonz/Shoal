@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Page, PageHeader, Skeleton, Table, Td, Th, Tr } from "@/components/ui";
 import { SearchInput, useAction, useBindings } from "./shared";
+import { actorName } from "@/lib/actor";
 
 const NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -114,7 +115,7 @@ export default function Namespaces() {
                   <Td className="text-muted">{bindings.data ? memberCount(n.name) : "—"}</Td>
                   <Td className="text-muted">
                     {relTime(n.created_at)}
-                    {n.created_by && <span className="ml-1 text-faint">by {n.created_by}</span>}
+                    {n.created_by && <span className="ml-1 text-faint">by {actorName(n.created_by)}</span>}
                   </Td>
                   <Td>
                     <ChevronRight className="size-4 text-faint" />

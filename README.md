@@ -72,8 +72,15 @@ Open <http://localhost:8080>. To add workers, run
 
 ### Kubernetes (Helm)
 
+No release image is published yet, so build the image and push it to a registry your cluster can
+pull from, then point the chart at it:
+
 ```sh
+docker build -f deploy/Dockerfile -t registry.example.com/shoal:0.1.0 .
+docker push registry.example.com/shoal:0.1.0
+
 helm install shoal deploy/helm/shoal -n shoal --create-namespace \
+  --set image.repository=registry.example.com/shoal --set image.tag=0.1.0 \
   --set config.publicUrl=https://shoal.example.com \
   --set ingress.enabled=true --set ingress.hosts[0].host=shoal.example.com \
   --set-json 'ingress.hosts[0].paths=[{"path":"/","pathType":"Prefix"}]'
@@ -176,10 +183,10 @@ approve the result:
 
 ```sh
 shoal apply -f examples/shared/sandboxes.yaml -f examples/triage-report/
-shoal run triage-report
+shoal run triage-report --wait     # prints the command to approve it: shoal approve <run id>
 ```
 
-Open the run in the UI to watch it live and approve it:
+Or open the run in the UI to watch it live and approve it there:
 
 <p align="center">
   <img src="docs/assets/screenshots/run-viewer.png" alt="A run waiting for approval in the Shoal run viewer" width="820">
@@ -218,6 +225,7 @@ spec:
       message: "Open a PR for {{ steps.fix.output.branch }}?"
     - id: pr
       type: action
+      if: "{{ steps.review.output.approved }}"   # a rejection doesn't stop the run
       action: github.create_pull_request
       with:
         repo: "{{ inputs.repo }}"

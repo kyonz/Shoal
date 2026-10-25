@@ -19,7 +19,7 @@ import re
 from datetime import timedelta
 from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from shoal.core.duration import Duration
 
@@ -130,6 +130,18 @@ class RetryPolicy(Model):
         """Delay before ``attempt`` (2 = first retry)."""
         seconds = self.backoff.total_seconds() * (self.backoff_factor ** max(0, attempt - 2))
         return timedelta(seconds=min(seconds, self.max_backoff.total_seconds()))
+
+
+def _no_clear_text_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """Decision provider settings name secrets (``api_key_secret``); they never hold a credential literally."""
+    bad = [k for k in credential_fields(config)
+           if not k.endswith("_secret") and isinstance(config[k], str) and "{{" not in config[k]]
+    if bad:
+        raise ValueError(f"provider_config {bad} look like credentials; name a secret instead, e.g. api_key_secret")
+    return config
+
+
+DecisionConfig = Annotated[dict[str, Any], AfterValidator(_no_clear_text_keys)]
 
 
 class StepBase(Model):
@@ -314,7 +326,7 @@ class DecideStep(StepBase):
 
     type: Literal["decide"] = "decide"  # type: ignore[misc]
     provider: str | None = Field(None, description="Decision provider plugin (jev, llm); defaults to settings.")
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field(description="Text or JSON (expressions allowed) the questions are about.")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     min_confidence: float | None = Field(None, ge=0, le=1)
@@ -328,7 +340,7 @@ class GradeStep(StepBase):
 
     type: Literal["grade"] = "grade"  # type: ignore[misc]
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     subject: Any = Field(description="What to grade (expression).")
     instructions: str
     levels: list[str] = Field(min_length=2, description="Ordered rubric levels, worst first.")
@@ -446,7 +458,7 @@ class ToolGuardSpec(Model):
     """Screen mutating tool calls with a decision model before they run (§7.5)."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "write_file", "edit_file", "*__*"],
         description="Glob patterns of tool names to screen.",
@@ -461,12 +473,13 @@ class AgentSpec(Model):
     description: str | None = None
     provider: str = "anthropic"
     model: str = "claude-opus-5-5"
-    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop or cli.")
+    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop, cli (a coding agent CLI in the sandbox) or a2a.")
     instructions: str = Field("", description="System prompt.")
     skills: list[str] = Field(default_factory=list)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "read_file", "write_file", "list_files"],
-        description="Built-in tools, integration actions ('github.create_pull_request', 'github.*').",
+        description="Built-in tools (shell, read_file, ...), integration actions ('github.create_pull_request', 'github.*') "
+        "and MCP servers ('mcp:<connection>' for all its tools, 'mcp:<connection>.<tool>' for one).",
     )
     subagents: list[str] = Field(default_factory=list, description="Agents this agent may delegate to.")
     credentials: list[str] = Field(
@@ -503,8 +516,12 @@ class SkillSpec(Model):
 
 
 class NetworkPolicy(Model):
-    egress: Literal["allow", "deny"] = "allow"
-    allow_hosts: list[str] = Field(default_factory=list)
+    """Enforced by the sandbox backend; a backend that cannot enforce a policy refuses to start the sandbox."""
+
+    egress: Literal["allow", "deny"] = Field("allow", description="'deny' blocks all outbound traffic.")
+    allow_hosts: list[str] = Field(
+        default_factory=list, description="Only these hosts may be reached (needs a backend that supports it, e.g. remote)."
+    )
 
 
 class SandboxProfileSpec(Model):
@@ -565,7 +582,7 @@ class TriageSpec(Model):
     """Semantic trigger filter: ask a decision model about the event before starting a run."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field("{{ event }}", description="What the questions are about (expressions allowed).")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
@@ -732,6 +749,11 @@ class GatewayLimits(Model):
     max_wait: Duration = Field(timedelta(minutes=5), description="Longest a call waits for capacity before failing.")
 
 
+def endpoint_fields(values: dict[str, Any]) -> list[str]:
+    """Settings that choose where a request (and its credentials) goes: ``host``, ``url``, ``api_url``, ..."""
+    return sorted(k for k in values if k in ("host", "url") or k.endswith(("_url", "_host")))
+
+
 class GatewaySpec(Model):
     """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...).
 
@@ -853,12 +875,45 @@ class EvalCase(Model):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Carried to results and eval sinks.")
 
 
-class EvalDatasetRef(Model):
+class EvalPlatformSpec(Model):
+    """An eval platform connected once by an admin (tenant-wide, ``eval-platforms:manage``).
+
+    Evals point at it with ``platform: <name>`` instead of repeating sink settings.
+    Credentials are secret names in the tenant's ``shared`` namespace.
+    """
+
+    description: str | None = None
+    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    config: dict[str, Any] = Field(
+        default_factory=dict, description="Sink settings; credentials as secret names (api_key_secret, secret_key_secret)."
+    )
+
+    @model_validator(mode="after")
+    def _no_clear_text_credentials(self) -> EvalPlatformSpec:
+        leaked = [k for k in credential_fields(self.config) if not k.endswith("_secret")]
+        if leaked:
+            raise ValueError(f"config keys {leaked} look like credentials: store them as secrets and use <name>_secret")
+        return self
+
+
+class _PlatformOrSink(Model):
+    sink: str | None = Field(None, description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    platform: str | None = Field(None, description="An EvalPlatform; its sink and settings apply, `config` overrides them.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
+
+    @model_validator(mode="after")
+    def _one_target(self) -> _PlatformOrSink:
+        if bool(self.sink) == bool(self.platform):
+            raise ValueError("set exactly one of `sink` or `platform`")
+        if self.platform and (endpoints := endpoint_fields(self.config)):
+            raise ValueError(f"{', '.join(endpoints)}: an eval platform's endpoints are set on the platform only")
+        return self
+
+
+class EvalDatasetRef(_PlatformOrSink):
     """Cases imported from an eval platform (``shoal.eval_sinks`` plugin) each time the eval runs."""
 
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
     name: str = Field(description="Dataset name on the platform.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
     limit: int | None = Field(None, ge=1)
 
 
@@ -913,11 +968,8 @@ class Grader(Model):
         return self
 
 
-class EvalSinkRef(Model):
+class EvalSinkRef(_PlatformOrSink):
     """Export each finished eval run (traces and scores) to an eval platform."""
-
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
 
 
 class EvalGate(Model):
@@ -951,6 +1003,12 @@ class EvalSpec(Model):
     from_runs: EvalRunQuery | None = None
     graders: list[Grader] = Field(min_length=1)
     threshold: float = Field(0.8, ge=0, le=1, description="A case passes when its weighted score is at least this.")
+    require_success: bool | None = Field(
+        None,
+        description="A case whose workflow run did not succeed scores 0 and fails, whatever its graders say "
+        "(their scores are still recorded). Defaults to true for cases and false for from_runs, which picks "
+        "run statuses itself; set false to grade runs that are expected to fail.",
+    )
     concurrency: int = Field(5, ge=1)
     decision_provider: str | None = None
     gate: EvalGate = Field(default_factory=EvalGate)
@@ -1075,6 +1133,12 @@ class Eval(ResourceBase):
     plural: ClassVar[str] = "evals"
 
 
+class EvalPlatform(ResourceBase):
+    kind: Literal["EvalPlatform"] = "EvalPlatform"
+    spec: EvalPlatformSpec
+    plural: ClassVar[str] = "eval-platforms"
+
+
 class SkillSource(ResourceBase):
     kind: Literal["SkillSource"] = "SkillSource"
     spec: SkillSourceSpec
@@ -1095,7 +1159,8 @@ AnyResource = Annotated[
     | ModelPolicy
     | Blueprint
     | Eval
-    | SkillSource,
+    | SkillSource
+    | EvalPlatform,
     Field(discriminator="kind"),
 ]
 
@@ -1103,7 +1168,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

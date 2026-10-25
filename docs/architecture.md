@@ -516,6 +516,13 @@ quality is measured, not assumed.
   grader score), production runs export as traces, and datasets import as
   cases (live via `spec.dataset`, or into a new Eval version via
   `POST …/evals/{name}/import`). A failed export never fails the eval.
+  An `EvalPlatform` (tenant-wide, kept in `shared`, managed with
+  `eval-platforms:manage`) holds one sink's settings once, with its secrets
+  named from `shared` (clear-text credentials are rejected). Datasets, eval
+  sinks and the import / export endpoints then say `platform: <name>`, and
+  any inline `config` is merged over the platform's. `POST
+  /v1/eval-platforms/{name}/test` checks the credentials and `GET
+  …/datasets` lists dataset names for pickers.
 - **Inline quality gates.** A `grade` step type scores an upstream output with
   a rubric inside a workflow, so a run can retry, escalate to a human or stop
   when quality is below a threshold.
@@ -537,7 +544,10 @@ replace them.
   rubric) and `boolean` (Jev's *noul*: probability a statement is true).
   Providers: `jev` (TypeSafe API via its SDK, or via OpenRouter / Vercel AI
   Gateway where configured) and `llm` (any model through the gateways in
-  §7.3 using structured output) as the self-hostable fallback.
+  §7.3 using structured output) as the self-hostable fallback. Jev needs
+  the `typesafe-sdk` package (`pip install 'shoal[jev]'`; the container
+  image includes it) and an API key from a secret named by
+  `provider_config.api_key_secret`, or `TYPESAFE_API_KEY` on the worker.
 - **`decide` step.** A workflow step that asks typed questions about any
   expression (issue text, diff summary, prior outputs) and exposes
   `answer`, `probabilities` and `confidence` for branching with `if`. A
@@ -623,7 +633,7 @@ class Integration(Protocol):
 
 - **Actions** have pydantic input/output models, so they are simultaneously
   workflow `action` steps, agent tools (JSON schema from the model) and API
-  operations (`POST /v1/connections/{id}/actions/{action}`).
+  operations (`POST /v1/namespaces/{namespace}/connections/{name}/actions/{action}`).
 - **Triggers**: `webhook` (signature-verified, one URL per connection
   `/v1/hooks/{webhook_id}`), `poll` (cursor persisted) and **`schedule`**
   (cron expressions with time zones, e.g. `0 9 * * MON-FRI` in
@@ -765,6 +775,31 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   namespaces. Resource names are unique per (tenant, namespace, kind).
   Lookups fall back from the run's namespace to a tenant-wide `shared`
   namespace, so platform teams can publish shared connections and skills that other namespaces use without being able to see their secrets.
+- **Many tenants on one instance.** One deployment hosts any number of
+  tenants (federation adds tenants on other deployments, §11.2). A person has
+  one **account** on the instance, keyed by their identity provider's
+  `(issuer, sub)`, linked to at most one user in each tenant they belong to;
+  roles stay per tenant. A session belongs to the account and points at one
+  tenant at a time: `GET /v1/me/tenants` lists the tenants to switch to and
+  `POST /v1/me/tenant` issues a session for another one (the UI's tenant
+  switcher). People sign in either through the **instance sign-in**
+  (`SHOAL_INSTANCE_OIDC`, one IdP for everyone) or through a tenant's own
+  providers; both link the account to tenant users with the same identity.
+  Only the instance sign-in links by verified email and applies the
+  `SHOAL_INSTANCE_ADMINS` bootstrap, because tenant admins configure their own
+  providers and those must not vouch for people in other tenants.
+- **Instance admins and tenant admins.** Accounts can hold an instance role:
+  `instance-admin` (create, rename, suspend, resume and delete tenants; give
+  people roles in any tenant; grant instance roles; act as tenant admin in any
+  tenant, audited as `account:<email>`) or `instance-auditor` (read-only
+  everywhere, including audit). Tenant admins (`tenant-admin` role) run their
+  own tenant as before. Instance admins work at `/v1/instance/*` and
+  `/v1/tenants/*`; instance-level events (tenants created or suspended,
+  instance roles, instance sign-ins) go to the instance audit log
+  (`GET /v1/instance/audit`). Suspending a tenant refuses its members' calls and
+  new runs, keeps its data, and leaves running work to finish. Nobody can change
+  their own instance role, and the last instance admin cannot be removed unless
+  the break-glass `SHOAL_ADMIN_TOKEN` is set.
 - **Users, groups and service accounts.** Users come from OIDC sign-in or SCIM
   provisioning; groups come from SCIM or from an OIDC `groups` claim. Service
   accounts are non-human principals that own API keys.
@@ -782,9 +817,11 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **OIDC sign-in.** Generic OpenID Connect (Okta, Microsoft Entra ID, Google,
   Keycloak, Auth0, Dex): authorization-code flow with PKCE, ID tokens verified
   against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
-  Shoal session tokens afterwards. Claims map to the user record and optionally
+  Shoal session tokens afterwards; signing out revokes the session token
+  itself, not only the cookie. Claims map to the user record and optionally
   to role bindings (`groups` claim → group membership). Configured per tenant
-  (several providers allowed) plus a bootstrap admin token for first setup.
+  (several providers allowed) and optionally once for the whole instance, plus
+  a break-glass admin token for first setup.
 - **SCIM 2.0 provisioning.** `/scim/v2/Users`, `/scim/v2/Groups`,
   `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` with filtering
   (`userName eq "…"`) and PATCH, authenticated by a per-tenant SCIM bearer
@@ -793,6 +830,16 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
   than the owner holds), with expiry, last-used, and revocation.
+  `SHOAL_API_KEY_MAX_DAYS` caps how long a key may live (keys created without
+  an expiry get the cap). A key
+  limited to namespaces keeps only the tenant-level `:read` permissions of its
+  owner, never tenant administration.
+- **Nobody hands out more than they hold.** Granting a role, changing a custom
+  role's permissions, changing a group that has role bindings, choosing an
+  OIDC provider's default role, minting a key for a service account, and
+  managing (deactivating, deleting, editing) a user or service account all
+  need the caller to hold every permission involved. Nobody can deactivate or
+  delete themselves.
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
   KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
   are injected at the last moment and redacted from events and logs.
@@ -802,6 +849,9 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   their own concurrency, request and token limits, shared by every worker.
   See [Running Shoal at high throughput](scaling.md).
 - **Audit log**: every mutating API call and every agent tool call is recorded.
+  Behind reverse proxies, `SHOAL_TRUSTED_PROXIES` (addresses or CIDRs) makes
+  the log record the client address from `X-Forwarded-For` instead of the
+  proxy's.
 
 ---
 
@@ -843,7 +893,9 @@ credential performed it*, and lets policy decide what the run may do.
     own. It requires an approval from someone who does have write access
     (checked per reviewer), and optionally an *agent-assisted merge check*:
     a reviewer agent step that checks the diff against policy and posts its
-    verdict as a review before merge. Policies can also require labels or
+    verdict as a review before merge. The step that opened the pull request
+    cannot record that verdict itself (`independent_merge_check`, on by
+    default), so an authoring agent cannot certify its own change. Policies can also require labels or
     block merging entirely (`elevation: deny | qualified_approval | allow`).
 
 ## 12. API
@@ -858,7 +910,8 @@ credential performed it*, and lets policy decide what the run may do.
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),
   `sandbox-profiles`, `evals` (+runs, scores, import), `eval-runs`
-  (+results, compare, export, cancel), `eval-sinks`, `hooks/{trigger_id}`.
+  (+results, compare, export, cancel), `eval-sinks`, `eval-platforms`
+  (+test, datasets), `hooks/{trigger_id}`.
 - Live updates: `GET /v1/runs/{id}/events` (SSE).
 - Outbound: tenant-configurable webhooks for run/campaign lifecycle events.
 
@@ -899,7 +952,12 @@ one control plane, and a federated deployment can also sit next to the hub.
   people. The hub stores the link (`shoal federation link <tenant>` creates it
   and `shoal federation links` shows connection health), never the member's
   data or secrets. Only an empty tenant can be federated; a revoked link can be
-  replaced by linking the tenant again. Operators can manage links as code with
+  replaced by linking the tenant again. Until then the hub refuses the tenant's
+  calls with `503 federation_revoked` instead of serving it as an empty hosted
+  tenant, and the member's Federation page says the hub rejected its link.
+  A member that leaves (`shoal federation leave`) tells the hub, which marks
+  the link `left` and refuses the same way, and removes the role bindings it
+  gave hub people and groups. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -912,9 +970,10 @@ one control plane, and a federated deployment can also sit next to the hub.
     can also expose only some namespaces and choose `metadata` visibility,
     which hides step outputs, prompts and logs from the hub.
 - **Member is the source of truth.** Requests for a federated tenant are
-  forwarded live through the tunnel; data is not replicated to the hub. The
-  hub keeps only link status, health and small rollups (run counts, spend,
-  eval scores) for its dashboards. When the hub is unreachable the member
+  forwarded live through the tunnel; data is not replicated to the hub. A
+  forwarded call waits in the hub's queue encrypted, and is deleted as soon as
+  it is answered or times out. The hub keeps only link status and the
+  member's version (rollups such as run counts and spend are planned). When the hub is unreachable the member
   keeps running on its own; the hub shows the tenant as disconnected.
 - **One API.** Clients (UI, CLI, Terraform, A2A) talk to the hub with the
   same `/v1` API for hosted and federated tenants; the hub routes by tenant.
@@ -924,8 +983,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   (HS256). It names the user, their hub groups, the request id, and the
   method and path it was issued for, so it cannot be replayed against
   another call. The member authorises it again with its own
-  RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
-  and are bound to roles like any subject. A call succeeds only if the hub
+  RBAC, where hub people act as `hub:user:<email>` and are bound to roles like
+  any subject, by `hub_user` (email or service actor) or `hub_group` (hub group name).
+  The member reads its ceiling afresh for every call, so lowering it applies at once,
+  and a member that exposes only some namespaces shows the hub only their audit entries. A call succeeds only if the hub
   allows it, the link mode allows it, and the member's RBAC allows it. The
   hub's operator token gets no rights in a member by default: a member that
   wants operators to browse binds `hub_user` `system:admin` explicitly. (Decided.)
@@ -950,7 +1011,16 @@ one control plane, and a federated deployment can also sit next to the hub.
 ### 11.4 Where secrets live
 
 Every credential is encrypted at rest, write-only through the API, resolved at
-the moment of use and redacted from run logs. There are four scopes:
+the moment of use and redacted from run logs. The `env` provider reads
+`SHOAL_SECRET_<TENANT>__<NAME>` and then `SHOAL_SECRET_<NAME>`; the second is
+readable by every tenant, so instances shared by several organisations set
+`SHOAL_SECRET_ENV_SHARED=false`. Variables that configure Shoal itself
+(`SHOAL_SECRET_KEY`, `SHOAL_SECRET_PROVIDERS`) are never handed out as
+secrets, and names that would contain `__` are not looked up (so tenant
+`acme` cannot read tenant `acme--ops`'s variables); env secrets are
+tenant-wide, readable from every namespace. Deleting a namespace deletes its secrets, role bindings and
+personal credentials; deleting a user deletes their personal credentials.
+There are four scopes:
 
 | Scope | Holds | Managed by |
 |---|---|---|
@@ -970,7 +1040,9 @@ who has not connected it, the step **waits** (event `credential.required`
 with a link to connect) and resumes as soon as they save the credential,
 rather than failing. People connect under `/v1/me/credentials` (paste a token,
 or `oauth:` on the connection runs an authorization-code flow with PKCE and
-refreshes access tokens before they expire) or with `shoal credentials
+refreshes access tokens before they expire; the callback only saves the
+grant in the browser that started the flow or one signed in as that person,
+so an authorize link sent to someone else cannot collect their account) or with `shoal credentials
 set|connect`. Every set, removal and revocation is audited. This applies to
 every integration, MCP servers included.
 

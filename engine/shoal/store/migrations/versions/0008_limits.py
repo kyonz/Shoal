@@ -4,8 +4,8 @@ Adds the limiter lease and webhook inbox tables, runs.lane (existing runs go to
 the standard lane), indexes for tenant quotas and, on Postgres, a fillfactor
 that leaves room for HOT updates of runs and steps.
 
-Revision ID: 0007
-Revises: 0006
+Revision ID: 0008
+Revises: 0007
 Create Date: 2026-10-25 12:40:00
 """
 
@@ -17,8 +17,8 @@ from sqlalchemy.dialects import postgresql
 
 import shoal.store.tables
 
-revision = '0007'
-down_revision = '0006'
+revision = '0008'
+down_revision = '0007'
 branch_labels = None
 depends_on = None
 

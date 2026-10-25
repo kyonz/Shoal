@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from shoal.auth.accounts import INSTANCE_ADMIN, INSTANCE_AUDITOR
 from shoal.auth.permissions import NAMESPACE_PERMISSIONS, TENANT_PERMISSIONS, expand, granted
 from shoal.core.errors import Forbidden
 
@@ -30,6 +31,8 @@ class Principal:
     display_name: str | None = None
     email: str | None = None
     is_system_admin: bool = False
+    account_id: str | None = None  # the instance account behind a signed-in person
+    instance_role: str | None = None  # instance-admin | instance-auditor
     api_key_id: str | None = None
     key_scopes: tuple[str, ...] = ()
     key_namespaces: tuple[str, ...] = ()
@@ -81,12 +84,17 @@ class Authorizer:
         return grants
 
     def _allowed(self, principal: Principal, grants: Grants, permission: str, namespace: str | None) -> bool:
-        if principal.is_system_admin:
+        if principal.is_system_admin or principal.instance_role == INSTANCE_ADMIN:
+            return True
+        if principal.instance_role == INSTANCE_AUDITOR and permission.endswith(":read"):
             return True
         if principal.key_scopes and not granted(principal.key_scopes, permission):
             return False
-        if principal.key_namespaces and namespace is not None and namespace not in principal.key_namespaces:
-            return False
+        if principal.key_namespaces:
+            if namespace is not None and namespace not in principal.key_namespaces:
+                return False
+            if permission in TENANT_PERMISSIONS and not permission.endswith(":read"):
+                return False  # a key limited to namespaces cannot administer the tenant
         if granted(grants.tenant, permission):
             return True
         if namespace is None or permission in TENANT_PERMISSIONS:

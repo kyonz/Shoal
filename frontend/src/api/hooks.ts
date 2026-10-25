@@ -17,9 +17,10 @@ export type Plural =
   | "identities"
   | "cloud-identities"
   | "blueprints"
-  | "skill-sources";
+  | "skill-sources"
+  | "eval-platforms";
 
-export const TENANT_SCOPED: Plural[] = ["identities", "blueprints", "gateways", "model-policies", "skill-sources"];
+export const TENANT_SCOPED: Plural[] = ["identities", "blueprints", "gateways", "model-policies", "skill-sources", "eval-platforms"];
 
 export function resourcePath(plural: Plural, ns: string, name?: string) {
   const base = TENANT_SCOPED.includes(plural) ? `/v1/${plural}` : `/v1/namespaces/${ns}/${plural}`;
@@ -151,6 +152,36 @@ export function useResources(
     queryFn: () => rawJson<Resource[]>(resourcePath(plural, ns)),
     ...opts,
   });
+}
+
+/** The tenant namespace every other namespace falls back to when a name is not found locally. */
+export const SHARED_NAMESPACE = "shared";
+
+export interface VisibleResource extends Resource {
+  /** Comes from the shared namespace (not shadowed by one of the same name here). */
+  shared: boolean;
+}
+
+/**
+ * What a reference from `ns` can resolve to: the namespace's own resources, then the
+ * shared namespace's (the engine falls back to `shared` for any name not found locally).
+ * Shared resources the caller cannot read are left out.
+ */
+export function useVisibleResources(plural: Plural, ns: string) {
+  const local = useResources(plural, ns);
+  const withShared = ns !== SHARED_NAMESPACE && !TENANT_SCOPED.includes(plural);
+  const shared = useResources(plural, SHARED_NAMESPACE, { enabled: withShared, retry: false });
+  const data = visibleResources(local.data ?? [], withShared ? (shared.data ?? []) : []);
+  return { data, isLoading: local.isLoading || (withShared && shared.isLoading), error: local.error };
+}
+
+/** A namespace's resources followed by the shared ones it does not shadow. */
+export function visibleResources(own: Resource[], shared: Resource[]): VisibleResource[] {
+  const names = new Set(own.map((r) => r.metadata.name));
+  return [
+    ...own.map((r) => ({ ...r, shared: false })),
+    ...shared.filter((r) => !names.has(r.metadata.name)).map((r) => ({ ...r, shared: true })),
+  ];
 }
 
 export function useResource(plural: Plural, ns: string, name: string | undefined) {

@@ -23,6 +23,7 @@ data:
   SHOAL_ASSISTANT_EFFORT: {{ .Values.config.assistant.effort | quote }}
   SHOAL_ASSISTANT_MAX_TURNS: {{ .Values.config.assistant.maxTurns | quote }}
   SHOAL_ORCHESTRATOR: {{ .Values.orchestrator.type | quote }}
+  SHOAL_INSTANCE_ADMINS: {{ .Values.instance.admins | toJson | quote }}
   {{- if eq .Values.orchestrator.type "temporal" }}
   {{- with .Values.orchestrator.temporal }}
   SHOAL_TEMPORAL_ADDRESS: {{ required "orchestrator.temporal.address is required when orchestrator.type is temporal" .address | quote }}

@@ -22,13 +22,13 @@ x-shoal: &shoal
   image: ${SHOAL_IMAGE:-shoal:local}
   restart: unless-stopped
   environment: &shoal-env
-    SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@pgbouncer:5432/shoal
-    SHOAL_DATABASE_DIRECT_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@postgres:5432/shoal
+    SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env (copy deploy/.env.example)}@pgbouncer:5432/shoal
+    SHOAL_DATABASE_DIRECT_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env (copy deploy/.env.example)}@postgres:5432/shoal
     SHOAL_DB_PGBOUNCER: "true"
     SHOAL_DB_POOL_SIZE: ${SHOAL_DB_POOL_SIZE:-20}
     SHOAL_DB_MAX_OVERFLOW: ${SHOAL_DB_MAX_OVERFLOW:-10}
-    SHOAL_SECRET_KEY: ${SHOAL_SECRET_KEY:-dev-insecure-secret-key-change-me}
-    SHOAL_ADMIN_TOKEN: ${SHOAL_ADMIN_TOKEN:-dev-admin-token}
+    SHOAL_SECRET_KEY: ${SHOAL_SECRET_KEY:?set SHOAL_SECRET_KEY in deploy/.env (copy deploy/.env.example)}
+    SHOAL_ADMIN_TOKEN: ${SHOAL_ADMIN_TOKEN:?set SHOAL_ADMIN_TOKEN in deploy/.env (copy deploy/.env.example)}
     SHOAL_PUBLIC_URL: ${SHOAL_PUBLIC_URL:-http://localhost:8080}
     SHOAL_CORS_ORIGINS: ${SHOAL_CORS_ORIGINS:-["http://localhost:8080","http://localhost:5173"]}
     SHOAL_DEFAULT_SANDBOX_BACKEND: ${SHOAL_DEFAULT_SANDBOX_BACKEND:-local}
@@ -51,7 +51,7 @@ services:
     command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     environment:
       POSTGRES_USER: shoal
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shoal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env (copy deploy/.env.example)}
       POSTGRES_DB: shoal
     volumes:
       - postgres:/var/lib/postgresql/data
@@ -68,7 +68,7 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_USER: shoal
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-shoal}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env (copy deploy/.env.example)}
       DB_NAME: shoal
       AUTH_TYPE: scram-sha-256
       POOL_MODE: transaction

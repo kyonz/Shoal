@@ -108,20 +108,32 @@ class Directory:
 
     @_changes_auth
     async def update_user(self, tenant_id: str, user_id: str, **values: Any) -> t.User:
-        await self.get_user(tenant_id, user_id)
+        user = await self.get_user(tenant_id, user_id)
         values["updated_at"] = utcnow()
+        renamed = user.kind == "user" and values.get("username") not in (None, user.username)
         async with self.session() as s:
             await s.execute(update(t.User).where(t.User.id == user_id).values(**values))
+            if renamed:  # personal credentials are keyed by actor; they follow the person
+                await s.execute(
+                    update(t.UserCredential)
+                    .where(t.UserCredential.tenant_id == tenant_id, t.UserCredential.owner == f"user:{user.username}")
+                    .values(owner=f"user:{values['username']}")
+                )
         if values.get("active") is False:
             await self._revoke_keys_of(tenant_id, user_id)
         return await self.get_user(tenant_id, user_id)
 
     @_changes_auth
     async def delete_user(self, tenant_id: str, user_id: str) -> None:
-        await self.get_user(tenant_id, user_id)
+        user = await self.get_user(tenant_id, user_id)
         await self._revoke_keys_of(tenant_id, user_id)
         async with self.session() as s:
             await s.execute(delete(t.RoleBinding).where(t.RoleBinding.subject_kind == "user", t.RoleBinding.subject_id == user_id))
+            await s.execute(delete(t.GroupMember).where(t.GroupMember.user_id == user_id))
+            if user.kind == "user":  # so a later user with the same username does not inherit them
+                await s.execute(
+                    delete(t.UserCredential).where(t.UserCredential.tenant_id == tenant_id, t.UserCredential.owner == f"user:{user.username}")
+                )
             await s.execute(delete(t.User).where(t.User.id == user_id))
 
     @_changes_auth
@@ -188,18 +200,33 @@ class Directory:
             q = select(t.GroupMember.user_id).where(t.GroupMember.group_id == group_id)
             return list((await s.execute(q)).scalars().all())
 
+    async def check_members(self, tenant_id: str, user_ids: list[str], kind: str | None) -> None:
+        """Every id must be a user (of ``kind``, when given) in this tenant."""
+        wanted = set(user_ids)
+        if not wanted:
+            return
+        async with self.session() as s:
+            q = select(t.User.id).where(t.User.tenant_id == tenant_id, t.User.id.in_(wanted))
+            if kind is not None:
+                q = q.where(t.User.kind == kind)
+            unknown = wanted - set((await s.execute(q)).scalars().all())
+        if unknown:
+            raise InvalidRequest(f"unknown {kind or 'user'} id(s): {', '.join(sorted(unknown))}")
+
     @_changes_auth
-    async def set_group_members(self, tenant_id: str, group_id: str, user_ids: list[str]) -> None:
+    async def set_group_members(self, tenant_id: str, group_id: str, user_ids: list[str], *, kind: str | None = None) -> None:
         await self.get_group(tenant_id, group_id)
+        current = set(await self.group_members(group_id))
+        await self.check_members(tenant_id, [u for u in user_ids if u not in current], kind)
         async with self.session() as s:
             await s.execute(delete(t.GroupMember).where(t.GroupMember.group_id == group_id))
             for user_id in dict.fromkeys(user_ids):
                 s.add(t.GroupMember(tenant_id=tenant_id, group_id=group_id, user_id=user_id))
 
     @_changes_auth
-    async def add_group_members(self, tenant_id: str, group_id: str, user_ids: list[str]) -> None:
+    async def add_group_members(self, tenant_id: str, group_id: str, user_ids: list[str], *, kind: str | None = None) -> None:
         current = set(await self.group_members(group_id))
-        await self.set_group_members(tenant_id, group_id, [*current, *user_ids])
+        await self.set_group_members(tenant_id, group_id, [*current, *user_ids], kind=kind)
 
     @_changes_auth
     async def remove_group_members(self, tenant_id: str, group_id: str, user_ids: list[str]) -> None:

@@ -28,7 +28,7 @@ There are two ways to ship one:
 ## Quick start
 
 ```bash
-python -m shoal.sdk.scaffold linear --title Linear     # will be `shoal integrations new linear`
+shoal integrations new linear --title Linear     # or: python -m shoal.sdk.scaffold linear
 cd shoal-linear && uv sync && uv run pytest
 ```
 
@@ -83,12 +83,17 @@ Rules worth knowing:
 - **Always use `ctx.http()`** for outbound calls. It applies the engine's
   timeouts and lets tests swap in a mock transport.
 - **Raise `IntegrationError(retryable=True)`** for transient failures (or use
-  `raise_for_status`, which does this for 408/429/5xx). The executor retries
-  those under the step's retry policy.
+  `raise_for_status`, which does this for 408/425/429/5xx). Network errors from
+  `ctx.http()` (DNS, refused connections, timeouts) become retryable
+  `IntegrationError`s for you. The executor retries those under the step's
+  retry policy.
 - **Mark read-only actions `mutating=False`.** Mutating actions are audited
   when called through the API.
 - **Reject unsigned webhooks** when no secret is configured, rather than
   accepting anyone who finds the URL.
+- **Prefix wake keys with your integration's key** (`linear:issue:42`). Keys whose
+  prefix names another installed integration (`github:...`) are dropped, so one
+  connection's webhooks cannot hand forged events to runs waiting on another's.
 - **Fill `IntegrationEvent.actor`** (`actor(email=..., linear=user_id)`) so
   runs started by the event are attributed to the person who caused it.
 - Helpers: `verify_hmac_sha256`, `hmac_sha256`, `verify_token`,
@@ -121,7 +126,7 @@ assert api.requests("POST", "/graphql")[0].json["variables"]["title"] == "Bug"
 | `engine_harness(...)` | A real throwaway engine with your integration registered: create connections (`connect`), apply YAML resources (`apply`), deliver webhooks to the connection URL (`webhook`) and check that triggers fire and runs start. |
 | `signed_webhook`, `github_webhook` | Build correctly signed deliveries. |
 | `IntegrationContract` | Subclass as `TestXContract` to run the contract checks under pytest. |
-| `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m shoal.sdk.testing.contract URL --token T`. |
+| `check_remote_service(url, token)` | The contract checks for a running remote service, also `shoal integrations check URL --token T` from the command line. |
 
 The **contract** checks that keys and action names are valid tool names,
 every action and resource has a description and object schemas, credentials
@@ -195,6 +200,12 @@ connect to it with an ordinary connection.
 
 The URL must be `https` (plain `http` is allowed for loopback, or with
 `allow_insecure: true`) because the service receives the connection's secrets.
+
+Connection URLs are set by tenants, so every integration call (remote, MCP,
+GitHub Enterprise and Jira base URLs included) refuses hosts that resolve into
+`SHOAL_INTEGRATION_BLOCKED_NETWORKS`: by default the link-local and cloud
+metadata ranges. A multi-tenant deployment can add its private ranges, e.g.
+`SHOAL_INTEGRATION_BLOCKED_NETWORKS='["169.254.0.0/16", "fe80::/10", "10.0.0.0/8"]'`.
 
 ### Protocol
 

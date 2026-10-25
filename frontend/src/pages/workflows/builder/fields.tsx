@@ -1,13 +1,14 @@
 /** Inspector inputs specific to workflow authoring. */
 import { Check, ChevronDown, Plus, Search, Trash2, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useIntegrations, useResources, type IntegrationAction, type JsonSchema, type Plural } from "@/api/hooks";
+import { useIntegrations, useVisibleResources, type IntegrationAction, type JsonSchema, type Plural } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { useNs } from "@/lib/ns";
 import { Badge, Button, Input, NativeSelect, Popover, Switch } from "@/components/ui";
 import { humanize, resolve } from "@/components/forms/SchemaForm";
 import { ExpressionInput } from "@/features/workflow/ExpressionInput";
 import type { ParamDoc } from "@/features/workflow/types";
+import { ResourceOptions } from "@/pages/catalog/widgets";
 
 // --------------------------------------------------------------------------- resource pickers
 
@@ -20,29 +21,25 @@ export function ResourceSelect({ plural, value, onChange, placeholder = "—", f
   allowEmpty?: boolean;
 }) {
   const ns = useNs();
-  const { data, isLoading } = useResources(plural, ns);
-  const items = (data ?? []).filter((r) => !filter || filter(r.spec));
+  const { data, isLoading } = useVisibleResources(plural, ns);
+  const items = data.filter((r) => !filter || filter(r.spec));
   const missing = value && !isLoading && !items.some((r) => r.metadata.name === value);
   return (
     <NativeSelect value={value ?? ""} onChange={(e) => onChange(e.target.value || undefined)} className={cn(missing && "border-warn")}>
       {allowEmpty && <option value="">{placeholder}</option>}
       {missing && <option value={value}>{value} (not found)</option>}
-      {items.map((r) => (
-        <option key={r.metadata.name} value={r.metadata.name}>
-          {r.metadata.name}
-          {r.metadata.description ? ` — ${r.metadata.description.slice(0, 60)}` : ""}
-        </option>
-      ))}
+      <ResourceOptions items={items} />
     </NativeSelect>
   );
 }
 
 export function ResourceTags({ plural, value, onChange }: { plural: Plural; value: string[]; onChange: (v: string[]) => void }) {
   const ns = useNs();
-  const { data } = useResources(plural, ns);
-  const names = (data ?? []).map((r) => r.metadata.name);
+  const { data } = useVisibleResources(plural, ns);
+  const names = data.map((r) => r.metadata.name);
+  const shared = new Set(data.filter((r) => r.shared).map((r) => r.metadata.name));
   const all = [...new Set([...names, ...value])];
-  if (!all.length) return <p className="text-xs text-faint">None in this namespace yet.</p>;
+  if (!all.length) return <p className="text-xs text-faint">None in this namespace or the shared namespace yet.</p>;
   return (
     <div className="flex flex-wrap gap-1.5">
       {all.map((n) => {
@@ -60,6 +57,7 @@ export function ResourceTags({ plural, value, onChange }: { plural: Plural; valu
           >
             {on && <Check className="size-3" />}
             {n}
+            {shared.has(n) && <span className="text-[10px] text-faint">shared</span>}
           </button>
         );
       })}

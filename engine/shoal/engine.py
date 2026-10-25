@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from shoal.auth.accounts import Accounts
 from shoal.auth.directory import Directory
 from shoal.auth.oauth import OAuthFlows
 from shoal.auth.oidc import OIDCService
@@ -133,6 +134,7 @@ class Engine:
         self.directory = Directory(self.store)
         self.authz = Authorizer(self)
         self.oidc = OIDCService(self)
+        self.accounts = Accounts(self)
         self.events = EventBus(self.store)
         self.secrets = SecretManager(self, self.settings.secret_providers)
         self.sandboxes = SandboxManager(self)

@@ -169,7 +169,8 @@ async def cancel_run(run_id: str, ctx: CtxDep) -> Any:
 async def approve_step(run_id: str, step_id: str, body: ApprovalIn, ctx: CtxDep) -> Any:
     run = await _run(ctx, run_id, "runs:approve")
     row = await ctx.engine.executor.submit_approval(
-        ctx.tenant_id, run.id, step_id, approved=body.approved, by=ctx.principal.display_name or ctx.actor, comment=body.comment
+        ctx.tenant_id, run.id, step_id, approved=body.approved, by=ctx.principal.display_name or ctx.actor, comment=body.comment,
+        decider=ctx.principal,
     )
     await ctx.audit("run.approval", f"{run.id}/{step_id}", namespace=run.namespace, approved=body.approved, comment=body.comment)
     return row
@@ -194,9 +195,11 @@ async def list_signals(run_id: str, ctx: CtxDep) -> Any:
 async def rerun(run_id: str, ctx: CtxDep) -> Any:
     run = await _run(ctx, run_id, "runs:create")
     with use_namespace(run.namespace):
+        # Same inputs and context ({{ event }}, {{ trigger }}, {{ target }}), so expressions resolve as they did.
         new = await ctx.engine.executor.start_run(
             ctx.tenant_id, run.workflow_name, run.inputs, version=run.workflow_version, started_by=ctx.actor,
             labels={**run.labels, "rerun_of": run.id}, initiator=await _initiator(ctx), admit=True,
+            context={k: v for k, v in (run.context or {}).items() if k != "parent"},
         )
     await ctx.audit("run.started", new.id, namespace=run.namespace, workflow=run.workflow_name, rerun_of=run.id)
     return new

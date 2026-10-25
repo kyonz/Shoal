@@ -42,8 +42,11 @@ interface BuilderState extends Snapshot {
   lastAt: number;
   /** Snapshot of what is saved on the server, for the dirty check. */
   saved: string;
+  /** The user may only view this workflow: edits (and so undo history) are ignored. */
+  readOnly: boolean;
 
   load: (s: Snapshot) => void;
+  setReadOnly: (readOnly: boolean) => void;
   markSaved: () => void;
   commit: (next: Partial<Snapshot>, key?: string) => void;
   select: (id: string | null) => void;
@@ -81,6 +84,9 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   lastKey: null,
   lastAt: 0,
   saved: "",
+  readOnly: false,
+
+  setReadOnly: (readOnly) => set({ readOnly }),
 
   load: (s) => {
     const layout = autoLayout(s.spec.steps, pruneLayout(s.layout, s.spec.steps));
@@ -91,6 +97,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
 
   commit: (next, key) => {
     const st = get();
+    if (st.readOnly) return;
     const now = Date.now();
     const coalesce = !!key && key === st.lastKey && now - st.lastAt < COALESCE_MS;
     const prev: Snapshot = { spec: st.spec, layout: st.layout, meta: st.meta };
@@ -209,10 +216,15 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   },
 
   setSpec: (spec, key) => {
-    const { layout, commit, selected } = get();
-    const nextLayout = autoLayout(spec.steps, pruneLayout(layout, spec.steps));
+    const { spec: prev, layout, commit, selected } = get();
+    const renamed = renamedSteps(prev.steps, spec.steps);
+    const carried = { ...layout };
+    for (const [from, to] of renamed) if (layout[from]) carried[to] = layout[from];
+    const nextLayout = autoLayout(spec.steps, pruneLayout(carried, spec.steps));
     commit({ spec, layout: nextLayout }, key);
-    if (selected && !spec.steps.some((s) => s.id === selected)) set({ selected: null });
+    const follow = selected ? renamed.get(selected) : undefined;
+    if (follow) set({ selected: follow });
+    else if (selected && !spec.steps.some((s) => s.id === selected)) set({ selected: null });
   },
 
   setMeta: (meta, key) => {
@@ -221,6 +233,26 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   },
 }));
 
+/**
+ * Steps whose id changed between two versions of the list (old id -> new id):
+ * a step at the same position whose old id is gone and whose new id is new.
+ * Editing an id in the YAML view then keeps its place on the canvas.
+ */
+export function renamedSteps(before: StepDoc[], after: StepDoc[]): Map<string, string> {
+  const oldIds = new Set(before.map((s) => s.id));
+  const newIds = new Set(after.map((s) => s.id));
+  const out = new Map<string, string>();
+  after.forEach((step, i) => {
+    const was = before[i];
+    if (was && !newIds.has(was.id) && !oldIds.has(step.id)) out.set(was.id, step.id);
+  });
+  return out;
+}
+
+export function isDirty(s: Pick<BuilderState, "spec" | "layout" | "meta" | "saved">): boolean {
+  return snapshotKey(s) !== s.saved;
+}
+
 export function useDirty(): boolean {
-  return useBuilder((s) => snapshotKey(s) !== s.saved);
+  return useBuilder(isDirty);
 }

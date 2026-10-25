@@ -29,6 +29,9 @@ import {
 import { useAssistant } from "./store";
 
 const NO_MESSAGES: ChatMessage[] = [];
+/** The server accepts at most this many history messages (ChatIn.messages). */
+const MAX_MESSAGES = 400;
+const LONG_CHAT = 300;
 const NO_PENDING: PendingAction[] = [];
 
 const SUGGESTIONS = [
@@ -83,7 +86,8 @@ export function AssistantPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => load(me?.tenant?.slug ?? "system"), [load, me?.tenant?.slug]);
+  // One saved chat per person and tenant, so people sharing a browser don't see each other's history.
+  useEffect(() => load(`${me?.tenant?.slug ?? "system"}:${me?.actor ?? "anonymous"}`), [load, me?.tenant?.slug, me?.actor]);
   useEffect(() => {
     if (open && draft) inputRef.current?.focus();
   }, [open, draft]);
@@ -103,6 +107,7 @@ export function AssistantPanel() {
         decisions: body.decisions ?? {},
         auto_approve: autoApprove,
         page: location.pathname,
+        context: useAssistant.getState().pageContext,
       }),
     onMutate: (body) => {
       setError(null);
@@ -117,7 +122,13 @@ export function AssistantPanel() {
     },
     onError: (e, body) => {
       if (body.message) save({ messages: body.history, pending: body.pending, namespace, updatedAt: new Date().toISOString() });
-      setError(e instanceof ApiError ? e.detail : String(e));
+      setError(
+        e instanceof ApiError && e.status === 422 && body.history.length >= MAX_MESSAGES - 10
+          ? "This chat has reached its length limit. Start a new chat to carry on."
+          : e instanceof ApiError
+            ? e.detail
+            : String(e),
+      );
       if (body.message) setDraft(body.message);
     },
   });
@@ -202,6 +213,25 @@ export function AssistantPanel() {
         )}
         {error && <Notice tone="error">{error}</Notice>}
       </div>
+
+      {messages.length >= LONG_CHAT && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-subtle px-3 py-2 text-[12px] text-muted">
+          <span className="min-w-0 flex-1">This chat is getting long, so replies are slower and it will stop at its length limit.</span>
+          <Button size="sm" variant="ghost" onClick={reset} disabled={chat.isPending}>
+            New chat
+          </Button>
+        </div>
+      )}
+      {messages.length > 0 && namespace !== ns && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-subtle px-3 py-2 text-[12px] text-muted">
+          <span className="min-w-0 flex-1">
+            This chat works in <span className="font-mono text-fg">{namespace}</span>; you are now in <span className="font-mono text-fg">{ns}</span>.
+          </span>
+          <Button size="sm" variant="ghost" onClick={reset} disabled={chat.isPending}>
+            New chat in {ns}
+          </Button>
+        </div>
+      )}
 
       <form
         className="shrink-0 border-t border-border p-3"

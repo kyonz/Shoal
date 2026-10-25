@@ -9,6 +9,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
 from shoal.core.ids import new_id
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec
 
@@ -80,9 +82,14 @@ class LocalSandbox(Sandbox):
         shutil.rmtree(self.root, ignore_errors=True)
 
 
+class LocalConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class LocalBackend(SandboxBackend):
     name = "local"
     description = "Runs commands as local subprocesses in a temporary directory. Development only."
+    config_schema = LocalConfig  # no settings
 
     async def create(self, spec: SandboxSpec) -> Sandbox:
         sandbox_id = new_id("sbx")

@@ -3,8 +3,8 @@
 Runs keep the client's Idempotency-Key (unique per tenant), and run events get
 a created_at index so old events of finished runs can be pruned.
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-10-25 12:10:00
 """
 
@@ -13,8 +13,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = '0006'
-down_revision = '0005'
+revision = '0007'
+down_revision = '0006'
 branch_labels = None
 depends_on = None
 

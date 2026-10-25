@@ -137,8 +137,8 @@ class Store:
 
     # ------------------------------------------------------------------ tenants
 
-    async def create_tenant(self, slug: str, name: str | None = None) -> t.Tenant:
-        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug)
+    async def create_tenant(self, slug: str, name: str | None = None, *, description: str | None = None) -> t.Tenant:
+        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug, description=description)
         try:
             async with self.session() as s:
                 s.add(tenant)
@@ -295,6 +295,13 @@ class Store:
             ).scalar_one()
             if count:
                 raise Conflict(f"namespace '{name}' still contains {count} resource(s)")
+            q = select(t.OIDCProvider.name).where(t.OIDCProvider.tenant_id == tenant_id, t.OIDCProvider.default_namespace == name)
+            if provider := (await s.execute(q.limit(1))).scalar_one_or_none():
+                raise Conflict(f"OIDC provider '{provider}' grants its default role in namespace '{name}'; change it first")
+            # What belongs to the namespace goes with it, so a namespace created later with the
+            # same name starts without the old members, secrets, personal credentials or webhook URLs.
+            for table in (t.RoleBinding, t.Secret, t.UserCredential, t.WebhookEndpoint):
+                await s.execute(delete(table).where(table.tenant_id == tenant_id, table.namespace == name))
             await s.execute(delete(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name))
         self.auth_changed()
 
@@ -1000,9 +1007,14 @@ class Store:
             )
             return bool(result.rowcount)
 
-    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None) -> None:
+    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None, *, schedule: str | None = None) -> None:
+        """Set the next fire time; ``schedule`` records the cron and time zone it was computed from."""
         async with self.session() as s:
-            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(next_fire_at=next_fire_at))
+            values: dict[str, Any] = {"next_fire_at": next_fire_at}
+            if schedule is not None:
+                state = await s.get(t.TriggerState, state_id)
+                values["cursor"] = {**((state.cursor if state else None) or {}), "schedule": schedule}
+            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(**values))
 
     # ------------------------------------------------------------------ campaigns
 
@@ -1207,8 +1219,13 @@ class Store:
         since: datetime | None = None,
         until: datetime | None = None,
         before: int | None = None,
+        namespaces: Sequence[str] | None = None,
     ) -> Any:
         q = select(t.AuditEntry).where(t.AuditEntry.tenant_id == tenant_id)
+        if namespaces is not None:  # tenant-wide entries too, except those about other namespaces
+            e = t.AuditEntry
+            q = q.where(or_(e.namespace.in_(namespaces),
+                            and_(e.namespace.is_(None), or_(~e.action.startswith("namespace."), e.target.in_(namespaces)))))
         if action:
             q = q.where(t.AuditEntry.action.startswith(action))
         if actor:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 import yaml
@@ -159,6 +160,129 @@ def test_failed_run_exits_nonzero(cli, tenant_key):
     assert "failed" in result.output
 
 
+GATED = """
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata: {name: gated}
+spec:
+  steps:
+    - {id: review, type: approval, message: "Ship it?"}
+    - {id: done, type: set, needs: [review], if: "{{ steps.review.output.approved }}", values: {ok: true}}
+"""
+
+
+def _wait_for(cli, auth, run_id, *statuses):
+    for _ in range(200):
+        run = json.loads(cli(*auth, "get", "run", run_id, "-o", "json").stdout)
+        if run["status"] in statuses:
+            return run
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} stayed {run['status']}")
+
+
+def test_approve_and_reject(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=GATED).exit_code == 0
+
+    approved_id = json.loads(cli(*auth, "run", "gated", "-o", "json").stdout)["id"]
+    _wait_for(cli, auth, approved_id, "waiting")
+    result = cli(*auth, "approve", approved_id, "-m", "lgtm")
+    assert result.exit_code == 0, result.output
+    assert "step review approved" in result.output
+    assert _wait_for(cli, auth, approved_id, "succeeded", "failed")["status"] == "succeeded"
+    assert cli(*auth, "approve", approved_id).exit_code == 2  # nothing left to approve
+
+    rejected_id = json.loads(cli(*auth, "run", "gated", "-o", "json").stdout)["id"]
+    _wait_for(cli, auth, rejected_id, "waiting")
+    result = cli(*auth, "approve", rejected_id, "review", "--reject")
+    assert result.exit_code == 0, result.output
+    assert "step review rejected" in result.output
+    run = _wait_for(cli, auth, rejected_id, "succeeded", "failed")
+    steps = {s["step_id"]: s for s in run["steps"]}
+    assert steps["review"]["output"]["approved"] is False
+    assert steps["done"]["status"] == "skipped"
+
+
+FLEET = """
+apiVersion: shoal.dev/v1
+kind: Campaign
+metadata: {name: greet-all}
+spec:
+  workflow: hello
+  targets: {items: [{id: ada}, {id: grace}], key: "{{ target.id }}"}
+  inputs: {name: "{{ target.id }}"}
+---
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata: {name: by-hand}
+spec:
+  workflow: hello
+  event: schedule
+  schedule: "0 0 1 1 *"
+  inputs: {name: "{{ event.who }}"}
+---
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata: {name: greeter}
+spec:
+  title: Greeter
+  summary: Greets
+  status: published
+  params: {greeting: {default: Hello}}
+  resources:
+    - kind: Workflow
+      metadata: {name: "{{ prefix }}greet"}
+      spec: {steps: [{id: g, type: set, values: {text: "{{ params.greeting }}"}}]}
+"""
+
+
+def test_rerun_triggers_campaigns_and_blueprints(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0
+    applied = cli(*auth, "apply", "-f", "-", input=FLEET)
+    assert applied.exit_code == 0, applied.output
+
+    first = cli(*auth, "run", "hello", "-i", "name=Ada", "--wait", "-o", "json")
+    run_id = json.loads(first.stdout)["id"]
+    again = cli(*auth, "rerun", run_id, "--wait")
+    assert again.exit_code == 0, again.output
+    assert "rerun of" in again.output and "Hello Ada" in again.output
+
+    fired = cli(*auth, "triggers", "fire", "by-hand", "-d", '{"who": "Grace"}', "-o", "json")
+    assert fired.exit_code == 0, fired.output
+    fired_run = json.loads(fired.stdout)["run_id"]
+    assert _wait_for(cli, auth, fired_run, "succeeded", "failed")["outputs"] == {"greeting": "Hello Grace"}
+    assert cli(*auth, "triggers", "fire", "by-hand", "-d", "[1]").exit_code == 2
+
+    launched = cli(*auth, "campaigns", "launch", "greet-all", "--paused", "-o", "json")
+    assert launched.exit_code == 0, launched.output
+    campaign_id = json.loads(launched.stdout)["id"]
+    assert campaign_id in cli(*auth, "campaigns", "list").output
+    resumed = cli(*auth, "campaigns", "resume", campaign_id)
+    assert resumed.exit_code == 0, resumed.output
+    for _ in range(200):
+        shown = json.loads(cli(*auth, "campaigns", "get", campaign_id, "-o", "json").stdout)
+        if shown["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert shown["stats"]["succeeded"] == 2
+    assert "2/2" in cli(*auth, "campaigns", "get", campaign_id).output
+
+    dry = cli(*auth, "blueprints", "adopt", "greeter", "--prefix", "cli", "--dry-run")
+    assert dry.exit_code == 0 and "workflow/cli-greet" in dry.output and "dry run" in dry.output
+    adopted = cli(*auth, "blueprints", "adopt", "greeter", "--prefix", "cli", "-p", "greeting=Hi")
+    assert adopted.exit_code == 0, adopted.output
+    assert "adoption" in adopted.output
+    assert "cli-greet" in cli(*auth, "get", "workflows").output
+
+
+def test_delete_names_the_kind(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0
+    result = cli(*auth, "delete", "wf", "hello")
+    assert result.exit_code == 0 and "workflow/hello deleted" in result.output
+
+
 def test_apply_reports_invalid_documents(cli, tenant_key):
     bad = HELLO.replace("type: set", "type: nope")
     result = cli("--token", tenant_key, "apply", "-f", "-", input=bad)
@@ -240,6 +364,17 @@ def test_eval_run_gates(cli, tenant_key):
     started = cli(*auth, "eval", "run", "triage-eval", "-o", "name")
     assert started.exit_code == 0 and started.stdout.strip()
 
+    listed = cli(*auth, "eval", "list", "triage-eval")
+    assert listed.exit_code == 0 and "triage-eval" in listed.output and "failed" in listed.output, listed.output
+    names = cli(*auth, "eval", "list", "-o", "name").stdout.split()
+    assert row["id"] in names and len(names) == 3
+    compared = cli(*auth, "eval", "compare", row["id"], names[-1])
+    assert compared.exit_code == 0 and "over 2 shared cases" in compared.output, compared.output
+    scores = cli(*auth, "eval", "scores", "triage-eval")
+    assert scores.exit_code == 0 and "v1" in scores.output and "0.500" in scores.output
+    cancelled = cli(*auth, "eval", "cancel", row["id"])
+    assert cancelled.exit_code == 1 and "completed" in cancelled.output  # finished runs cannot be cancelled
+
 
 def test_integrations_new(tmp_path):
     runner = CliRunner()
@@ -291,3 +426,15 @@ def test_skills_import_and_upgrade(cli, tenant_key, server, tmp_path):
     assert "(was 1.0.0)" in upgraded.stdout and "/spec/instructions" in upgraded.stdout
     rolled = cli(*auth, "skills", "rollback", "pdf", "1")
     assert rolled.exit_code == 0 and "(1.0.0)" in rolled.stdout
+
+
+def test_instance_admin_manages_tenants(cli, tenant_key):
+    added = cli("--token", ADMIN, "tenants", "add-member", "acme", "dana@acme.test", "--role", "viewer")
+    assert added.exit_code == 0 and "viewer" in added.output, added.output
+    assert cli("--token", ADMIN, "tenants", "suspend", "acme").exit_code == 0
+    listed = cli("--token", ADMIN, "tenants", "list", "-o", "json")
+    assert json.loads(listed.stdout)[0]["status"] == "suspended"
+    blocked = cli("--token", tenant_key, "get", "workflows")
+    assert blocked.exit_code == 1 and "suspended" in blocked.output
+    assert cli("--token", ADMIN, "tenants", "resume", "acme").exit_code == 0
+    assert cli("--token", tenant_key, "get", "workflows").exit_code == 0

@@ -6,10 +6,24 @@ import { keys } from "@/api/hooks";
 
 export type StreamState = "connecting" | "live" | "polling" | "ended" | "reconnecting";
 
+/** The server returns at most this many events per request. */
+const PAGE = 500;
+
+/** Every event after ``after``, following pages until a short one. */
+export async function fetchEvents(runId: string, after = 0): Promise<RunEvent[]> {
+  const all: RunEvent[] = [];
+  for (;;) {
+    const page = await rawJson<RunEvent[]>(`/v1/runs/${runId}/events?after=${after}`);
+    all.push(...page);
+    if (page.length < PAGE) return all;
+    after = page[page.length - 1].id;
+  }
+}
+
 /**
  * All events of a run: the history first, then live over SSE. Any step or
  * run event refreshes the run detail (throttled) so statuses stay current.
- * Where the server cannot stream (a federated tenant answers 501), the
+ * Where the server cannot stream (it answers 501), the
  * history is polled instead until the run finishes.
  */
 export function useRunEvents(runId: string | undefined, terminal: boolean) {
@@ -17,6 +31,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [state, setState] = useState<StreamState>("connecting");
   const seen = useRef(new Set<number>());
+  const last = useRef(0);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -25,6 +40,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
     let close: (() => void) | null = null;
     let poll: ReturnType<typeof setTimeout> | null = null;
     seen.current = new Set();
+    last.current = 0;
     setEvents([]);
     setState("connecting");
 
@@ -40,22 +56,25 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
     const add = (list: RunEvent[]) => {
       const fresh = list.filter((e) => !seen.current.has(e.id));
       if (!fresh.length) return;
-      fresh.forEach((e) => seen.current.add(e.id));
+      fresh.forEach((e) => {
+        seen.current.add(e.id);
+        last.current = Math.max(last.current, e.id);
+      });
       setEvents((cur) => [...cur, ...fresh].sort((a, b) => a.id - b.id));
     };
 
     void (async () => {
       try {
-        const history = await rawJson<RunEvent[]>(`/v1/runs/${runId}/events`);
+        const history = await fetchEvents(runId);
         if (cancelled) return;
         add(history);
         if (terminal) {
           setState("ended");
           return;
         }
-        const last = history.length ? String(history[history.length - 1].id) : undefined;
+        const lastId = history.length ? String(history[history.length - 1].id) : undefined;
         close = subscribe(`/v1/runs/${runId}/events`, {
-          lastEventId: last,
+          lastEventId: lastId,
           onOpen: () => setState("live"),
           onError: () => setState("reconnecting"),
           onEnd: () => {
@@ -66,7 +85,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
             setState("polling");
             const tick = async () => {
               try {
-                add(await rawJson<RunEvent[]>(`/v1/runs/${runId}/events`));
+                add(await fetchEvents(runId, last.current));
                 const run = await rawJson<{ status: string }>(`/v1/runs/${runId}`);
                 void qc.invalidateQueries({ queryKey: keys.run(runId) });
                 if (["succeeded", "failed", "cancelled"].includes(run.status)) {

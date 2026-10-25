@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 import { Toaster } from "sonner";
 import { ApiError } from "@/api/client";
 import { AuthProvider } from "@/lib/auth";
-import { FEDERATION_DISCONNECTED, federationCode, noteFederationError, noteSuccess } from "@/lib/federation";
+import { FEDERATION_DISCONNECTED, FEDERATION_REVOKED, federationCode, noteFederationError, noteSuccess } from "@/lib/federation";
 import { ConfirmProvider, TooltipProvider } from "@/components/ui";
 import App from "./App";
 
@@ -21,6 +21,7 @@ const queryClient = new QueryClient({
       retry: (count, error) =>
         !(error instanceof ApiError && error.status >= 400 && error.status < 500) &&
         federationCode(error) !== FEDERATION_DISCONNECTED &&
+        federationCode(error) !== FEDERATION_REVOKED &&
         count < 2,
     },
   },

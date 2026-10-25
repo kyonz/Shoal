@@ -19,6 +19,9 @@ interface AssistantState {
   autoApprove: boolean;
   scope: string;
   conversation: Conversation | null;
+  /** What the current page shows that the API can't (e.g. unsaved builder edits); sent with each message. */
+  pageContext: string | null;
+  setPageContext: (context: string | null) => void;
   setOpen: (open: boolean) => void;
   ask: (draft: string) => void;
   setDraft: (draft: string) => void;
@@ -56,6 +59,8 @@ export const useAssistant = create<AssistantState>((set, get) => ({
   autoApprove: prefs.autoApprove ?? false,
   scope: "",
   conversation: null,
+  pageContext: null,
+  setPageContext: (pageContext) => set({ pageContext }),
   setOpen: (open) => {
     set({ open });
     writeJson(PREFS, { open, autoApprove: get().autoApprove });

@@ -1,7 +1,7 @@
 # The `shoal` CLI
 
-`shoal` is the command-line client for Shoal. It ships with the engine (`pip install shoal` or
-`uv tool install ./engine`). Client commands talk to a server over the public API; `serve` and `worker` run one.
+`shoal` is the command-line client for Shoal. It ships with the engine: from a checkout, `uv tool install ./engine`
+or `pipx install ./engine` (it is not on PyPI yet). Client commands talk to a server over the public API; `serve` and `worker` run one.
 
 ## Connecting
 
@@ -23,6 +23,15 @@ Flags win over environment variables, which win over the current context:
 
 Bootstrap a fresh server with its admin token: `shoal --token $SHOAL_ADMIN_TOKEN tenants create acme`
 prints the tenant's first API key.
+
+Instance admins (or the admin token) manage tenants:
+
+```sh
+shoal tenants list                               # with status
+shoal tenants add-member acme dana@acme.com      # tenant-admin by default; --role viewer
+shoal tenants suspend acme                       # members locked out, no new runs; data kept
+shoal tenants resume acme
+```
 
 ## Resources
 
@@ -46,7 +55,27 @@ shoal run hello --inputs-file inputs.yaml --wait   # exit 0 only if the run succ
 shoal logs run_01... -f
 shoal get run run_01...
 shoal cancel run_01...
+shoal approve run_01...                     # the run's waiting approval step (or name it: run_01... publish)
+shoal approve run_01... publish --reject -m "not yet"
 shoal signal run_01... build.done -d '{"ok": true}'   # resume a wait step with data
+shoal rerun run_01... --wait                     # same inputs and workflow version, as a new run
+shoal triggers fire nightly -d '{"ref": "main"}' # as if the trigger's event had arrived
+```
+
+`run --wait` and `--follow` print the `shoal approve` command when the run stops at an approval.
+A rejection does not fail the run: the step's output has `approved: false`, so gate the steps after
+it with `if: "{{ steps.<id>.output.approved }}"`.
+
+## Campaigns and blueprints
+
+```sh
+shoal campaigns launch coverage-uplift -i goal="90% coverage"   # one run per target
+shoal campaigns launch coverage-uplift --paused                  # create it; 'resume' starts it
+shoal campaigns list
+shoal campaigns get cmp_01...                                     # status and progress
+shoal campaigns pause|resume|cancel|retry cmp_01...
+shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme --dry-run
+shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme
 ```
 
 ## Secrets
@@ -69,6 +98,13 @@ shoal eval run triage-eval --baseline previous --fail-under 0.9 --max-regression
 With `--wait` the command exits 1 unless the eval completes and its gate passes; the gate's
 reasons are printed. `shoal eval get <id>` shows a past run.
 
+```sh
+shoal eval list triage-eval                   # recent runs: status, score, pass rate, gate
+shoal eval compare <candidate-id> <baseline-id>   # case-by-case diff, regressions and improvements
+shoal eval scores triage-eval                 # scores per workflow version
+shoal eval cancel <id>
+```
+
 ## Skills from marketplaces
 
 ```sh
@@ -88,7 +124,9 @@ Sources themselves are tenant-wide resources: `shoal apply` a `SkillSource` and
 ## Integrations
 
 `shoal integrations new servicenow --title ServiceNow` scaffolds an integration project from the
-SDK template (see [integrations.md](integrations.md)).
+SDK template (see [integrations.md](integrations.md)), and
+`shoal integrations check https://svc.internal --token $SHOAL_INTEGRATION_TOKEN` runs the contract
+checks against a running remote integration service in any language.
 
 ## Running the server
 
