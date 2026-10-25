@@ -77,6 +77,7 @@ shoal campaigns get cmp_01...                                     # status and p
 shoal campaigns pause|resume|cancel|retry cmp_01...
 shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme --dry-run
 shoal blueprints adopt github-uplift --prefix web -p github=github-acme -p org=acme
+shoal blueprints install-defaults --dry-run    # add Shoal's bundled blueprints (tenants created before they shipped)
 ```
 
 ## Secrets

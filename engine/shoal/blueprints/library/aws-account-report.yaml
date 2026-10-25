@@ -1,0 +1,148 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: aws-account-report
+  description: A scheduled agent checks an AWS account through a read-only role and reports to Slack
+spec:
+  title: AWS account report
+  summary: Every week an agent assumes an AWS role through a cloud identity, looks for cost, security and hygiene
+    problems with the AWS CLI and posts what it found to Slack.
+  version: 1.0.0
+  status: published
+  author: Shoal
+  tags:
+  - aws
+  - cloud-identity
+  - slack
+  - schedule
+  categories:
+  - operations
+  readme: |
+    The blueprint creates a cloud identity for the role you name, granted only to this blueprint's agent and
+    workflow, and narrowed to AWS's `ReadOnlyAccess` managed policy whatever the role itself allows.
+
+    1. Adopt with the role ARN. Open the new cloud identity (Cloud identities) and follow its setup steps: add
+       Shoal's OIDC provider to the account and paste the trust policy into the role.
+    2. Press **Test** on the cloud identity, then start the workflow once by hand to see a report.
+    3. The trigger runs it on the schedule you chose (Mondays at 09:00 UTC by default).
+
+    The agent never holds long-lived keys: each run gets short-lived credentials attributed to the run.
+    Change `focus` to point it at what matters to you.
+  params:
+    role_arn:
+      type: string
+      description: IAM role to assume, e.g. arn:aws:iam::123456789012:role/shoal-report.
+    region:
+      type: string
+      default: us-east-1
+      description: Region for STS and the AWS CLI.
+    slack:
+      type: connection
+      integration: slack
+      description: Slack connection to post the report with.
+    channel:
+      type: string
+      default: '#cloud-ops'
+      description: Where the report goes.
+    focus:
+      type: string
+      default: Cost spikes and idle resources, public S3 buckets and security groups open to the world, IAM users
+        without MFA or with old access keys.
+      description: What the agent looks for.
+    schedule:
+      type: string
+      default: 0 9 * * 1
+      description: Cron schedule (UTC) for the report.
+  resources:
+  - kind: CloudIdentity
+    metadata:
+      name: '{{ prefix }}aws-report'
+      description: Read-only AWS access for the account report.
+    spec:
+      provider: aws
+      aws:
+        role_arn: '{{ params.role_arn }}'
+        region: '{{ params.region }}'
+        duration: 1h
+        policy_arns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      allow:
+        workflows:
+        - '{{ prefix }}aws-account-report'
+        agents:
+        - '{{ prefix }}aws-auditor'
+  - kind: Agent
+    metadata:
+      name: '{{ prefix }}aws-auditor'
+    spec:
+      description: Inspects an AWS account with the AWS CLI, read only.
+      provider: anthropic
+      model: claude-sonnet-5-5
+      instructions: |
+        You audit an AWS account with the AWS CLI. Credentials are already in the environment; never print them.
+        If `aws` is missing, install it with `pip install --quiet awscli`. You only have read access: do not try
+        to change anything. Check every region that has resources, cite the resource ids you mention, and say
+        plainly when there is nothing to report.
+      tools:
+      - shell
+      - read_file
+      - write_file
+      - list_files
+      cloud_identities:
+      - '{{ prefix }}aws-report'
+      limits:
+        max_turns: 80
+        timeout: 45m
+        budget_usd: 5
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}aws-account-report'
+      description: Check an AWS account and post the findings to Slack.
+    spec:
+      inputs:
+        focus:
+          type: string
+          default: '{{ params.focus }}'
+      connections:
+        slack: '{{ params.slack }}'
+      defaults:
+        agent: '{{ prefix }}aws-auditor'
+      steps:
+      - id: audit
+        type: agent
+        prompt: |
+          Review the AWS account you have credentials for (start with `aws sts get-caller-identity`).
+
+          Look for: {{ inputs.focus }}
+        outputs:
+          account:
+            type: string
+            description: The account id.
+          findings:
+            type: integer
+            description: Number of problems worth acting on.
+          report:
+            type: string
+            description: The findings in Slack mrkdwn, most important first, with resource ids and a suggested fix each.
+      - id: post
+        type: action
+        action: slack.post_message
+        with:
+          channel: '{{ params.channel }}'
+          text: |
+            *AWS account {{ steps.audit.output.account }}: {{ steps.audit.output.findings }} finding(s)*
+
+            {{ steps.audit.output.report }}
+
+            <{{ run.url }}|Run>
+      outputs:
+        account: '{{ steps.audit.output.account }}'
+        findings: '{{ steps.audit.output.findings }}'
+  - kind: Trigger
+    metadata:
+      name: '{{ prefix }}aws-account-report'
+    spec:
+      workflow: '{{ prefix }}aws-account-report'
+      event: schedule
+      schedule: '{{ params.schedule }}'
+      overlap: skip

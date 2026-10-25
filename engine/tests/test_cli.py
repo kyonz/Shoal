@@ -276,6 +276,17 @@ def test_rerun_triggers_campaigns_and_blueprints(cli, tenant_key):
     assert "cli-greet" in cli(*auth, "get", "workflows").output
 
 
+def test_blueprints_install_defaults(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "delete", "blueprints", "github-pr-review").exit_code == 0
+    dry = cli(*auth, "blueprints", "install-defaults", "--dry-run")
+    assert dry.exit_code == 0, dry.output
+    assert "blueprint/github-pr-review v1.0.0 created (dry run)" in dry.output and "slack-bot v1.0.0 unchanged" in dry.output
+    done = cli(*auth, "blueprints", "install-defaults", "-o", "json")
+    assert done.exit_code == 0, done.output
+    assert {r["name"]: r["outcome"] for r in json.loads(done.stdout)}["github-pr-review"] == "created"
+
+
 def test_delete_names_the_kind(cli, tenant_key):
     auth = ("--token", tenant_key)
     assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0

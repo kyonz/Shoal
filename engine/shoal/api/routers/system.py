@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 import shoal
 from shoal.api.deps import CtxDep, EngineDep, InstanceReaderCtxDep, SystemCtxDep
 from shoal.api.schemas import Me, Permissions, TenantCreated, TenantIn, TenantOut
+from shoal.blueprints.defaults import install as install_default_blueprints
 from shoal.core.models import KIND_BY_PLURAL, RESOURCE_KINDS, Step
 from shoal.core.scope import TENANT_SCOPED_KINDS
 
@@ -73,6 +74,8 @@ async def create_tenant(body: TenantIn, ctx: SystemCtxDep) -> TenantCreated:
     if body.admin_email:  # links their instance account when they have one, so the tenant shows up in their switcher
         await engine.accounts.add_to_tenant(tenant.id, body.admin_email, "tenant-admin", actor=ctx.actor)
     _, token = await engine.store.create_api_key(tenant.id, "bootstrap", ["*"], owner_id=admin.id, created_by=ctx.actor)
+    if engine.settings.default_blueprints:
+        await install_default_blueprints(engine, tenant.id, actor=ctx.actor)
     await engine.store.audit(tenant.id, ctx.actor, "tenant.created", tenant.slug)
     await engine.store.audit(None, ctx.actor, "tenant.created", tenant.slug)
     return TenantCreated(tenant=TenantOut.model_validate(tenant), api_key=token)

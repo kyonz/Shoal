@@ -127,6 +127,21 @@ export function useRemoveAdoption(ns: string) {
   });
 }
 
+export interface DefaultBlueprint {
+  name: string;
+  version: string;
+  outcome: "created" | "updated" | "unchanged" | "kept";
+}
+
+/** Add the blueprints that ship with Shoal (new tenants already have them). */
+export function useInstallDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => rawJson<DefaultBlueprint[]>("/v1/blueprints/defaults", { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["resources"] }),
+  });
+}
+
 export const PLURAL_BY_KIND: Record<string, string> = {
   Workflow: "workflows",
   Agent: "agents",
@@ -138,6 +153,7 @@ export const PLURAL_BY_KIND: Record<string, string> = {
   Gateway: "gateways",
   ModelPolicy: "model-policies",
   Eval: "evals",
+  CloudIdentity: "cloud-identities",
 };
 
 export function resourceRef(r: AppliedResource | string): AppliedResource {

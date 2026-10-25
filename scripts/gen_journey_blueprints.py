@@ -1,4 +1,4 @@
-"""Build examples/blueprints from the plain journey examples. Run from the repo root after changing them:
+"""Build the bundled journey blueprints (engine/shoal/blueprints/library) from the plain journey examples. Run from the repo root after changing them:
 
     python3 scripts/gen_journey_blueprints.py
 """
@@ -82,4 +82,4 @@ blueprints = [
 ]
 for bp in blueprints:
     text = yaml.safe_dump(literalize(bp), sort_keys=False, width=120, allow_unicode=True)
-    pathlib.Path(f"examples/blueprints/{bp['metadata']['name']}.yaml").write_text(text)
+    pathlib.Path(f"engine/shoal/blueprints/library/{bp['metadata']['name']}.yaml").write_text(text)
