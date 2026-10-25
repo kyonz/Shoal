@@ -332,6 +332,9 @@ class ResourceVersionOut(Out):
     created_by: str | None
     message: str | None = None
     document: dict[str, Any]
+    source: dict[str, Any] | None = Field(
+        None, description="The spec as the client wrote it, without server defaults (what rollback restores)."
+    )
 
 
 class RollbackIn(BaseModel):
