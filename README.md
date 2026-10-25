@@ -310,6 +310,7 @@ metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
 | [Slack](docs/slack/README.md) | Setting up Slack, approvals, interactive messages, channel bots and slash commands |
+| [Blueprints](docs/blueprints.md) | The blueprints every tenant starts with (GitHub PR review, Jira bugfix, Slack bots and approvals, AWS report, quality eval) and how to add them to existing tenants |
 | [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
 | [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
@@ -325,7 +326,7 @@ engine/               Python engine: library, API server, worker and the `shoal`
 frontend/             React + TypeScript web UI
 terraform-provider/   Terraform provider for every Shoal resource
 deploy/               Dockerfile, docker compose and Helm chart
-examples/             Workflows, agents, triggers, campaigns and blueprints to start from
+examples/             Workflows, agents, triggers and campaigns to start from
 templates/            Starter project for a new integration
 scripts/              check.sh: build and test everything locally
 docs/                 Architecture and guides
