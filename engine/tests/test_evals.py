@@ -106,6 +106,23 @@ async def test_failed_runs_and_bad_inputs_score_zero(engine, tenant):
     assert row.summary["score"] == 0.5
 
 
+async def test_a_failed_run_fails_its_case_unless_failures_are_expected(engine, tenant):
+    await apply(engine, tenant, "Workflow", "triage", classifier("{{ 1 // 0 if 'boom' in inputs.text else 'bug' }}"))
+    spec = {**EVAL, "cases": [{"name": "boom", "inputs": {"text": "boom"}}, CASES[0]],
+            "graders": [{"name": "lenient", "check": "true"}]}
+    await apply(engine, tenant, "Eval", "triage-eval", spec)
+    row = await run_eval(engine, tenant)
+    results = {r.case_name: r for r in await engine.evals.results(row.id)}
+    boom = results["boom"]
+    assert boom.status == "graded" and boom.error["stage"] == "run"
+    assert boom.score == 0.0 and not boom.passed and boom.scores["lenient"]["score"] == 1.0  # grades kept
+    assert results["crash"].passed and row.summary["score"] == 0.5
+
+    await apply(engine, tenant, "Eval", "triage-eval", {**spec, "require_success": False})
+    row = await run_eval(engine, tenant)
+    assert all(r.passed for r in await engine.evals.results(row.id))
+
+
 async def test_llm_judge_and_decision_graders(engine, tenant):
     seen: list[ModelRequest] = []
 
@@ -266,6 +283,9 @@ class FakeBraintrust:
         self.auth.add(request.headers.get("authorization", ""))
         path = request.url.path
         body = json.loads(request.content) if request.content else {}
+        if path == "/v1/project" and request.method == "GET":
+            found = request.url.params["project_name"] == "triage"
+            return httpx.Response(200, json={"objects": [{"id": "proj_1", "name": "triage"}] if found else []})
         if path == "/v1/project":
             return httpx.Response(200, json={"id": "proj_1", "name": body["name"]})
         if path == "/v1/experiment":
@@ -277,6 +297,8 @@ class FakeBraintrust:
         if path == "/v1/project_logs/proj_1/insert":
             self.logs += body["events"]
             return httpx.Response(200, json={"row_ids": []})
+        if path == "/v1/dataset" and "dataset_name" not in request.url.params:
+            return httpx.Response(200, json={"objects": [{"id": "ds_2", "name": "smoke"}, {"id": "ds_1", "name": "golden"}]})
         if path == "/v1/dataset":
             assert request.url.params["dataset_name"] == "golden"
             return httpx.Response(200, json={"objects": [{"id": "ds_1"}]})
@@ -322,9 +344,61 @@ async def test_braintrust_dataset_import_and_experiment_export(engine, tenant):
 
     # production runs export to the project's logs
     run_id = results["bt-crash"].run_id
-    await engine.evals.export_run(tenant.id, run_id, "braintrust", config)
+    assert (await engine.evals.export_run(tenant.id, run_id, "braintrust", config))[0] == "braintrust"
     assert bt.logs[0]["id"] == run_id and bt.logs[0]["input"] == {"text": "crash when saving"}
 
+
+
+async def test_eval_platforms_keep_credentials_in_one_place(engine, admin):
+    bt = FakeBraintrust()
+    engine.http_transport = httpx.MockTransport(bt.handle)
+    assert (await admin.put("/v1/namespaces/shared/secrets/bt-key", json={"value": "sk-bt"})).status_code in (200, 201)
+    platform = {"description": "Team Braintrust", "sink": "braintrust",
+                "config": {"project": "triage", "api_key_secret": "bt-key", "org": "acme"}}
+    r = await admin.put("/v1/eval-platforms/braintrust-prod", json={"spec": platform})
+    assert r.status_code == 201, r.text
+    leaky = {**platform, "config": {"project": "triage", "api_key": "sk-in-the-clear"}}
+    assert (await admin.put("/v1/eval-platforms/leaky", json={"spec": leaky})).status_code == 422
+
+    assert (await admin.post("/v1/eval-platforms/braintrust-prod/test")).json() == {
+        "ok": True, "sink": "braintrust", "project": "triage", "detail": None}
+    assert (await admin.get("/v1/eval-platforms/braintrust-prod/datasets")).json() == ["golden", "smoke"]
+    assert (await admin.post("/v1/eval-platforms/missing/test")).status_code == 404
+    unset = {**platform, "config": {"project": "triage", "api_key_secret": "nope"}}
+    await admin.put("/v1/eval-platforms/unset", json={"spec": unset})
+    r = (await admin.post("/v1/eval-platforms/unset/test")).json()
+    assert r["ok"] is False and "nope" in r["detail"]
+
+    # Evals in any namespace name the platform; inline config is merged over its settings.
+    assert (await admin.put("/v1/namespaces/default/workflows/triage", json={"spec": V1})).status_code == 201
+    eval_spec = {**EVAL, "cases": [], "graders": [{"name": "label", "check": "outputs.label == (expect.label or expect.output)"}],
+                 "dataset": {"platform": "braintrust-prod", "name": "golden"},
+                 "sinks": [{"platform": "braintrust-prod", "config": {"org": "other-org"}}]}
+    assert (await admin.put("/v1/namespaces/default/evals/triage-eval", json={"spec": eval_spec})).status_code == 201
+    bad = {**eval_spec, "sinks": [{"platform": "braintrust-prod", "sink": "langfuse"}, {}]}
+    assert (await admin.put("/v1/namespaces/default/evals/bad", json={"spec": bad})).status_code == 422
+    redirect = {**eval_spec, "sinks": [{"platform": "braintrust-prod", "config": {"api_url": "https://elsewhere.test"}}]}
+    assert (await admin.put("/v1/namespaces/default/evals/bad", json={"spec": redirect})).status_code == 422
+    r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs")
+    assert r.status_code == 201, r.text
+    await engine.run_until_idle()
+    detail = (await admin.get(f"/v1/eval-runs/{r.json()['id']}")).json()
+    assert len(detail["results"]) == 2 and bt.auth == {"Bearer sk-bt"}
+    assert detail["exports"]["braintrust-prod"]["url"].startswith("https://www.braintrust.dev/app/other-org/p/triage/")
+
+    r = await admin.post(f"/v1/eval-runs/{detail['id']}/export", json={"platform": "braintrust-prod"})
+    assert r.status_code == 200 and r.json()["sink"] == "braintrust" and r.json()["platform"] == "braintrust-prod"
+    r = await admin.post("/v1/namespaces/default/evals/triage-eval/import",
+                         json={"platform": "braintrust-prod", "dataset": "golden", "mode": "replace"})
+    assert r.status_code == 200 and [c["name"] for c in r.json()["spec"]["cases"]] == ["bt-crash", "row2"]
+    r = await admin.post(f"/v1/runs/{detail['results'][0]['run_id']}/export", json={"platform": "braintrust-prod"})
+    assert r.status_code == 200 and bt.logs
+    assert (await admin.post(f"/v1/eval-runs/{detail['id']}/export", json={"config": {}})).status_code == 422
+    r = await admin.post(f"/v1/runs/{detail['results'][0]['run_id']}/export",
+                         json={"platform": "braintrust-prod", "config": {"api_url": "https://elsewhere.test"}})
+    assert r.status_code == 422 and "set on the platform only" in r.json()["detail"]
+    r = await admin.post(f"/v1/eval-runs/{detail['id']}/export", json={"platform": "braintrust-prod", "sink": "langfuse"})
+    assert r.status_code == 422 and "braintrust sink" in r.json()["detail"]
 
 async def test_failed_export_does_not_fail_the_eval(engine, tenant):
     engine.http_transport = httpx.MockTransport(lambda r: httpx.Response(500, json={"error": "down"}))
@@ -460,6 +534,10 @@ async def test_eval_api_permissions(engine, admin):
     r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs")
     assert r.status_code == 201
     assert (await admin.get(f"/v1/eval-runs/{r.json()['id']}", headers=headers)).status_code == 200
+    platform = {"sink": "langfuse", "config": {"secret_key_secret": "lf"}}
+    assert (await admin.put("/v1/eval-platforms/lf", json={"spec": platform})).status_code == 201
+    assert (await admin.put("/v1/eval-platforms/lf2", json={"spec": platform}, headers=headers)).status_code == 403
+    assert (await admin.post("/v1/eval-platforms/lf/test", headers=headers)).status_code == 403  # namespace roles only
     assert (await admin.post("/v1/namespaces/default/evals/nope/runs")).status_code == 404
     r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs", json={"baseline": "version:9"})
     assert r.status_code == 404 and "baseline" in r.json()["detail"]

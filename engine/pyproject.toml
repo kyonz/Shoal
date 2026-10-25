@@ -38,7 +38,8 @@ kubernetes = ["kubernetes-asyncio>=30.1"]
 e2b = ["e2b>=1.0"]
 docker = ["docker>=7.1"]
 temporal = ["temporalio>=1.20"]
-all = ["shoal[postgres,kubernetes,e2b,docker,temporal]"]
+jev = ["typesafe-sdk>=0.7"]
+all = ["shoal[postgres,kubernetes,e2b,docker,temporal,jev]"]
 
 [project.scripts]
 shoal = "shoal.cli.main:app"

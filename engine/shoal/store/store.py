@@ -84,8 +84,8 @@ class Store:
 
     # ------------------------------------------------------------------ tenants
 
-    async def create_tenant(self, slug: str, name: str | None = None) -> t.Tenant:
-        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug)
+    async def create_tenant(self, slug: str, name: str | None = None, *, description: str | None = None) -> t.Tenant:
+        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug, description=description)
         try:
             async with self.session() as s:
                 s.add(tenant)
@@ -619,6 +619,17 @@ class Store:
             raise NotFound(f"step '{step_id}' not found")
         return step
 
+    async def update_step_if_unchanged(self, step: t.StepRun, **values: Any) -> bool:
+        """Compare-and-set: update the step only if nobody saved it since it was read."""
+        values["updated_at"] = utcnow()
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.StepRun)
+                .where(t.StepRun.id == step.id, t.StepRun.updated_at == step.updated_at)
+                .values(**values)
+            )
+            return bool(result.rowcount)
+
     async def save_step(self, step: t.StepRun) -> None:
         step.updated_at = utcnow()
         async with self.session() as s:
@@ -880,11 +891,19 @@ class Store:
             return {status: int(n) for status, n in (await s.execute(q)).all()}
 
     async def campaign_cost(self, campaign_id: str) -> float:
+        """Spend so far: finished targets plus what their runs still in flight have used."""
         q = select(func.coalesce(func.sum(t.CampaignTarget.cost_usd), 0.0)).where(
             t.CampaignTarget.campaign_id == campaign_id
         )
+        running = select(t.Run.usage).where(
+            t.Run.campaign_id == campaign_id,
+            t.Run.campaign_target_id.is_not(None),
+            t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+        )
         async with self.session() as s:
-            return float((await s.execute(q)).scalar_one())
+            finished = float((await s.execute(q)).scalar_one())
+            in_flight = sum(float((usage or {}).get("cost_usd", 0) or 0) for usage in (await s.execute(running)).scalars())
+        return finished + in_flight
 
     async def runs_started_since(self, campaign_id: str, since: datetime) -> int:
         q = select(func.count()).select_from(t.CampaignTarget).where(

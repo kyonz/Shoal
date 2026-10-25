@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import re
@@ -37,6 +38,7 @@ from shoal.api.routers import (
     evals,
     federation,
     hooks,
+    instance,
     resources,
     runs,
     scim,
@@ -112,6 +114,28 @@ MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 UNAUDITED_PREFIXES = ("/v1/hooks/", "/v1/auth/")  # webhook deliveries and sign-in keep their own records
 
 
+def client_ip(request: Request, trusted_proxies: list[str]) -> str | None:
+    """The caller's address: the peer, or, behind trusted proxies, the nearest untrusted X-Forwarded-For hop."""
+    peer = request.client.host if request.client else None
+    if not trusted_proxies or peer is None:
+        return peer
+    networks = [ipaddress.ip_network(p, strict=False) for p in trusted_proxies]
+
+    def trusted(address: str) -> bool:
+        try:
+            return any(ipaddress.ip_address(address) in n for n in networks)
+        except ValueError:
+            return False
+
+    if not trusted(peer):
+        return peer
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    for hop in reversed(hops):  # proxies append, so walk back from the nearest one
+        if not trusted(hop):
+            return hop[:64]
+    return hops[0][:64] if hops else peer
+
+
 def install_request_context(app: FastAPI) -> None:
     """Request ids, and an audit entry for every mutating call that no handler audited itself
     (so failed, rejected and unexpected writes are recorded too)."""
@@ -124,7 +148,7 @@ def install_request_context(app: FastAPI) -> None:
             request_id=request_id[:64],
             method=request.method,
             path=request.url.path,
-            ip=request.client.host if request.client else None,
+            ip=client_ip(request, app.state.engine.settings.trusted_proxies),
             user_agent=request.headers.get("user-agent"),
             source="scim" if request.url.path.startswith("/scim/") else (client if client in ("ui", "assistant") else "api"),
         )
@@ -166,6 +190,7 @@ def install_request_context(app: FastAPI) -> None:
 HUB_LOCAL_PREFIXES = (
     "/v1/federation", "/v1/auth", "/v1/tenants", "/v1/hooks", "/v1/users", "/v1/groups", "/v1/service-accounts",
     "/v1/api-keys", "/v1/oidc-providers", "/v1/openapi.json", "/v1/docs", "/v1/info",
+    "/v1/instance", "/v1/me/tenant",  # instance accounts and tenant switching live on the hub
     "/.well-known",  # each deployment is its own workload identity issuer
 )
 
@@ -331,7 +356,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
+    for module in (system, instance, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
                    credentials, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:

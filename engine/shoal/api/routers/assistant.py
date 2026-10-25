@@ -42,6 +42,10 @@ class ChatIn(BaseModel):
     decisions: dict[str, Decision] = Field(default_factory=dict, description="Pending action id -> decision.")
     auto_approve: bool = Field(False, description="Make changes without asking (the caller's permissions still apply).")
     page: str | None = Field(None, max_length=500, description="The UI route the user is on, for context.")
+    context: str | None = Field(
+        None, max_length=60_000,
+        description="What the user sees that the API can't show, e.g. a workflow open in the builder with unsaved edits.",
+    )
 
 
 class PendingAction(BaseModel):
@@ -106,7 +110,8 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
                                  timeout=120) as api:
         assistant = Assistant(
             ModelClient([target]), api, request.app.openapi(), namespace=namespace,
-            actor=ctx.principal.display_name or ctx.actor, page=body.page, max_turns=settings.assistant_max_turns,
+            actor=ctx.principal.display_name or ctx.actor, page=body.page, context=body.context,
+            max_turns=settings.assistant_max_turns,
             auto_approve=body.auto_approve,
         )
         try:

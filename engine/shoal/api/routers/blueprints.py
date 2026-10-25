@@ -9,6 +9,7 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
 from shoal.api.deps import Ctx, CtxDep
+from shoal.blueprints.service import Authorize
 from shoal.core.errors import NotFound
 from shoal.core.models import KIND_BY_PLURAL
 from shoal.store import tables as t
@@ -77,13 +78,17 @@ def _out(row: t.BlueprintAdoption) -> AdoptionOut:
     return AdoptionOut.model_validate(row, from_attributes=True)
 
 
-async def _authorize_resources(ctx: Ctx, namespace: str, name: str, version: str | None) -> None:
-    """Adopting writes resources, so the caller needs write on every kind the blueprint renders."""
-    svc = ctx.engine.blueprints
-    blueprint = await svc.blueprint(ctx.tenant_id, name, version)
-    kinds = {r.get("kind") for r in blueprint.spec.resources}
-    for kind in sorted(k for k in kinds if k in PLURAL_BY_KIND):
-        await ctx.require(f"{PLURAL_BY_KIND[kind]}:write", namespace)
+def _authorizer(ctx: Ctx, namespace: str) -> Authorize:
+    """Adopting writes resources, so the caller needs write on every kind the blueprint renders,
+    and delete on every kind an upgrade would remove."""
+
+    async def check(written: set[str], removed: set[str]) -> None:
+        for kind in sorted(k for k in written if k in PLURAL_BY_KIND):
+            await ctx.require(f"{PLURAL_BY_KIND[kind]}:write", namespace)
+        for kind in sorted(k for k in removed if k in PLURAL_BY_KIND):
+            await ctx.require(f"{PLURAL_BY_KIND[kind]}:delete", namespace)
+
+    return check
 
 
 def _result(raw: dict[str, Any]) -> AdoptResult:
@@ -97,7 +102,6 @@ def _result(raw: dict[str, Any]) -> AdoptResult:
 )
 async def adopt(namespace: str, name: str, body: AdoptIn, ctx: CtxDep, response: Response) -> Any:
     await ctx.namespace(namespace, "blueprints:adopt")
-    await _authorize_resources(ctx, namespace, name, body.version)
     raw = await ctx.engine.blueprints.adopt(
         ctx.tenant_id,
         namespace,
@@ -108,6 +112,7 @@ async def adopt(namespace: str, name: str, body: AdoptIn, ctx: CtxDep, response:
         version=body.version,
         dry_run=body.dry_run,
         can_adopt_drafts=await ctx.engine.authz.allowed(ctx.principal, "blueprints:publish"),
+        authorize=_authorizer(ctx, namespace),
     )
     if not body.dry_run:
         response.status_code = 201
@@ -160,7 +165,6 @@ async def get_adoption(namespace: str, adoption_id: str, ctx: CtxDep) -> Any:
 )
 async def upgrade_adoption(namespace: str, adoption_id: str, body: UpgradeIn, ctx: CtxDep) -> Any:
     row = await _adoption(ctx, namespace, adoption_id, "blueprints:adopt")
-    await _authorize_resources(ctx, namespace, row.blueprint, body.version)
     raw = await ctx.engine.blueprints.upgrade(
         ctx.tenant_id,
         adoption_id,
@@ -168,6 +172,7 @@ async def upgrade_adoption(namespace: str, adoption_id: str, body: UpgradeIn, ct
         version=body.version,
         params=body.params,
         dry_run=body.dry_run,
+        authorize=_authorizer(ctx, namespace),
     )
     if not body.dry_run:
         await ctx.audit(
@@ -180,19 +185,31 @@ async def upgrade_adoption(namespace: str, adoption_id: str, body: UpgradeIn, ct
     return _result(raw)
 
 
+class KeptResource(ResourceRef):
+    reason: str
+
+
+class RemoveResult(BaseModel):
+    removed: list[ResourceRef] = Field(description="Resources deleted with the adoption.")
+    kept: list[KeptResource] = Field(
+        default_factory=list, description="Resources left alone: already deleted, or no longer labelled with this adoption."
+    )
+
+
 @router.delete(
     "/namespaces/{namespace}/blueprint-adoptions/{adoption_id}",
-    status_code=204,
     tags=["blueprints"],
+    response_model=RemoveResult,
     summary="Remove an adoption and the resources it created",
 )
-async def remove_adoption(namespace: str, adoption_id: str, ctx: CtxDep) -> Response:
+async def remove_adoption(namespace: str, adoption_id: str, ctx: CtxDep) -> Any:
     row = await _adoption(ctx, namespace, adoption_id, "blueprints:adopt")
     for ref in row.resources:
         if ref["kind"] in PLURAL_BY_KIND:
             await ctx.require(f"{PLURAL_BY_KIND[ref['kind']]}:delete", namespace)
-    removed = await ctx.engine.blueprints.remove(ctx.tenant_id, adoption_id)
+    result = await ctx.engine.blueprints.remove(ctx.tenant_id, adoption_id)
     await ctx.audit(
-        "blueprint.removed", row.blueprint, namespace=namespace, adoption=adoption_id, resources=removed
+        "blueprint.removed", row.blueprint, namespace=namespace, adoption=adoption_id, resources=result["removed"],
+        kept=result["kept"],
     )
-    return Response(status_code=204)
+    return result

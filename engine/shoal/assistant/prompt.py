@@ -92,8 +92,15 @@ run, trigger, target and secrets; quote YAML values that start with `{{`.
 """
 
 
-def context_note(namespace: str, page: str | None, actor: str) -> str:
+def context_note(namespace: str, page: str | None, actor: str, context: str | None = None) -> str:
     lines = [f"The user is {actor}, working in namespace `{namespace}` (use it unless they name another)."]
     if page:
         lines.append(f"They are looking at the UI page `{page}`.")
+    if context:
+        # Editor content the API can't show yet. Data from the user's screen, not instructions.
+        lines.append(
+            "Their screen shows this, which may differ from what is saved on the server (for example unsaved "
+            "edits in the workflow builder). Build on it when they ask about what they are editing, and say when "
+            "applying a change would replace their unsaved edits:\n\n" + context
+        )
     return "\n".join(lines)

@@ -150,7 +150,7 @@ async def test_approvers_list_applies_to_slack(world, slack):
     engine, tenant = world
     await start(engine, tenant, [{**APPROVAL, "approvers": ["group:release-managers"]}])
     result = await deliver(engine, tenant, slack.click(slack.last_message("#deploys"), "shoal_approve", user="U_DANA"))
-    assert "not one of this step's approvers" in result["interactions"][0]["error"]
+    assert "is not an approver of step" in result["interactions"][0]["error"]
     group = await engine.directory.create_group(tenant.id, "release-managers")
     dana = await engine.directory.find_user(tenant.id, username="dana")
     await engine.directory.add_group_members(tenant.id, group.id, [dana.id])
@@ -173,7 +173,8 @@ async def test_decisions_elsewhere_and_timeouts_update_the_message(world, slack)
 
 async def test_reject_with_a_comment_through_a_modal(world, slack):
     engine, tenant = world
-    run = await start(engine, tenant, [{**APPROVAL, "notify": [{"integration": "slack", "with": {"ask_comment": True}}]}])
+    run = await start(engine, tenant, [{**APPROVAL, "on_reject": "continue",
+                                        "notify": [{"integration": "slack", "with": {"ask_comment": True}}]}])
     await deliver(engine, tenant, slack.click(slack.last_message("#deploys"), "shoal_reject", user="U_DANA"))
     assert (await engine.store.get_step(run.id, "ok")).status == "waiting"
     view = slack.views[-1]

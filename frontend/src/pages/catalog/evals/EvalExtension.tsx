@@ -277,12 +277,20 @@ function RunEvalButton({ ctx }: { ctx: EditorContext }) {
   const [open, setOpen] = useState(false);
   const [baseline, setBaseline] = useState("previous");
   const [failUnder, setFailUnder] = useState("");
+  const [versions, setVersions] = useState<string[]>([]);
+  const [only, setOnly] = useState<string[]>([]);
   if (!canRun) return null;
   const missing = isMissingEndpoint(runs.error);
+  const caseNames = ((ctx.spec.cases as EvalCase[]) ?? []).map((c) => c.name);
+  const specVariants = ((ctx.spec.variants as unknown[]) ?? []).length;
+  const versionNumbers = [...new Set(versions.map((v) => Number(v.replace(/^v/i, ""))).filter((n) => Number.isInteger(n) && n > 0))];
   const go = async () => {
     try {
       const body: Record<string, unknown> = { baseline };
       if (failUnder !== "") body.fail_under = Number(failUnder) / 100;
+      if (versionNumbers.length === 1) body.version = versionNumbers[0];
+      if (versionNumbers.length > 1) body.variants = versionNumbers.map((n) => ({ name: `v${n}`, version: n }));
+      if (only.length) body.cases = only;
       const run = await start.mutateAsync(body);
       toast.success("Eval started");
       setOpen(false);
@@ -302,7 +310,7 @@ function RunEvalButton({ ctx }: { ctx: EditorContext }) {
         open={open}
         onOpenChange={setOpen}
         title={`Run ${ctx.name}`}
-        description={`Runs ${cases ? `${cases} case${cases === 1 ? "" : "s"}` : "every case"} through ${String(ctx.spec.workflow || "the workflow")} and grades the outputs.`}
+        description={`Runs ${only.length ? `${only.length} of ${cases} cases` : cases ? `${cases} case${cases === 1 ? "" : "s"}` : "every case"} through ${String(ctx.spec.workflow || "the workflow")} and grades the outputs.`}
         footer={
           <>
             <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
@@ -322,6 +330,22 @@ function RunEvalButton({ ctx }: { ctx: EditorContext }) {
               ))}
             </NativeSelect>
           </Field>
+          <Field
+            label="Workflow versions"
+            hint="optional"
+            description={
+              versionNumbers.length > 1
+                ? `Runs every case against each version as its own variant and compares them with v${versionNumbers[0]}.`
+                : `Defaults to ${specVariants ? "the eval's variants" : "the current version"}. Add two or more to compare versions side by side.`
+            }
+          >
+            <TagInput value={versions} onChange={setVersions} placeholder="e.g. 3, then Enter" />
+          </Field>
+          {caseNames.length > 1 && (
+            <Field label="Only these cases" hint="optional" description="Leave empty to run every case.">
+              <TagInput value={only} onChange={setOnly} options={caseNames} />
+            </Field>
+          )}
           <Field label="Gate: minimum score" hint="optional, %" description="The run's gate fails when any variant scores below this.">
             <Input type="number" min={0} max={100} value={failUnder} placeholder="e.g. 85" onChange={(e) => setFailUnder(e.target.value)} />
           </Field>

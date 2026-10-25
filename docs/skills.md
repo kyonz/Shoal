@@ -52,7 +52,7 @@ the server and their config schemas are at `GET /v1/skill-source-types`.
 
 | `source` | Config | What it reads |
 | --- | --- | --- |
-| `git` | `url`, `ref` (default `main`), `path`, `refresh_seconds`; secret `token` (+ `username`) | Every directory with a `SKILL.md` is a skill, with the directory (relative to `path`) as its id. That covers single-skill repositories, `skills/<name>/` collections and plugin marketplaces (`plugins/<p>/skills/<name>/`). Branches are re-fetched at most every `refresh_seconds`; imports record the exact commit. |
+| `git` | `url`, `ref` (default `main`), `path`, `refresh_seconds`; secret `token` (+ `username`) | Every directory with a `SKILL.md` is a skill, with the directory (relative to `path`) as its id. That covers single-skill repositories, `skills/<name>/` collections and plugin marketplaces (`plugins/<p>/skills/<name>/`). Branches are re-fetched at most every `refresh_seconds` (an update check always fetches); imports record the exact commit. A skill without a `version` is versioned by commit, and an update check only flags it when its own files changed. |
 | `registry` | `url`, `headers`; secret `token` | Any service speaking `shoal.skill-source/v1` (below): a marketplace, or another source run as its own service. |
 
 A skill's version is `version` (or `metadata.version`) from its frontmatter, else

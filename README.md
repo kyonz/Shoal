@@ -221,11 +221,10 @@ spec:
       outputs:
         branch: {type: string}
     - id: review
-      type: approval                        # a durable human-in-the-loop gate
+      type: approval                        # a durable human-in-the-loop gate; rejecting stops the run
       message: "Open a PR for {{ steps.fix.output.branch }}?"
     - id: pr
       type: action
-      if: "{{ steps.review.output.approved }}"   # a rejection doesn't stop the run
       action: github.create_pull_request
       with:
         repo: "{{ inputs.repo }}"

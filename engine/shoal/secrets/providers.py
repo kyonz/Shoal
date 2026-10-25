@@ -81,6 +81,9 @@ class EnvSecretProvider:
     (shared by all tenants, unless ``SHOAL_SECRET_ENV_SHARED=false``). Variables that
     configure Shoal itself (``SHOAL_SECRET_KEY``, ``SHOAL_SECRET_PROVIDERS``) are
     never secrets: a workflow asking for ``key`` must not get the master key.
+    Names that would contain ``__`` (from ``__``, ``--`` or ``-_``) are not
+    looked up, so no tenant can reach another's variables. Env secrets are
+    tenant-wide: every namespace of the tenant can read them.
     """
 
     name = "env"
@@ -91,6 +94,10 @@ class EnvSecretProvider:
         self.settings = engine.settings
 
     async def get(self, tenant_id: str, name: str) -> str | None:
+        if "__" in _env_name(name):
+            # `__` separates the tenant from the name: tenant `acme` asking for `ops--token`
+            # would otherwise read tenant `acme--ops`'s SHOAL_SECRET_ACME__OPS__TOKEN.
+            return None
         tenant = await self.store.get_tenant(tenant_id)
         value = os.environ.get(f"SHOAL_SECRET_{_env_name(tenant.slug)}__{_env_name(name)}")
         if value is not None or not self.settings.secret_env_shared:

@@ -5,7 +5,7 @@ An approval step with ``notify:`` asks through integrations that support it
 integration's webhook parses an event carrying an :class:`Interaction`; this
 service resolves the person behind it (``Identity`` hints such as ``slack_id``
 or ``email`` -> a directory user), checks they hold ``runs:approve`` (or
-``runs:signal``) in the run's namespace and are among the step's ``approvers``,
+``runs:signal``) in the run's namespace (``submit_approval`` checks the step's ``approvers``),
 and only then records the decision or sends the signal. Whatever decides the
 step (a click, the UI, the API, a timeout), the notifications are updated with
 the outcome.
@@ -18,8 +18,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from shoal.auth.rbac import Principal
-from shoal.core.errors import Conflict, NotFound, ShoalError
-from shoal.core.models import ApprovalStep, WorkflowSpec
+from shoal.core.errors import Conflict, Forbidden, NotFound, ShoalError
+from shoal.core.models import ApprovalStep
 from shoal.core.scope import use_namespace
 from shoal.integrations.base import ApprovalRequest, IntegrationError, IntegrationEvent, Interaction
 
@@ -125,37 +125,14 @@ class InteractionService:
 
     # ------------------------------------------------------------------ approvals
 
-    def approval_step(self, run: t.Run, step_id: str) -> ApprovalStep:
-        spec = WorkflowSpec.model_validate(run.workflow)
-        step = next((s for s in spec.steps if s.id == step_id), None)
-        if isinstance(step, ApprovalStep):
-            return step
-        return ApprovalStep(id=step_id, message="")  # a decide step holding for review (on_low_confidence: approval)
+    async def may_approve(self, principal: Principal, run: t.Run) -> str | None:
+        """None when ``principal`` may decide approvals in the run's namespace; otherwise why not.
 
-    async def may_approve(self, principal: Principal, run: t.Run, step: ApprovalStep) -> str | None:
-        """None when ``principal`` may decide ``step``; otherwise why not."""
-        authz = self.engine.authz
-        who = principal.display_name or principal.actor
-        if not await authz.allowed(principal, "runs:approve", run.namespace):
-            return f"{who} lacks 'runs:approve' in namespace '{run.namespace}'"
-        if not step.approvers or principal.is_system_admin or getattr(principal, "instance_role", None):
-            return None
-        names = {principal.actor.lower(), principal.actor.split(":", 1)[-1].lower()}
-        if principal.email:
-            names.add(principal.email.lower())
-        identity = await self.engine.identities.find(principal.tenant_id or "", actor=principal.actor, email=principal.email)
-        if identity is not None:
-            names.add(identity.metadata.name.lower())
-        if principal.user_id:
-            for group_id in await self.engine.directory.groups_of(principal.user_id):
-                try:
-                    group = await self.engine.directory.get_group(principal.tenant_id or "", group_id)
-                except NotFound:
-                    continue
-                names.add(f"group:{group.display_name}".lower())
-        if names & {a.lower() for a in step.approvers}:
-            return None
-        return f"{who} is not one of this step's approvers ({', '.join(step.approvers)})"
+        The step's ``approvers`` list is checked by ``Executor.submit_approval`` (as for the UI and API).
+        """
+        if not await self.engine.authz.allowed(principal, "runs:approve", run.namespace):
+            return f"{principal.display_name or principal.actor} lacks 'runs:approve' in namespace '{run.namespace}'"
+        return None
 
     # ------------------------------------------------------------------ interactions
 
@@ -191,18 +168,21 @@ class InteractionService:
         if decision:
             verdict = "approved" if decision["approved"] else "rejected"
             return {"error": f"already {verdict} by {decision.get('by') or 'someone else'}"}
-        refusal = await self.may_approve(principal, run, self.approval_step(run, step_id))
-        if refusal:
+        refusal = await self.may_approve(principal, run)
+        if refusal is None:
+            try:
+                await self.engine.executor.submit_approval(
+                    run.tenant_id, run.id, step_id, approved=bool(interaction.approved),
+                    by=principal.display_name or principal.actor, comment=interaction.comment, decider=principal,
+                )
+            except Conflict as exc:
+                return {"error": str(exc)}
+            except Forbidden as exc:
+                refusal = str(exc)
+        if refusal is not None:
             await self.engine.store.audit(run.tenant_id, principal.actor, "access.denied", "runs:approve",
                                           outcome="denied", namespace=run.namespace, via=integration)
             return {"error": refusal}
-        try:
-            await self.engine.executor.submit_approval(
-                run.tenant_id, run.id, step_id, approved=bool(interaction.approved),
-                by=principal.display_name or principal.actor, comment=interaction.comment,
-            )
-        except Conflict as exc:
-            return {"error": str(exc)}
         await self.engine.store.audit(run.tenant_id, principal.actor, "run.approval", f"{run.id}/{step_id}",
                                       namespace=run.namespace, approved=bool(interaction.approved), via=integration)
         return {"ok": True, "approved": bool(interaction.approved), "step_id": step_id}

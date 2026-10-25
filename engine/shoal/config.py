@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shoal.integrations.egress import DEFAULT_BLOCKED_NETWORKS
@@ -14,6 +15,17 @@ from shoal.integrations.egress import DEFAULT_BLOCKED_NETWORKS
 class RemoteIntegration(BaseModel):
     url: str
     token: SecretStr | None = None
+
+
+class InstanceOIDC(BaseModel):
+    """The instance-wide sign-in: one identity provider for everyone, whichever tenants they belong to."""
+
+    issuer: str
+    client_id: str
+    client_secret: SecretStr | None = None
+    display_name: str = "Single sign-on"
+    scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    allowed_domains: list[str] = Field(default_factory=list, description="Email domains allowed to sign in (empty: any).")
 
 
 class Settings(BaseSettings):
@@ -36,7 +48,19 @@ class Settings(BaseSettings):
         SecretStr("dev-insecure-secret-key-change-me"),
         description="Key used to encrypt stored secrets and sign run identity tokens.",
     )
-    admin_token: SecretStr | None = Field(None, description="System admin bearer token (tenant management).")
+    admin_token: SecretStr | None = Field(None, description="Break-glass system admin bearer token (tenant management).")
+    instance_oidc: InstanceOIDC | None = Field(
+        None,
+        description="Instance-wide sign-in (JSON: issuer, client_id, client_secret, ...). People sign in once and "
+        "switch between the tenants they belong to.",
+    )
+    instance_oidc_client_secret: SecretStr | None = Field(
+        None, description="Client secret for the instance sign-in, when it is not in SHOAL_INSTANCE_OIDC (e.g. from a Kubernetes Secret)."
+    )
+    instance_admins: list[str] = Field(
+        default_factory=list,
+        description="Emails that become instance admins when they sign in (bootstrap; manage the rest in the admin console).",
+    )
     public_url: str = Field("http://localhost:8080", description="External base URL (webhook URLs, A2A cards).")
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     static_dir: str | None = Field(None, description="Serve the built frontend from this directory.")
@@ -113,6 +137,23 @@ class Settings(BaseSettings):
     assistant_model: str = Field("claude-opus-5-5", description="Model the assistant runs on.")
     assistant_effort: str = Field("medium", description="Reasoning effort for the assistant's model calls.")
     assistant_max_turns: int = Field(16, ge=1, le=100, description="Model calls per user message before it stops.")
+
+    api_key_max_days: int = Field(
+        0, ge=0, description="Longest an API key may live: keys created without an expiry get this one, longer ones "
+        "are refused (0: no limit, keys may never expire).",
+    )
+    trusted_proxies: list[str] = Field(
+        default_factory=list,
+        description="Addresses or CIDRs of reverse proxies and load balancers whose X-Forwarded-For is believed, "
+        "so the audit log records the real client address, e.g. SHOAL_TRUSTED_PROXIES='[\"10.0.0.0/8\"]'.",
+    )
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _proxies_are_networks(cls, value: list[str]) -> list[str]:
+        for proxy in value:
+            ipaddress.ip_network(proxy, strict=False)  # raises on a typo at start-up, not on every request
+        return value
 
     audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
 

@@ -127,7 +127,7 @@ assert api.requests("POST", "/graphql")[0].json["variables"]["title"] == "Bug"
 | `signed_webhook`, `github_webhook` | Build correctly signed deliveries. |
 | `MockSlack`, `slack_request` | A fake Slack: Web API state (messages, updates, modals, users) and signed clicks, modal submissions, events and slash commands. |
 | `IntegrationContract` | Subclass as `TestXContract` to run the contract checks under pytest. |
-| `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m shoal.sdk.testing.contract URL --token T`. |
+| `check_remote_service(url, token)` | The contract checks for a running remote service, also `shoal integrations check URL --token T` from the command line. |
 
 The **contract** checks that keys and action names are valid tool names,
 every action and resource has a description and object schemas, credentials
