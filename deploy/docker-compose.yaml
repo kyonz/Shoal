@@ -1,0 +1,71 @@
+# AWM with Postgres: the API server, one worker and the database.
+#
+#   cp deploy/.env.example deploy/.env    # then set real secrets
+#   docker compose -f deploy/docker-compose.yaml up -d --build
+#   awm --server http://localhost:8080 --token "$AWM_ADMIN_TOKEN" tenants create acme
+#
+# Scale workers with: docker compose -f deploy/docker-compose.yaml up -d --scale worker=3
+
+name: awm
+
+x-awm: &awm
+  image: ${AWM_IMAGE:-awm:local}
+  restart: unless-stopped
+  environment:
+    AWM_DATABASE_URL: postgresql+asyncpg://awm:${POSTGRES_PASSWORD:-awm}@postgres:5432/awm
+    AWM_SECRET_KEY: ${AWM_SECRET_KEY:-dev-insecure-secret-key-change-me}
+    AWM_ADMIN_TOKEN: ${AWM_ADMIN_TOKEN:-dev-admin-token}
+    AWM_PUBLIC_URL: ${AWM_PUBLIC_URL:-http://localhost:8080}
+    AWM_CORS_ORIGINS: ${AWM_CORS_ORIGINS:-["http://localhost:8080","http://localhost:5173"]}
+    AWM_DEFAULT_SANDBOX_BACKEND: ${AWM_DEFAULT_SANDBOX_BACKEND:-local}
+    AWM_LOG_LEVEL: ${AWM_LOG_LEVEL:-INFO}
+    AWM_LOG_JSON: ${AWM_LOG_JSON:-false}
+    # Model providers and sandbox services read their own variables.
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    E2B_API_KEY: ${E2B_API_KEY:-}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: awm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-awm}
+      POSTGRES_DB: awm
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U awm -d awm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *awm
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["serve", "--no-worker"]
+    ports:
+      - "${AWM_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *awm
+    command: ["worker"]
+    volumes:
+      - sandboxes:/var/lib/awm/sandboxes
+      # Uncomment to let the 'docker' sandbox backend start containers on this host.
+      # - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      disable: true
+    depends_on:
+      # The API creates the schema on start; workers wait for it.
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  sandboxes:

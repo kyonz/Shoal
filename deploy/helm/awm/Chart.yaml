@@ -1,0 +1,11 @@
+apiVersion: v2
+name: awm
+description: AI Workflow Manager - multi-tenant engine for multi-agent AI workflows (API, workers, optional Postgres)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+license: Apache-2.0
+home: https://github.com/kyonz/ai-workflow-manager
+sources:
+  - https://github.com/kyonz/ai-workflow-manager
+keywords: [ai, agents, workflows, automation]
