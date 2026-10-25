@@ -957,8 +957,13 @@ class Store:
         since: datetime | None = None,
         until: datetime | None = None,
         before: int | None = None,
+        namespaces: Sequence[str] | None = None,
     ) -> Any:
         q = select(t.AuditEntry).where(t.AuditEntry.tenant_id == tenant_id)
+        if namespaces is not None:  # tenant-wide entries too, except those about other namespaces
+            e = t.AuditEntry
+            q = q.where(or_(e.namespace.in_(namespaces),
+                            and_(e.namespace.is_(None), or_(~e.action.startswith("namespace."), e.target.in_(namespaces)))))
         if action:
             q = q.where(t.AuditEntry.action.startswith(action))
         if actor:

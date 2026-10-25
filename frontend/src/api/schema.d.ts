@@ -4052,8 +4052,17 @@ export interface components {
             email: string | null;
             /** Is System Admin */
             is_system_admin: boolean;
-            /** Namespaces */
+            /**
+             * Namespaces
+             * @description Namespaces visible here; for a federated tenant ask /v1/me/permissions, which the member answers.
+             */
             namespaces: string[];
+            /**
+             * Federated
+             * @description The tenant's data lives in a member deployment that this hub forwards to.
+             * @default false
+             */
+            federated: boolean;
         };
         /** MemberOut */
         MemberOut: {
@@ -4100,6 +4109,11 @@ export interface components {
             visibility: "full" | "metadata";
             /** Last Connected At */
             last_connected_at: string | null;
+            /**
+             * Connector Error
+             * @description Why the tenant connector's last poll of the hub failed, if it did.
+             */
+            connector_error?: string | null;
             /**
              * Created At
              * Format: date-time

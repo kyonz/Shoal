@@ -489,13 +489,18 @@ def _audit_filters(
 AuditFilters = Annotated[dict[str, Any], Depends(_audit_filters)]
 
 
+def _audit_scope(ctx: Any) -> list[str] | None:
+    """A namespace-restricted caller (scoped API key, federation hub) sees only those namespaces' entries."""
+    return list(ctx.principal.key_namespaces) or None
+
+
 @router.get("/audit", tags=["audit"], response_model=Page[AuditOut], summary="Search the audit log (newest first)")
 async def audit(
     ctx: CtxDep, filters: AuditFilters, before: int | None = Query(None, description="Cursor: entries older than this id."),
     limit: int = Query(100, ge=1, le=1000),
 ) -> Any:
     await ctx.require("audit:read")
-    rows = await ctx.engine.store.list_audit(ctx.tenant_id, limit=limit + 1, before=before, **filters)
+    rows = await ctx.engine.store.list_audit(ctx.tenant_id, limit=limit + 1, before=before, namespaces=_audit_scope(ctx), **filters)
     items = list(rows[:limit])
     return Page(items=[AuditOut.model_validate(r) for r in items], next_cursor=str(items[-1].id) if len(rows) > limit else None)
 
@@ -504,12 +509,12 @@ async def audit(
 async def audit_export(ctx: CtxDep, filters: AuditFilters) -> StreamingResponse:
     await ctx.require("audit:read")
     await ctx.audit("audit.exported", None, **{k: str(v) for k, v in filters.items() if v})
-    store, tenant_id = ctx.engine.store, ctx.tenant_id
+    store, tenant_id, scope = ctx.engine.store, ctx.tenant_id, _audit_scope(ctx)
 
     async def lines() -> AsyncIterator[bytes]:
         before = None
         while True:
-            rows = await store.list_audit(tenant_id, limit=1000, before=before, **filters)
+            rows = await store.list_audit(tenant_id, limit=1000, before=before, namespaces=scope, **filters)
             for row in rows:
                 yield AuditOut.model_validate(row).model_dump_json().encode() + b"\n"
             if len(rows) < 1000:

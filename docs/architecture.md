@@ -881,7 +881,9 @@ one control plane, and a federated deployment can also sit next to the hub.
   people. The hub stores the link (`shoal federation link <tenant>` creates it
   and `shoal federation links` shows connection health), never the member's
   data or secrets. Only an empty tenant can be federated; a revoked link can be
-  replaced by linking the tenant again. Operators can manage links as code with
+  replaced by linking the tenant again. Until then the hub refuses the tenant's
+  calls with `503 federation_revoked` instead of serving it as an empty hosted
+  tenant, and the member's Federation page says the hub rejected its link. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -894,9 +896,10 @@ one control plane, and a federated deployment can also sit next to the hub.
     can also expose only some namespaces and choose `metadata` visibility,
     which hides step outputs, prompts and logs from the hub.
 - **Member is the source of truth.** Requests for a federated tenant are
-  forwarded live through the tunnel; data is not replicated to the hub. The
-  hub keeps only link status, health and small rollups (run counts, spend,
-  eval scores) for its dashboards. When the hub is unreachable the member
+  forwarded live through the tunnel; data is not replicated to the hub. A
+  forwarded call waits in the hub's queue encrypted, and is deleted as soon as
+  it is answered or times out. The hub keeps only link status and the
+  member's version (rollups such as run counts and spend are planned). When the hub is unreachable the member
   keeps running on its own; the hub shows the tenant as disconnected.
 - **One API.** Clients (UI, CLI, Terraform, A2A) talk to the hub with the
   same `/v1` API for hosted and federated tenants; the hub routes by tenant.
@@ -906,8 +909,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   (HS256). It names the user, their hub groups, the request id, and the
   method and path it was issued for, so it cannot be replayed against
   another call. The member authorises it again with its own
-  RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
-  and are bound to roles like any subject. A call succeeds only if the hub
+  RBAC, where hub people act as `hub:user:<email>` and are bound to roles like
+  any subject, by `hub_user` (email or service actor) or `hub_group` (hub group name).
+  The member reads its ceiling afresh for every call, so lowering it applies at once,
+  and a member that exposes only some namespaces shows the hub only their audit entries. A call succeeds only if the hub
   allows it, the link mode allows it, and the member's RBAC allows it. The
   hub's operator token gets no rights in a member by default: a member that
   wants operators to browse binds `hub_user` `system:admin` explicitly. (Decided.)

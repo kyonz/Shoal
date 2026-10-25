@@ -185,14 +185,16 @@ class MembershipOut(BaseModel):
     namespaces: list[str]
     visibility: Visibility
     last_connected_at: datetime | None
+    connector_error: str | None = Field(None, description="Why the tenant connector's last poll of the hub failed, if it did.")
     created_at: datetime
 
 
-def _membership_out(row: t.FederationMembership) -> MembershipOut:
+def _membership_out(row: t.FederationMembership, engine: Any) -> MembershipOut:
     return MembershipOut(
         hub_url=row.hub_url, link_id=row.link_id, max_mode=row.max_mode, hub_mode=row.hub_mode,
         effective_mode=p.effective_mode(row.hub_mode or "read", row.max_mode), namespaces=row.namespaces or [],
-        visibility=row.visibility, last_connected_at=row.last_connected_at, created_at=row.created_at,
+        visibility=row.visibility, last_connected_at=row.last_connected_at,
+        connector_error=engine.federation_member.connector_errors.get(row.id), created_at=row.created_at,
     )
 
 
@@ -204,7 +206,7 @@ async def join(body: JoinIn, ctx: CtxDep) -> Any:
         visibility=body.visibility, grants=[g.model_dump() for g in body.grants], actor=ctx.actor,
     )
     await ctx.audit("federation.joined", body.hub_url, max_mode=body.max_mode, namespaces=body.namespaces)
-    return _membership_out(row)
+    return _membership_out(row, ctx.engine)
 
 
 @router.get("/membership", response_model=MembershipOut)
@@ -213,7 +215,7 @@ async def get_membership(ctx: CtxDep) -> Any:
     row = await ctx.engine.federation_member.membership(ctx.tenant_id)
     if row is None:
         raise NotFound("this tenant is not a federation member")
-    return _membership_out(row)
+    return _membership_out(row, ctx.engine)
 
 
 @router.patch("/membership", response_model=MembershipOut, summary="Change what the hub may do")
@@ -221,7 +223,7 @@ async def patch_membership(body: MembershipPatch, ctx: CtxDep) -> Any:
     await ctx.require("federation:manage")
     row = await ctx.engine.federation_member.update(ctx.tenant_id, **body.model_dump())
     await ctx.audit("federation.ceiling_changed", row.hub_url, **body.model_dump(exclude_none=True))
-    return _membership_out(row)
+    return _membership_out(row, ctx.engine)
 
 
 @router.delete("/membership", status_code=204, summary="Leave the hub; this deployment keeps running on its own")

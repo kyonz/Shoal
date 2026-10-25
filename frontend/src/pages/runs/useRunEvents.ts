@@ -9,7 +9,7 @@ export type StreamState = "connecting" | "live" | "polling" | "ended" | "reconne
 /**
  * All events of a run: the history first, then live over SSE. Any step or
  * run event refreshes the run detail (throttled) so statuses stay current.
- * Where the server cannot stream (a federated tenant answers 501), the
+ * Where the server cannot stream (it answers 501), the
  * history is polled instead until the run finishes.
  */
 export function useRunEvents(runId: string | undefined, terminal: boolean) {

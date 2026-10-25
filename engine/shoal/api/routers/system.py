@@ -115,6 +115,7 @@ async def me(ctx: CtxDep) -> Me:
         email=p.email,
         is_system_admin=p.is_system_admin,
         namespaces=namespaces,
+        federated=bool(p.tenant_id and await ctx.engine.federation.federated_link_id(p.tenant_id)),
     )
 
 
