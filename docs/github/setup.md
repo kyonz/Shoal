@@ -131,5 +131,5 @@ spec:
   actors: ["user:priya@acme.dev"]
 ```
 
-Manage identities under **Identities** in the sidebar. A run started in Shoal by `priya@acme.dev` and a run triggered by
+Manage identities under **Admin console › Identities**. A run started in Shoal by `priya@acme.dev` and a run triggered by
 `priya-shah` on GitHub are then both Priya's.

@@ -91,7 +91,7 @@ spec:
 
 - [`examples/jira-bugfix/`](../../examples/jira-bugfix/): a ticket moved to *Ready for AI* becomes a tested pull request,
   with the link and root cause written back to the ticket.
-- [`examples/blueprints/jira-bugfix.yaml`](../../examples/blueprints/jira-bugfix.yaml): the same journey as a blueprint
+- [`jira-bugfix` blueprint](../blueprints/bundled.md): the same journey as a blueprint you can adopt ([source](../../engine/shoal/blueprints/library/jira-bugfix.yaml))
   any team can adopt with their own connections and column name.
 
 ## Pages in this guide

@@ -2,7 +2,7 @@
 
 Every new tenant's **Blueprints** catalogue starts with these. Adopt one into a namespace, pick your
 connections and it creates the workflows, agents and triggers, labelled so you can upgrade or remove them later.
-The sources are in [`engine/shoal/blueprints/library`](../engine/shoal/blueprints/library).
+The sources are in [`engine/shoal/blueprints/library`](../../engine/shoal/blueprints/library).
 
 | Blueprint | What it does | You supply |
 |---|---|---|

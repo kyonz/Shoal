@@ -54,6 +54,8 @@ A setting saved in the console wins over the environment.
 
 Instance admins open **Instance console → Orchestrator**:
 
+![The orchestrator page: built-in or Temporal, with the Temporal connection form](assets/screenshots/tenancy/orchestrator.png)
+
 1. Enter the frontend address, the namespace and a task queue for this installation.
 2. For Temporal Cloud or mTLS, choose a tenant and pick secrets from its `shared`
    namespace: an API key, or a client certificate and key, and a CA when the server

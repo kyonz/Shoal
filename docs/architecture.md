@@ -825,7 +825,7 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   filters, which namespaces have adopted it, success rates and eval scores
   from real runs, and the README.
 - **Bundled blueprints.** Shoal ships blueprints for the common scenarios
-  (`engine/shoal/blueprints/library`, listed in [blueprints.md](blueprints.md)),
+  (`engine/shoal/blueprints/library`, listed in [blueprints/bundled.md](blueprints/bundled.md)),
   starting with the two acceptance journeys, **GitHub org uplift** and **Jira
   bugfix with writeback**. They are put in every new tenant's catalogue
   (`SHOAL_DEFAULT_BLUEPRINTS`, on by default) labelled `shoal.dev/bundled`.

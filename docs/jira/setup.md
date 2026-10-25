@@ -120,5 +120,5 @@ spec:
 ```
 
 With that in place, a run started by Priya moving a ticket is attributed to Priya. Its GitHub pull request requests her
-review, and its Jira comments mention her. Manage identities under **Identities** in the sidebar
+review, and its Jira comments mention her. Manage identities under **Admin console › Identities**
 (`identities:write`). See [Attribution](../github/attribution.md).

@@ -95,7 +95,7 @@ spec:
 - [`examples/github-uplift/`](../../examples/github-uplift/): a campaign that raises test coverage across an org, one
   pull request per repository, merged once approved.
 - [`examples/jira-bugfix/`](../../examples/jira-bugfix/): a Jira ticket becomes a tested pull request.
-- [`examples/blueprints/`](../../examples/blueprints/): reusable journeys, several of them on GitHub.
+- [Bundled blueprints](../blueprints/bundled.md): ready-made journeys, including `github-pr-review` and `github-uplift`.
 
 ## Pages in this guide
 

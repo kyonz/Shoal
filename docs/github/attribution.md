@@ -119,4 +119,4 @@ themselves, see [per-person credentials](setup.md#each-persons-own-account).
 Every pull request opened, merge (and refused merge, with the governance decision), merge check and failed assignment is
 written to the audit log with the run, the step and the initiator: `github.pull_request.created`,
 `github.pull_request.merged`, `github.pull_request.merge_failed`, `github.merge_check` and `github.assignment.failed`.
-See [the audit log](../admin/README.md#audit-log).
+See [the audit log](../administration/README.md#audit-log).

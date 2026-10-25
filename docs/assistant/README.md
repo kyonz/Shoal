@@ -46,7 +46,7 @@ To skip the cards, turn on **Make changes without asking** in the panel's **…*
 The assistant calls Shoal's public API in-process with your credentials, through the same checks as any other request:
 
 - it can only read and change what your roles allow in the current namespace and tenant;
-- every change is in the [audit log](../admin/README.md#audit-log) under your name, with source `assistant`;
+- every change is in the [audit log](../administration/README.md#audit-log) under your name, with source `assistant`;
 - sign-in, webhook, SCIM and assistant endpoints are out of its reach.
 
 Don't paste secret values into the chat. Ask it to create the secret's name and set the value yourself under

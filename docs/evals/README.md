@@ -91,6 +91,8 @@ Results and scores are kept per variant.
 
 ## Run it
 
+![Evals in a namespace, with their latest scores](../assets/screenshots/evals/list.png)
+
 **Run** on the eval page, the API (`POST /v1/namespaces/{ns}/evals/{name}/runs`), or the CLI:
 
 ```sh

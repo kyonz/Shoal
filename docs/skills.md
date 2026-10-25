@@ -6,6 +6,15 @@ repository in the Agent Skills layout, a skill registry, or any marketplace with
 a plugin. Importing turns a skill from a source into an ordinary `Skill` resource
 in a namespace, so agents use it exactly like a hand-written one.
 
+![Skills in a namespace](assets/screenshots/skills/list.png)
+
+**Build › Skills** lists a namespace's skills. Each one has a name, a description (which agents see when deciding to
+use it), the `SKILL.md` instructions, and optional files. Edits are versioned like every resource, with history, diff
+and rollback. An agent lists the skills it uses under `skills:`, and they are copied into its sandbox under
+`.shoal/skills/`. See [Agents](agents/README.md).
+
+![Editing a skill's instructions](assets/screenshots/skills/editor.png)
+
 ```
 SkillSource (tenant-wide, admins)      Skill (per namespace)
   acme-skills  ── browse / import ──▶   pdf      labels: shoal.dev/skill-source=acme-skills
@@ -64,7 +73,18 @@ server's own disk (development, air-gapped mirrors), the operator sets
 `SHOAL_SKILL_SOURCE_ALLOW_LOCAL=true`. Checkouts are cached under
 `SHOAL_SKILL_SOURCE_CACHE_DIR` (default: the system temp directory).
 
+Admins manage sources under **Admin console › Skill sources**.
+
 ## Browsing and importing
+
+**Build › Skill marketplace** shows the skills in every source the namespace can see, with their versions and tags,
+and marks the ones already imported. Opening one shows its `SKILL.md`, files and version; **Preview** shows what an
+import would change and **Import** brings it in. The **Imported** tab lists imported skills and flags those with an
+update.
+
+![The skill marketplace: four skills from a git source, one already imported](assets/screenshots/skills/marketplace.png)
+
+![A skill from a source, ready to import](assets/screenshots/skills/marketplace-skill.png)
 
 Anyone who can read skills in a namespace can browse the sources visible to it.
 Importing needs `skills:import` and `skills:write` there (the `editor` role has both).

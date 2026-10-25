@@ -80,14 +80,14 @@ exactly like the UI. See [Approvals in Slack](../slack/approvals.md).
 A decision is accepted only when all of these hold:
 
 1. The person has `runs:approve` in the run's namespace (built-in roles `operator`, `editor`, `namespace-admin` and `tenant-admin`; see
-   [Access](../admin/access.md)).
+   [Access](../administration/access.md)).
 2. If the step lists `approvers`, they match one entry: their username or email (with or without `user:`), an
    identity they belong to, or a group they are in (`group:<name>`). The system admin token always may.
 3. The step is still waiting and nobody has decided it. Two people clicking at once can't both win: the second one is
    told the step was already decided.
 
 Every decision is recorded on the run (`approval.decided`, with who, when and the comment) and in the
-[audit log](../admin/README.md#audit-log).
+[audit log](../administration/README.md#audit-log).
 
 ## Low-confidence decisions
 

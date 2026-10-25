@@ -38,6 +38,8 @@ resource's name, and the connect forms are rendered from the pulled schema.
 Registrations are tenant-wide and need `custom-integrations:manage` (tenant
 admins have it); in the UI they live in **Admin console → Custom integrations**.
 
+![Custom integrations registered for the organisation](assets/screenshots/admin/custom-integrations.png)
+
 ```yaml
 apiVersion: shoal.dev/v1
 kind: CustomIntegration
@@ -97,6 +99,8 @@ spec:
   secrets: { token: github-acme-token }   # secrets in `shared`
   namespaces: [payments, platform]        # only these namespaces may use it
 ```
+
+![An organisation connection, offered to chosen namespaces](assets/screenshots/admin/org-connection.png)
 
 A namespace connection with the same name wins over an organisation one.
 `GET /v1/namespaces/{ns}/org-connections` lists the organisation connections a
