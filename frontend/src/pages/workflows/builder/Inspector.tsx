@@ -505,6 +505,12 @@ function ApprovalEditor({ step, set }: { step: StepDoc; set: SetFn }) {
             </NativeSelect>
           </Field>
         </div>
+        <Field label="When rejected" description="Stop the run, or continue with approved: false so later steps can branch with if.">
+          <NativeSelect value={str(step.on_reject) || "fail"} onChange={(e) => set({ on_reject: e.target.value === "fail" ? undefined : e.target.value })}>
+            <option value="fail">Stop the run</option>
+            <option value="continue">Continue</option>
+          </NativeSelect>
+        </Field>
       </div>
     </Section>
   );
