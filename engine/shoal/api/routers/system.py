@@ -136,6 +136,19 @@ async def integration(key: str, ctx: CtxDep) -> dict[str, Any]:
     return type(ctx.engine.integrations.get(key)).catalog()
 
 
+@router.get("/v1/plugins", tags=["catalog"], summary="Installed plugins of every kind")
+async def plugins(ctx: CtxDep) -> list[dict[str, Any]]:
+    from shoal.sdk.plugins import PLUGIN_GROUPS
+
+    out = []
+    for group, info in PLUGIN_GROUPS.items():
+        for name, plugin in ctx.engine.registry.available(group).items():
+            cls = plugin if isinstance(plugin, type) else type(plugin)
+            doc = getattr(plugin, "description", "") or (cls.__doc__ or "").strip().split("\n")[0]
+            out.append({"group": group, "name": name, "description": doc, "module": cls.__module__, "kind": info.summary})
+    return out
+
+
 @router.get("/v1/sandbox-backends", tags=["catalog"])
 async def sandbox_backends(ctx: CtxDep) -> list[dict[str, Any]]:
     out = []

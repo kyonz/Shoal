@@ -129,8 +129,9 @@ class IntegrationManager:
         *,
         cursor: str | None = None,
         limit: int = 100,
+        initiator: dict[str, Any] | None = None,
     ) -> Page:
-        ctx = await self.connection(tenant_id, connection)
+        ctx = await self.connection(tenant_id, connection, initiator=initiator)
         return await ctx.integration.query(ctx, resource, filter, cursor=cursor, limit=limit)
 
     async def query_all(
