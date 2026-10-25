@@ -137,6 +137,7 @@ class ConnectionContext:
     integration: Integration
     initiator: dict[str, Any] | None = None
     run_id: str | None = None
+    step_id: str | None = None  # the workflow step making the call (action step or agent step), when there is one
     acting_as: str | None = None  # the user whose own credential this context holds (None: the connection's)
 
     def http(self, **kwargs: Any) -> httpx.AsyncClient:

@@ -846,7 +846,9 @@ credential performed it*, and lets policy decide what the run may do.
     own. It requires an approval from someone who does have write access
     (checked per reviewer), and optionally an *agent-assisted merge check*:
     a reviewer agent step that checks the diff against policy and posts its
-    verdict as a review before merge. Policies can also require labels or
+    verdict as a review before merge. The step that opened the pull request
+    cannot record that verdict itself (`independent_merge_check`, on by
+    default), so an authoring agent cannot certify its own change. Policies can also require labels or
     block merging entirely (`elevation: deny | qualified_approval | allow`).
 
 ## 12. API

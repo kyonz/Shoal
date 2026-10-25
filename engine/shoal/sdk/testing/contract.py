@@ -10,7 +10,7 @@ module and pytest runs the checks::
 
 For a service in any language, run the remote checks against it::
 
-    python -m shoal.sdk.testing.contract https://linear-integration.internal --token $TOKEN
+    shoal integrations check https://linear-integration.internal --token $TOKEN
 """
 
 from __future__ import annotations

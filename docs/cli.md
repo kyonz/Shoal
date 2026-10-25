@@ -94,7 +94,9 @@ Sources themselves are tenant-wide resources: `shoal apply` a `SkillSource` and
 ## Integrations
 
 `shoal integrations new servicenow --title ServiceNow` scaffolds an integration project from the
-SDK template (see [integrations.md](integrations.md)).
+SDK template (see [integrations.md](integrations.md)), and
+`shoal integrations check https://svc.internal --token $SHOAL_INTEGRATION_TOKEN` runs the contract
+checks against a running remote integration service in any language.
 
 ## Running the server
 
