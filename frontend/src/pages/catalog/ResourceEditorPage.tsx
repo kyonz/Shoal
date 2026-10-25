@@ -452,7 +452,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
             <div className="min-w-0 space-y-4">
               <Card className="p-4">
                 <div className="grid gap-3.5 sm:grid-cols-2">
-                  <Field label="Name" required error={nameError} description={isNew ? (cfg.admin ? "Unique in the organisation; agents and model policies refer to it by name." : tenantScoped ? "Unique in the organisation; used in links and adoptions." : "Unique in the namespace; other resources refer to it by name.") : "Names cannot be changed."}>
+                  <Field label="Name" required error={nameError} description={isNew ? (cfg.admin ? `Unique in the organisation; ${cfg.plural === "eval-platforms" ? "evals" : "agents and model policies"} refer to it by name.` : tenantScoped ? "Unique in the organisation; used in links and adoptions." : "Unique in the namespace; other resources refer to it by name.") : "Names cannot be changed."}>
                     <Input
                       mono
                       autoFocus={isNew}
@@ -473,6 +473,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
                   </Field>
                 </div>
               </Card>
+              {Object.keys(specSchema?.properties ?? {}).some((k) => k !== "description" && !cfg.hidden?.includes(k)) && (
               <Card className="p-4">
                 <fieldset disabled={!canWrite} className="min-w-0">
                   <SchemaForm
@@ -487,6 +488,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
                   />
                 </fieldset>
               </Card>
+              )}
               {ext.sections?.(ctx)}
             </div>
             <div className="space-y-4">
