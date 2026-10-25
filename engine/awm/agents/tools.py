@@ -188,10 +188,15 @@ class Toolbox:
 
     async def _add_integration_tools(self, pattern: str) -> None:
         integration_key, _, action_name = pattern.partition(".")
-        integration = self.inv.ctx.engine.integrations.get(integration_key)
-        names = list(integration.actions) if action_name in ("*", "") else [action_name]
+        engine, run_ctx = self.inv.ctx.engine, self.inv.ctx
+        integration = engine.integrations.get(integration_key)
+        actions = integration.actions
+        if not actions:  # dynamic integrations (remote) list their actions per connection
+            name = await engine.integrations.resolve_name(run_ctx.tenant_id, integration_key, run_ctx.connection_for(integration_key))
+            actions = await integration.actions_for(await engine.integrations.connection(run_ctx.tenant_id, name))
+        names = list(actions) if action_name in ("*", "") else [action_name]
         for name in names:
-            definition = integration.actions.get(name)
+            definition = actions.get(name)
             if definition is None:
                 raise ValueError(f"{integration_key} has no action '{name}'")
             full = f"{integration_key}.{name}"

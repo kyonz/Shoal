@@ -310,7 +310,11 @@ async def call_action(namespace: str, name: str, action: str, body: ActionCallIn
     await ctx.namespace(namespace, "connections:use")
     conn = await _connection(ctx, namespace, name)
     integration = ctx.engine.integrations.get(conn.spec.integration)
-    definition = integration.actions.get(action)
+    actions = integration.actions
+    if not actions:  # dynamic integrations (remote) list their actions per connection
+        with use_namespace(namespace):
+            actions = await integration.actions_for(await ctx.engine.integrations.connection(ctx.tenant_id, name))
+    definition = actions.get(action)
     if definition is None:
         raise NotFound(f"{conn.spec.integration} has no action '{action}'")
     initiator = await ctx.engine.identities.resolve(ctx.tenant_id, actor=ctx.actor, source="api", email=ctx.principal.email)
