@@ -153,16 +153,16 @@ spec:
     - id: fetch
       type: action
       action: jira.get_issue
-      with: {key: "${{ inputs.issue_key }}"}
+      with: {key: "{{ inputs.issue_key }}"}
 
     - id: fix
       type: agent
       agent: bugfixer               # references an Agent resource
       sandbox: default              # sandbox profile
       prompt: |
-        Fix the bug described below in ${{ inputs.repo }}. Run the tests.
-        ${{ steps.fetch.output.summary }}
-        ${{ steps.fetch.output.description }}
+        Fix the bug described below in {{ inputs.repo }}. Run the tests.
+        {{ steps.fetch.output.summary }}
+        {{ steps.fetch.output.description }}
       outputs:
         pr_url: {type: string}
         test_summary: {type: string}
@@ -171,8 +171,8 @@ spec:
       type: action
       action: jira.add_comment
       with:
-        key: "${{ inputs.issue_key }}"
-        body: "Opened ${{ steps.fix.output.pr_url }}\n\n${{ steps.fix.output.test_summary }}"
+        key: "{{ inputs.issue_key }}"
+        body: "Opened {{ steps.fix.output.pr_url }}\n\n{{ steps.fix.output.test_summary }}"
 ```
 
 ### Step types
@@ -195,9 +195,12 @@ they run in order; `needs: [ids]` allows parallel branches.
 
 ### Expressions
 
-`${{ … }}` expressions are evaluated with a sandboxed Jinja2 environment over a
+`{{ … }}` expressions are evaluated with a sandboxed Jinja2 environment over a
 context of `inputs`, `steps.<id>.output`, `run`, `trigger`, `campaign`,
 `target` and `secrets` (secrets are resolved late and redacted in logs/events).
+Plain Jinja delimiters are used (not `${{ }}`) so specs can be written inline
+in Terraform HCL, which interpolates `${…}` itself. In YAML, quote a value that
+starts with `{{`, e.g. `if: "{{ steps.fix.output.tests_passed }}"`. (Decided.)
 
 ---
 
@@ -519,7 +522,7 @@ spec:
     connection: github-acme
     filter: {owner: acme, permission: admin, archived: false}
   inputs:
-    repo: "${{ target.full_name }}"
+    repo: "{{ target.full_name }}"
     goal: "Raise test coverage to 100%"
   policy:
     concurrency: 10            # max active runs
@@ -540,35 +543,38 @@ spec:
 ## 10.1 Blueprints and the marketplace
 
 A **blueprint** is a reusable, versioned package of an agent workflow that
-someone builds once and others wire up to their own systems.
+one team builds once and other teams in the same organisation adopt and wire
+up to their own systems. The marketplace is a catalogue **inside each
+tenant**: it is how namespace owners discover and adopt what other teams have
+published. It is not a shared, cross-tenant marketplace for the Shoal service
+— decided.
 
 - **Contents.** A blueprint bundles resources (workflow, agents, skills,
   triggers, campaign templates, sandbox profile hints) plus a README, icon,
   tags, author and semver version. Resources inside it are templates with
-  `${{ params.* }}` placeholders.
-- **Parameters.** It declares what the consumer must supply: connections by
+  `{{ params.* }}` placeholders.
+- **Parameters.** It declares what the adopter must supply: connections by
   integration type ("a `github` connection", "a `jira` connection"), secrets,
   values (e.g. Jira column name, coverage goal) and optional choices
-  (sandbox profile, model policy). The UI renders an install wizard from these
-  declarations, with pickers for existing connections.
-- **Install.** Installing renders the templates with the parameters and
-  applies the resulting resources under a name prefix, labelled
-  `awm.dev/blueprint=<name>@<version>` and linked to the installation, so
-  the workflow can be opened in the visual builder and customised.
-  Upgrading to a new version shows a diff and re-applies, keeping local
-  overrides where possible. Uninstall removes what was installed.
-- **Publishing and promotion.** Blueprints move through
-  `draft → published → promoted (featured/verified) → deprecated`.
-  Visibility is per tenant (private), install-wide (shared with every tenant
-  in the deployment) or public. Promotion is an approval workflow run by
-  platform admins and can require passing evals (§7.4).
-- **Marketplace.** A searchable catalogue with categories, integration
-  filters, install counts, success rates and eval scores taken from real
-  runs, ratings, and the README.
-- **Registries.** Sources are pluggable (`awm.registries`): the local
-  database, a Git repository of blueprint folders, an OCI registry, or an
-  HTTP index. That lets an organisation host an internal marketplace and the
-  open-source community share a public one.
+  (sandbox profile, model policy). The UI renders an adopt wizard from these
+  declarations, with pickers for the connections the namespace can see
+  (its own and `shared`).
+- **Adopt.** A namespace owner (anyone with write access to the target
+  namespace) adopts a blueprint into their namespace: the templates are
+  rendered with the parameters and the resulting resources are applied in
+  that namespace, labelled `awm.dev/blueprint=<name>@<version>` and linked to
+  the adoption, so the workflow can be opened in the visual builder and
+  customised. Upgrading to a new version shows a diff and re-applies, keeping
+  local overrides where possible. Removing an adoption removes what it
+  created.
+- **Publishing.** Blueprints are tenant-wide resources. Teams publish them
+  from a namespace (`blueprints:publish`); they move through
+  `draft → published → featured → deprecated`. Featuring is done by tenant
+  admins and can require passing evals (§7.4). A blueprint can optionally be
+  limited to certain namespaces.
+- **Catalogue.** Searchable within the tenant, with categories, integration
+  filters, which namespaces have adopted it, success rates and eval scores
+  from real runs, and the README.
 - The two acceptance journeys ship as the first blueprints:
   **GitHub org uplift** and **Jira bugfix with writeback**.
 
@@ -726,7 +732,7 @@ first-time user.
   - edges are `needs` dependencies, drawn by connecting handles; auto-layout
     (dagre) with manual positioning persisted in workflow metadata;
   - an inspector panel that renders each step's form from its JSON schema
-    (prompt editor with `${{ }}` autocompletion of inputs and upstream outputs,
+    (prompt editor with `{{ }}` autocompletion of inputs and upstream outputs,
     agent/sandbox/connection pickers, retry/timeout/if settings);
   - live validation (unknown references, cycles, missing inputs) mirrored from
     the server's pydantic validation;
@@ -799,7 +805,7 @@ modal = "awm_modal:ModalBackend"
 
 Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
 `awm.agent_runtimes`, `awm.gateways`, `awm.decision_providers`,
-`awm.credentials`, `awm.secrets`, `awm.steps`, `awm.orchestrators`, `awm.registries`.
+`awm.credentials`, `awm.secrets`, `awm.steps`, `awm.orchestrators`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.
 

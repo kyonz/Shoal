@@ -216,12 +216,20 @@ class Store:
     # ------------------------------------------------------------------ resources
 
     async def apply_resource(
-        self, tenant_id: str, resource: ResourceBase, *, actor: str | None = None, namespace: str | None = None
+        self,
+        tenant_id: str,
+        resource: ResourceBase,
+        *,
+        actor: str | None = None,
+        namespace: str | None = None,
+        source: dict[str, Any] | None = None,
     ) -> tuple[t.Resource, str]:
         """Create or update. Returns (row, 'created' | 'updated' | 'unchanged').
 
         The namespace is ``metadata.namespace``, else ``namespace``, else the
-        current one; it is stored as a column, not in the document.
+        current one; it is stored as a column, not in the document. ``source``
+        is the spec as the client wrote it, kept so reads return what was
+        written (declarative clients such as Terraform diff against it).
         """
         document = resource.to_document()
         kind = document["kind"]
@@ -240,6 +248,8 @@ class Store:
                 )
             ).scalar_one_or_none()
             if row is not None and row.document == document:
+                if source is not None and row.source != source:
+                    row.source = source  # same meaning, different spelling: no new version
                 return row, "unchanged"
             if row is None:
                 row = t.Resource(
@@ -250,6 +260,7 @@ class Store:
                     name=name,
                     version=1,
                     document=document,
+                    source=source,
                     labels=resource.metadata.labels,
                     updated_by=actor,
                 )
@@ -258,6 +269,7 @@ class Store:
             else:
                 row.version += 1
                 row.document = document
+                row.source = source
                 row.labels = resource.metadata.labels
                 row.updated_at = utcnow()
                 row.updated_by = actor

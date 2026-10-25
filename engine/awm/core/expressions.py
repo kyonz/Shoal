@@ -1,7 +1,11 @@
-"""``${{ expr }}`` expressions evaluated in a sandboxed Jinja2 environment.
+"""``{{ expr }}`` expressions evaluated in a sandboxed Jinja2 environment.
+
+Plain Jinja delimiters (rather than ``{{ }}``) keep specs writable inline in
+Terraform HCL, which interpolates ``${...}`` itself. In YAML, quote a value
+that starts with ``{{``.
 
 * A string that is exactly one expression evaluates to the native value
-  (``"${{ steps.fix.output.pr_number }}"`` -> ``42``).
+  (``"{{ steps.fix.output.pr_number }}"`` -> ``42``).
 * Any other string containing expressions is rendered as text.
 * Dicts and lists are evaluated recursively.
 
@@ -23,8 +27,8 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from awm.core.duration import parse_duration
 
-EXPR = re.compile(r"\$\{\{\s*(.+?)\s*\}\}", re.DOTALL)
-_SINGLE = re.compile(r"^\s*\$\{\{\s*(.+?)\s*\}\}\s*$", re.DOTALL)
+EXPR = re.compile(r"\{\{\s*(.+?)\s*\}\}", re.DOTALL)
+_SINGLE = re.compile(r"^\s*\{\{\s*(.+?)\s*\}\}\s*$", re.DOTALL)
 SECRET_REF = re.compile(r"secrets\.([A-Za-z_][A-Za-z0-9_\-]*)|secrets\[['\"]([^'\"]+)['\"]\]")
 
 
@@ -68,10 +72,6 @@ _text_env = _setup(ImmutableSandboxedEnvironment(undefined=_Undefined, autoescap
 _native_env = _setup(_SandboxedNative(undefined=_Undefined, autoescape=False))
 
 
-def _to_jinja(source: str) -> str:
-    return EXPR.sub(lambda m: "{{ " + m.group(1) + " }}", source)
-
-
 def _plain(value: Any) -> Any:
     if isinstance(value, ChainableUndefined):
         return None
@@ -79,11 +79,11 @@ def _plain(value: Any) -> Any:
 
 
 def is_expression(value: Any) -> bool:
-    return isinstance(value, str) and "${{" in value
+    return isinstance(value, str) and "{{" in value
 
 
 def evaluate_expression(expr: str, context: Mapping[str, Any]) -> Any:
-    """Evaluate a bare expression (no ``${{ }}``), returning a native value."""
+    """Evaluate a bare expression (no ``{{ }}``), returning a native value."""
     try:
         compiled = _native_env.compile_expression(expr, undefined_to_none=False)
         return _plain(compiled(**context))
@@ -94,13 +94,13 @@ def evaluate_expression(expr: str, context: Mapping[str, Any]) -> Any:
 def render(value: Any, context: Mapping[str, Any]) -> Any:
     """Evaluate expressions inside ``value`` (recursively for dicts/lists)."""
     if isinstance(value, str):
-        if "${{" not in value:
+        if "{{" not in value:
             return value
         single = _SINGLE.match(value)
-        if single and "${{" not in single.group(1):
+        if single and "{{" not in single.group(1):
             return evaluate_expression(single.group(1), context)
         try:
-            return _text_env.from_string(_to_jinja(value)).render(**context)
+            return _text_env.from_string(value).render(**context)
         except TemplateError as exc:
             raise ExpressionError(f"error rendering '{value[:80]}': {exc}") from exc
     if isinstance(value, dict):
@@ -111,7 +111,7 @@ def render(value: Any, context: Mapping[str, Any]) -> Any:
 
 
 def truthy(expr: str | None, context: Mapping[str, Any]) -> bool:
-    """Evaluate a condition. Accepts ``${{ x }}`` or a bare expression."""
+    """Evaluate a condition. Accepts ``{{ x }}`` or a bare expression."""
     if expr is None:
         return True
     single = _SINGLE.match(expr)

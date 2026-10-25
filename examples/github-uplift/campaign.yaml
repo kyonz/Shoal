@@ -13,9 +13,9 @@ spec:
       permission: admin
       archived: false
       fork: false
-    key: ${{ target.full_name }}
+    key: "{{ target.full_name }}"
   inputs:
-    repo: ${{ target.full_name }}
+    repo: "{{ target.full_name }}"
     goal: Raise test coverage to 100%
   policy:
     concurrency: 10

@@ -75,13 +75,13 @@ async def test_decide_step_with_llm_provider(engine, tenant):
                         "type": "decide",
                         "provider": "llm",
                         "provider_config": {"gateway": "scripted", "model": "tiny", "function": "decider"},
-                        "state": "${{ inputs.text }}",
+                        "state": "{{ inputs.text }}",
                         "questions": {
                             "kind": {"type": "choice", "instructions": "What is it?", "options": {"bug": "A defect", "feature": "A request"}},
                             "repro": {"type": "boolean", "instructions": "It has reproduction steps."},
                         },
                     },
-                    {"id": "fix", "type": "set", "if": "${{ steps.classify.output.kind.value == 'bug' and steps.classify.output.repro.value }}", "values": {"go": True}},
+                    {"id": "fix", "type": "set", "if": "{{ steps.classify.output.kind.value == 'bug' and steps.classify.output.repro.value }}", "values": {"go": True}},
                 ],
             },
         ),
@@ -311,7 +311,7 @@ async def test_trigger_triage_filters_events(engine, tenant):
         return {"automatable": {"true": p}}
 
     engine.registry.register("decision_providers", "fake", FakeDecider(judge))
-    await engine.store.apply_resource(tenant.id, res("Workflow", "fixit", {"steps": [{"id": "s", "type": "set", "values": {"t": "${{ trigger.triage.automatable.score }}"}}]}))
+    await engine.store.apply_resource(tenant.id, res("Workflow", "fixit", {"steps": [{"id": "s", "type": "set", "values": {"t": "{{ trigger.triage.automatable.score }}"}}]}))
     await engine.store.apply_resource(
         tenant.id,
         res(
@@ -323,9 +323,9 @@ async def test_trigger_triage_filters_events(engine, tenant):
                 "event": "received",
                 "triage": {
                     "provider": "fake",
-                    "state": "${{ event.title }}",
+                    "state": "{{ event.title }}",
                     "questions": {"automatable": {"type": "boolean", "instructions": "An agent could fix this alone."}},
-                    "when": "${{ answers.automatable.score >= 0.7 }}",
+                    "when": "{{ answers.automatable.score >= 0.7 }}",
                 },
             },
         ),

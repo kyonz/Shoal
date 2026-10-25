@@ -2,7 +2,7 @@
 
 The script lives in the agent's ``provider_config.script``: a list of turns,
 each with optional ``text`` and ``tool_calls`` (``{name, input}``). Inputs may
-use ``{{ prompt }}`` style placeholders via the ``${{ }}`` syntax with
+use ``{{ prompt }}`` style placeholders via the ``{{ }}`` syntax with
 ``prompt`` and ``last_result`` in scope. When the script runs out, the
 provider calls ``finish`` with ``provider_config.final_outputs``.
 

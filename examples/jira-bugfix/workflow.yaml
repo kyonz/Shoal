@@ -16,26 +16,26 @@ spec:
     - id: issue
       type: action
       action: jira.get_issue
-      with: {key: "${{ inputs.issue_key }}"}
+      with: {key: "{{ inputs.issue_key }}"}
 
     - id: start
       type: action
       action: jira.transition_issue
-      with: {key: "${{ inputs.issue_key }}", to: In Progress}
+      with: {key: "{{ inputs.issue_key }}", to: In Progress}
       on_error: continue
 
     - id: fix
       type: agent
       needs: [issue]
       prompt: |
-        Fix this bug in https://github.com/${{ inputs.repo }}.
+        Fix this bug in https://github.com/{{ inputs.repo }}.
 
-        ${{ steps.issue.output.key }}: ${{ steps.issue.output.summary }}
+        {{ steps.issue.output.key }}: {{ steps.issue.output.summary }}
 
-        ${{ steps.issue.output.description }}
+        {{ steps.issue.output.description }}
 
-        Clone the repository, create the branch `fix/${{ inputs.issue_key | lower }}`, add a regression
-        test, fix the bug, run the full test suite, commit referencing ${{ inputs.issue_key }} and push.
+        Clone the repository, create the branch `fix/{{ inputs.issue_key | lower }}`, add a regression
+        test, fix the bug, run the full test suite, commit referencing {{ inputs.issue_key }} and push.
       outputs:
         tests_passed: {type: boolean}
         branch: {type: string}
@@ -46,52 +46,52 @@ spec:
     - id: pr
       type: action
       needs: [fix, start]
-      if: ${{ steps.fix.status == 'succeeded' and steps.fix.output.tests_passed }}
+      if: "{{ steps.fix.status == 'succeeded' and steps.fix.output.tests_passed }}"
       action: github.create_pull_request
       with:
-        repo: ${{ inputs.repo }}
-        head: ${{ steps.fix.output.branch }}
-        title: "${{ inputs.issue_key }}: ${{ steps.issue.output.summary }}"
+        repo: "{{ inputs.repo }}"
+        head: "{{ steps.fix.output.branch }}"
+        title: "{{ inputs.issue_key }}: {{ steps.issue.output.summary }}"
         body: |
-          Fixes [${{ inputs.issue_key }}](${{ steps.issue.output.url }}).
+          Fixes [{{ inputs.issue_key }}]({{ steps.issue.output.url }}).
 
-          **Root cause:** ${{ steps.fix.output.root_cause }}
+          **Root cause:** {{ steps.fix.output.root_cause }}
 
-          **Tests:** ${{ steps.fix.output.test_summary }}
+          **Tests:** {{ steps.fix.output.test_summary }}
 
     - id: report_success
       type: action
-      if: ${{ steps.pr.status == 'succeeded' }}
+      if: "{{ steps.pr.status == 'succeeded' }}"
       action: jira.add_comment
       with:
-        key: ${{ inputs.issue_key }}
+        key: "{{ inputs.issue_key }}"
         body: |
-          AI Workflow Manager opened a fix: ${{ steps.pr.output.url }}
+          AI Workflow Manager opened a fix: {{ steps.pr.output.url }}
 
-          Root cause: ${{ steps.fix.output.root_cause }}
-          Tests: ${{ steps.fix.output.test_summary }}
+          Root cause: {{ steps.fix.output.root_cause }}
+          Tests: {{ steps.fix.output.test_summary }}
 
     - id: to_review
       type: action
-      if: ${{ steps.pr.status == 'succeeded' }}
+      if: "{{ steps.pr.status == 'succeeded' }}"
       action: jira.transition_issue
-      with: {key: "${{ inputs.issue_key }}", to: In Review}
+      with: {key: "{{ inputs.issue_key }}", to: In Review}
       on_error: continue
 
     - id: report_failure
       type: action
       needs: [pr]
-      if: ${{ steps.pr.status != 'succeeded' }}
+      if: "{{ steps.pr.status != 'succeeded' }}"
       action: jira.add_comment
       with:
-        key: ${{ inputs.issue_key }}
+        key: "{{ inputs.issue_key }}"
         body: |
           AI Workflow Manager could not produce a passing fix automatically.
 
-          ${{ steps.fix.output.summary or steps.fix.error.message }}
+          {{ steps.fix.output.summary or steps.fix.error.message }}
 
-          Run: ${{ run.url }}
+          Run: {{ run.url }}
 
   outputs:
-    pr_url: ${{ steps.pr.output.url }}
-    tests_passed: ${{ steps.fix.output.tests_passed or false }}
+    pr_url: "{{ steps.pr.output.url }}"
+    tests_passed: "{{ steps.fix.output.tests_passed or false }}"

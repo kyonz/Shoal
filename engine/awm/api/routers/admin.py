@@ -446,6 +446,16 @@ async def create_api_key(body: ApiKeyIn, ctx: CtxDep) -> Any:
     return ApiKeyCreated(key=ApiKeyOut.model_validate(key), token=token)
 
 
+@router.get("/api-keys/{key_id}", tags=["api keys"], response_model=ApiKeyOut, summary="An API key's metadata (never the token)")
+async def get_api_key(key_id: str, ctx: CtxDep) -> Any:
+    key = next((k for k in await ctx.engine.store.list_api_keys(ctx.tenant_id) if k.id == key_id), None)
+    if key is None:
+        raise NotFound(f"api key '{key_id}' not found")
+    if key.owner_id != ctx.principal.user_id:
+        await ctx.require("api-keys:manage")
+    return key
+
+
 @router.delete("/api-keys/{key_id}", status_code=204, tags=["api keys"])
 async def revoke_api_key(key_id: str, ctx: CtxDep) -> None:
     keys = {k.id: k for k in await ctx.engine.store.list_api_keys(ctx.tenant_id)}

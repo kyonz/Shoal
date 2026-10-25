@@ -155,7 +155,7 @@ async def test_user_mode_uses_initiator_token(world):
 
 async def test_webhook_actor_becomes_run_initiator(world):
     engine, tenant, _ = world
-    await engine.store.apply_resource(tenant.id, res("Workflow", "noop", {"steps": [{"id": "who", "type": "set", "values": {"login": "${{ run.initiator.github }}"}}]}))
+    await engine.store.apply_resource(tenant.id, res("Workflow", "noop", {"steps": [{"id": "who", "type": "set", "values": {"login": "{{ run.initiator.github }}"}}]}))
     await engine.store.apply_resource(tenant.id, res("Workflow", "outer", {"steps": [{"id": "child", "type": "workflow", "workflow": "noop"}]}))
     await engine.store.apply_resource(tenant.id, res("Trigger", "on-jira", {"workflow": "outer", "connection": "jira", "event": "issue_updated"}))
     event = IntegrationEvent(type="issue_updated", id="e1", data={}, actor={"jira_account_id": "jira-123", "display_name": "Dana D"})

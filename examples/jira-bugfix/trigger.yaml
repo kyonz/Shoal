@@ -9,8 +9,8 @@ spec:
   workflow: jira-bugfix
   connection: jira-acme
   event: issue_updated
-  filter: ${{ event.status_change and event.status_change.to == 'Ready for AI' }}
+  filter: "{{ event.status_change and event.status_change.to == 'Ready for AI' }}"
   inputs:
-    issue_key: ${{ event.issue_key }}
-    repo: ${{ event.issue.fields.customfield_10050 or 'acme/api' }}
-  dedupe_key: ${{ event.issue_key }}:${{ event.timestamp }}
+    issue_key: "{{ event.issue_key }}"
+    repo: "{{ event.issue.fields.customfield_10050 or 'acme/api' }}"
+  dedupe_key: "{{ event.issue_key }}:{{ event.timestamp }}"

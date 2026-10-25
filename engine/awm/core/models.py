@@ -453,7 +453,7 @@ class TriageSpec(Model):
 
     provider: str | None = None
     provider_config: dict[str, Any] = Field(default_factory=dict)
-    state: Any = Field("${{ event }}", description="What the questions are about (expressions allowed).")
+    state: Any = Field("{{ event }}", description="What the questions are about (expressions allowed).")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
 
@@ -492,7 +492,7 @@ class TargetSelector(Model):
     resource: str | None = Field(None, description="Integration resource, e.g. 'repository'.")
     filter: dict[str, Any] = Field(default_factory=dict)
     items: list[dict[str, Any]] | None = Field(None, description="Static targets instead of a query.")
-    key: str = Field("${{ target.id }}", description="Expression giving a stable key per target.")
+    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target.")
     limit: int | None = Field(None, ge=1)
 
     @model_validator(mode="after")
@@ -598,7 +598,7 @@ class BlueprintSpec(Model):
     visibility: Literal["tenant", "install", "public"] = "tenant"
     params: dict[str, BlueprintParam] = Field(default_factory=dict)
     resources: list[dict[str, Any]] = Field(
-        min_length=1, description="Resource templates; ${{ params.* }} and ${{ prefix }} are substituted."
+        min_length=1, description="Resource templates; {{ params.* }} and {{ prefix }} are substituted."
     )
 
 
@@ -613,7 +613,7 @@ class Grader(Model):
     type: Literal["expression", "decision"] = "expression"
     check: str | None = Field(None, description="expression: evaluated with outputs, expect, run.")
     question: DecisionQuestion | None = Field(None, description="decision: a score or boolean question.")
-    state: Any = Field("${{ outputs }}", description="decision: state to send (expressions allowed).")
+    state: Any = Field("{{ outputs }}", description="decision: state to send (expressions allowed).")
     weight: float = Field(1.0, gt=0)
 
 

@@ -12,8 +12,8 @@ HELLO = {
     "metadata": {"description": "Says hello", "labels": {"team": "platform"}},
     "spec": {
         "inputs": {"name": {"type": "string"}},
-        "outputs": {"greeting": "${{ steps.greet.output.text }}"},
-        "steps": [{"id": "greet", "type": "set", "values": {"text": "Hello ${{ inputs.name }}"}}],
+        "outputs": {"greeting": "{{ steps.greet.output.text }}"},
+        "steps": [{"id": "greet", "type": "set", "values": {"text": "Hello {{ inputs.name }}"}}],
     },
 }
 
@@ -101,9 +101,9 @@ kind: Workflow
 metadata: {name: hello}
 spec:
   inputs: {name: {type: string}}
-  outputs: {greeting: "${{ steps.greet.output.text }}"}
+  outputs: {greeting: "{{ steps.greet.output.text }}"}
   steps:
-    - {id: greet, type: set, values: {text: "Hello ${{ inputs.name }}"}}
+    - {id: greet, type: set, values: {text: "Hello {{ inputs.name }}"}}
 """
     r = await admin.post("/v1/apply?namespace=default", content=doc, headers={"content-type": "application/yaml"})
     assert r.status_code == 200, r.text
@@ -240,3 +240,15 @@ async def test_openapi_and_catalogues(admin):
     kinds = (await admin.get("/v1/schemas")).json()
     assert kinds
     assert any(i["key"] == "github" for i in (await admin.get("/v1/integrations")).json())
+
+
+async def test_reads_return_the_spec_as_written(admin):
+    """Declarative clients (Terraform) diff against what they wrote, so no server defaults leak in."""
+    spec = {"provider": "anthropic", "model": "claude-opus-5-5", "instructions": "Fix bugs.", "limits": {"timeout": "90m", "budget_usd": 15}}
+    r = await admin.put("/v1/namespaces/default/agents/fixer", json={"spec": spec})
+    assert r.status_code == 201, r.text
+    assert r.json()["spec"] == spec
+    respelled = {**spec, "limits": {"timeout": "1h30m", "budget_usd": 15.0}, "skills": None}
+    r = await admin.put("/v1/namespaces/default/agents/fixer", json={"spec": respelled})
+    assert r.json()["metadata"]["version"] == 1  # same meaning: no new version
+    assert r.json()["spec"]["limits"]["timeout"] == "1h30m" and "skills" not in r.json()["spec"]

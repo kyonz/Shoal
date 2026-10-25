@@ -18,10 +18,10 @@ async def test_sequential_and_outputs(engine, tenant):
                 "metadata": {"name": "hello"},
                 "spec": {
                     "inputs": {"name": {"type": "string"}},
-                    "outputs": {"greeting": "${{ steps.greet.output.text }}", "echo": "${{ steps.sh.output.stdout | trim }}"},
+                    "outputs": {"greeting": "{{ steps.greet.output.text }}", "echo": "{{ steps.sh.output.stdout | trim }}"},
                     "steps": [
-                        {"id": "greet", "type": "set", "values": {"text": "Hello ${{ inputs.name }}"}},
-                        {"id": "sh", "type": "script", "run": "echo '${{ steps.greet.output.text }}'"},
+                        {"id": "greet", "type": "set", "values": {"text": "Hello {{ inputs.name }}"}},
+                        {"id": "sh", "type": "script", "run": "echo '{{ steps.greet.output.text }}'"},
                     ],
                 },
             }
@@ -44,9 +44,9 @@ async def test_if_skip_and_parallel_branches(engine, tenant):
                     "inputs": {"flag": {"type": "boolean", "default": False}},
                     "steps": [
                         {"id": "a", "type": "set", "values": {"x": 1}},
-                        {"id": "b", "type": "set", "needs": ["a"], "if": "${{ inputs.flag }}", "values": {"y": 2}},
+                        {"id": "b", "type": "set", "needs": ["a"], "if": "{{ inputs.flag }}", "values": {"y": 2}},
                         {"id": "c", "type": "set", "needs": ["a"], "values": {"z": 3}},
-                        {"id": "d", "type": "set", "needs": ["b", "c"], "values": {"b": "${{ steps.b.status }}"}},
+                        {"id": "d", "type": "set", "needs": ["b", "c"], "values": {"b": "{{ steps.b.status }}"}},
                     ],
                 },
             }
@@ -109,7 +109,7 @@ async def test_approval_and_cancel(engine, tenant):
                 "spec": {
                     "steps": [
                         {"id": "ok", "type": "approval", "message": "Ship it?"},
-                        {"id": "done", "type": "set", "if": "${{ steps.ok.output.approved }}", "values": {"shipped": True}},
+                        {"id": "done", "type": "set", "if": "{{ steps.ok.output.approved }}", "values": {"shipped": True}},
                     ]
                 },
             }
@@ -147,7 +147,7 @@ async def test_agent_step_with_scripted_provider(engine, tenant):
                             {"text": "Writing", "tool_calls": [{"name": "write_file", "input": {"path": "out.txt", "content": "hi"}}]},
                             {"tool_calls": [{"name": "shell", "input": {"command": "cat out.txt"}}]},
                         ],
-                        "final_outputs": {"content": "${{ last_result.stdout }}", "summary": "wrote a file"},
+                        "final_outputs": {"content": "{{ last_result.stdout }}", "summary": "wrote a file"},
                     },
                 },
             }
@@ -182,11 +182,11 @@ async def test_agent_step_with_scripted_provider(engine, tenant):
 async def test_child_workflow_fan_out(engine, tenant):
     await engine.store.apply_resource(
         tenant.id,
-        wf({"metadata": {"name": "child"}, "spec": {"inputs": {"n": {"type": "integer"}}, "outputs": {"sq": "${{ inputs.n * inputs.n }}"}, "steps": [{"id": "s", "type": "set", "values": {}}]}}),
+        wf({"metadata": {"name": "child"}, "spec": {"inputs": {"n": {"type": "integer"}}, "outputs": {"sq": "{{ inputs.n * inputs.n }}"}, "steps": [{"id": "s", "type": "set", "values": {}}]}}),
     )
     await engine.store.apply_resource(
         tenant.id,
-        wf({"metadata": {"name": "parent"}, "spec": {"steps": [{"id": "fan", "type": "workflow", "workflow": "child", "for_each": "${{ [1, 2, 3] }}", "with": {"n": "${{ item }}"}, "concurrency": 2}]}}),
+        wf({"metadata": {"name": "parent"}, "spec": {"steps": [{"id": "fan", "type": "workflow", "workflow": "child", "for_each": "{{ [1, 2, 3] }}", "with": {"n": "{{ item }}"}, "concurrency": 2}]}}),
     )
     run = await engine.executor.start_run(tenant.id, "parent", {})
     await engine.run_until_idle()

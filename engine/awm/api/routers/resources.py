@@ -57,7 +57,7 @@ async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
             name=row.name, namespace=row.namespace, description=meta.get("description"), labels=meta.get("labels") or {},
             version=row.version, created_at=row.created_at, updated_at=row.updated_at, updated_by=row.updated_by,
         ),
-        spec=doc["spec"],
+        spec=row.source if row.source is not None else doc["spec"],
         status=status,
     )
 
@@ -67,7 +67,7 @@ def build_resource(kind: str, name: str, body: ResourceIn) -> ResourceBase:
         "apiVersion": "awm.dev/v1",
         "kind": kind,
         "metadata": {"name": name, **body.metadata.model_dump(exclude_none=True)},
-        "spec": body.spec,
+        "spec": strip_nulls(body.spec),
     }
     try:
         resource = parse_resource(document)
@@ -75,6 +75,15 @@ def build_resource(kind: str, name: str, body: ResourceIn) -> ResourceBase:
         raise InvalidRequest(f"invalid {kind}", details={"errors": _errors(exc)}) from exc
     validate_semantics(resource)
     return resource
+
+
+def strip_nulls(value: Any) -> Any:
+    """Drop null members (an omitted field and an explicit null mean the same)."""
+    if isinstance(value, dict):
+        return {k: strip_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [strip_nulls(v) for v in value]
+    return value
 
 
 def _errors(exc: ValidationError) -> list[dict[str, Any]]:
@@ -92,7 +101,9 @@ def validate_semantics(resource: ResourceBase) -> None:
 
 async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response) -> ResourceOut:
     resource = build_resource(kind, name, body)
-    row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace)
+    row, outcome = await ctx.engine.store.apply_resource(
+        ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec)
+    )
     if outcome != "unchanged":
         await ctx.audit(f"{kind.lower()}.{outcome}", f"{row.namespace}/{name}", version=row.version)
     if outcome == "created":
@@ -192,13 +203,13 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
         items = doc.get("items", []) if isinstance(doc, dict) and doc.get("kind") == "List" else [doc]
         flat.extend(items if isinstance(items, list) else [])
     results: list[ApplyResult] = []
-    parsed: list[tuple[ResourceBase, str]] = []
+    parsed: list[tuple[ResourceBase, str, dict[str, Any]]] = []
     for doc in flat:
         kind = str(doc.get("kind")) if isinstance(doc, dict) else "?"
         name = str((doc.get("metadata") or {}).get("name", "?")) if isinstance(doc, dict) else "?"
         ns = SHARED_NAMESPACE if kind in TENANT_SCOPED_KINDS else ((doc.get("metadata") or {}).get("namespace") or namespace)
         try:
-            resource = parse_resource(doc)
+            resource = parse_resource({**doc, "spec": strip_nulls(doc.get("spec"))})
             validate_semantics(resource)
         except (ValidationError, ValueError, InvalidRequest) as exc:
             message = "; ".join(f"{e['loc']}: {e['msg']}" for e in _errors(exc)) if isinstance(exc, ValidationError) else str(exc)
@@ -209,16 +220,16 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
             await ctx.require(TENANT_VERBS[plural]["write"])
         else:
             await ctx.namespace(ns, f"{plural}:write")
-        parsed.append((resource, ns))
+        parsed.append((resource, ns, strip_nulls(doc.get("spec") or {})))
     if any(r.outcome == "invalid" for r in results):
         raise InvalidRequest("some documents are invalid; nothing was applied", details={"results": [r.model_dump() for r in results]})
-    for resource, ns in parsed:
+    for resource, ns, source in parsed:
         if dry_run:
             existing = await ctx.engine.store.find_resource(ctx.tenant_id, resource.to_document()["kind"], resource.metadata.name, namespace=ns)
             outcome = "unchanged" if existing and existing.to_document() == {**resource.to_document(), "metadata": existing.to_document()["metadata"]} else ("updated" if existing else "created")
             results.append(ApplyResult(kind=resource.to_document()["kind"], name=resource.metadata.name, namespace=ns, outcome=outcome))  # type: ignore[arg-type]
             continue
-        row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, resource, actor=ctx.actor, namespace=ns)
+        row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, resource, actor=ctx.actor, namespace=ns, source=source)
         if outcome != "unchanged":
             await ctx.audit(f"{row.kind.lower()}.{outcome}", f"{row.namespace}/{row.name}", version=row.version)
         results.append(ApplyResult(kind=row.kind, name=row.name, namespace=row.namespace, outcome=outcome, version=row.version))  # type: ignore[arg-type]
