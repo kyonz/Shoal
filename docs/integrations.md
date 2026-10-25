@@ -171,6 +171,11 @@ passes, or the reason it does not. Any trigger can also set
 
 ## Slack
 
+> The full Slack guide, with screenshots, is in [docs/slack](slack/README.md): [setup](slack/setup.md),
+> [approvals](slack/approvals.md), [interactive messages](slack/interactive-messages.md),
+> [message builder](slack/message-builder.md), [channel bots](slack/channel-bots.md),
+> [events and slash commands](slack/events-and-commands.md) and the [reference](slack/reference.md).
+
 Slack is built in. One Slack app per connection. Creating a Slack connection in
 the UI opens a **guided setup** (Connections → the connection → Guided setup)
 that walks through the steps below: pick what the app does (messages and
@@ -252,8 +257,9 @@ posting):
   `{action_id, block_id, value, label, user, channel, message_ts}`; a `wait`
   step with `signal: {name: choice}` resumes and later steps branch on
   `steps.<wait>.output.payload.value`;
-- `shoal: {signal: choice, modal: {title, fields}}` opens a form first and sends
-  its values with the click;
+- `shoal: {signal: choice, modal: <view>}` (buttons only) opens that Block Kit
+  modal first and sends its answers as `values` (keyed by each input's
+  `action_id`);
 - `shoal: {event: true}` raises a `block_actions` event instead, so a trigger can
   start a new run from the click;
 - `shoal: {signal: choice, after: keep}` leaves the controls in place; by
@@ -286,7 +292,14 @@ is a worked example.
             text: {type: plain_text, text: Hold}
             style: danger
             value: hold
-            shoal: {signal: release, modal: {title: Hold the release, fields: [{name: why, label: "Why?"}]}}
+            shoal:
+              signal: release
+              modal:
+                title: {type: plain_text, text: Hold the release}
+                blocks:
+                  - type: input
+                    label: {type: plain_text, text: "Why?"}
+                    element: {type: plain_text_input, action_id: why}
 - id: decision
   type: wait
   signal: {name: release}

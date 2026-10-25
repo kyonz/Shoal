@@ -15,6 +15,7 @@ from shoal.api.app import create_app
 from shoal.core import clock
 from shoal.core.errors import InvalidRequest
 from shoal.core.loader import parse_resource
+from shoal.core.scope import use_namespace
 from shoal.integrations.base import IntegrationError
 from shoal.integrations.slack import SlackIntegration
 from shoal.sdk.testing import IntegrationContract, IntegrationHarness, MockSlack, slack_request
@@ -607,3 +608,35 @@ async def test_verify_flags_scopes_the_app_was_not_granted(world, slack):
     config = ctx.config.model_copy(update={"client_id": "1.2", "client_secret": SecretStr("shh")})
     url = urlparse(ctx.integration.install_url(config, "https://cb", "state"))
     assert "channels:history" not in parse_qs(url.query)["scope"][0]
+
+
+async def test_an_org_wide_connection_serves_every_namespace(world, slack):
+    """A Slack connection in `shared` is used by any namespace without one of its own: approvals and triggers."""
+    engine, tenant = world
+    with use_namespace("shared"):
+        await engine.secrets.writable().put(tenant.id, "org-slack-bot", slack.bot_token)
+        await engine.secrets.writable().put(tenant.id, "org-slack-signing", SECRET)
+        await engine.store.apply_resource(tenant.id, doc("Connection", "org-slack", {
+            "integration": "slack", "config": {"default_channel": "#deploys", "app_name": "Acme Bot"},
+            "secrets": {"bot_token": "org-slack-bot", "signing_secret": "org-slack-signing"},
+        }))
+    await engine.store.ensure_namespace(tenant.id, "team-a")
+    with use_namespace("team-a"):
+        await engine.store.apply_resource(tenant.id, doc("Workflow", "gated", {
+            "connections": {"slack": "org-slack"}, "steps": [APPROVAL]}))
+        await engine.store.apply_resource(tenant.id, doc("Trigger", "team-mentions", {
+            "connection": "org-slack", "event": "app_mention", "workflow": "gated"}))
+        run = await engine.executor.start_run(tenant.id, "gated", {})
+        await engine.run_until_idle()
+    message = slack.last_message("#deploys")
+    assert message.button("Approve")
+    with use_namespace("shared"):
+        url = await engine.integrations.webhook_url(tenant.id, "org-slack")
+        hook = url.rsplit("/", 1)[-1]
+        result = await engine.integrations.handle_webhook(hook, *slack.click(message, "shoal_approve", user="U_DANA"))
+        assert result["interactions"][0]["ok"], result
+        fired = await engine.integrations.handle_webhook(hook, *slack.event(
+            {"type": "app_mention", "user": "U_DANA", "channel": "C_DEPLOYS", "text": "<@U0BOT> hi", "ts": "9.1"}))
+    assert [(f["namespace"], f["status"]) for f in fired["triggers"]] == [("team-a", "fired")]
+    await engine.run_until_idle()
+    assert (await engine.store.get_step(run.id, "ok")).output["approved"] is True
