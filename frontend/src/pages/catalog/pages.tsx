@@ -3,6 +3,7 @@ import ResourceEditorPage from "./ResourceEditorPage";
 import ResourceListPage from "./ResourceListPage";
 import { agentExtension, cloudIdentityExtension, gatewayExtension, modelPolicyExtension, sandboxExtension, skillExtension } from "./extensions";
 import { evalExtension } from "./evals/EvalExtension";
+import { evalPlatformExtension } from "./evals/Platforms";
 import { blueprintExtension } from "./blueprints/blueprintExtension";
 
 const EXT = {
@@ -15,6 +16,7 @@ const EXT = {
   evals: evalExtension,
   blueprints: blueprintExtension,
   "skill-sources": {},
+  "eval-platforms": evalPlatformExtension,
 };
 
 export type CatalogPlural = keyof typeof EXT;
