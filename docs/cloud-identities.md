@@ -27,6 +27,8 @@ spec:
 
 An identity in the `shared` namespace can serve several teams. Grants from another namespace must name it: `team-a/deploy` or `*/deploy`.
 
+A grant follows the workflow's name, not its content. Anyone who can edit a granted workflow (or create one whose name matches a pattern) can make its steps do anything the role allows. Prefer exact names over patterns, keep granted workflows in a namespace whose editors you would trust with the role, and narrow the role with `session_policy` or `policy_arns`.
+
 ## Use it in a step
 
 ```yaml

@@ -27,6 +27,11 @@ class Settings(BaseSettings):
         default_factory=lambda: ["db", "env"],
         description="Secret backends (shoal.secrets plugins) in lookup order; the first writable one stores new secrets.",
     )
+    secret_env_shared: bool = Field(
+        True,
+        description="Let the env secret provider fall back to SHOAL_SECRET_<NAME>, which every tenant can read; "
+        "turn off on instances shared by several organisations (SHOAL_SECRET_<TENANT>__<NAME> always works).",
+    )
     secret_key: SecretStr = Field(
         SecretStr("dev-insecure-secret-key-change-me"),
         description="Key used to encrypt stored secrets and sign run identity tokens.",

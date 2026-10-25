@@ -45,6 +45,21 @@ async def _auth(ctx: Ctx) -> None:
     await ctx.require("scim:provision")
 
 
+async def _get_user(ctx: Ctx, user_id: str) -> t.User:
+    """A person; service accounts are not the identity provider's to manage."""
+    user = await ctx.engine.directory.get_user(ctx.tenant_id, user_id)
+    if user.kind != "user":
+        raise NotFound(f"user '{user_id}' not found")
+    return user
+
+
+def _member_ids(members: Any) -> list[str]:
+    ids = [m.get("value") if isinstance(m, dict) else None for m in members or []]
+    if not all(isinstance(i, str) and i for i in ids):
+        raise InvalidRequest("every member needs a 'value' (a user id)")
+    return ids  # type: ignore[return-value]
+
+
 def _base(request: Request) -> str:
     return str(request.base_url).rstrip("/") + "/scim/v2"
 
@@ -147,7 +162,7 @@ async def create_user(request: Request, ctx: CtxDep) -> Any:
 async def get_user(user_id: str, request: Request, ctx: CtxDep) -> Any:
     try:
         await _auth(ctx)
-        return scim(await _user_doc(ctx, request, await ctx.engine.directory.get_user(ctx.tenant_id, user_id)))
+        return scim(await _user_doc(ctx, request, await _get_user(ctx, user_id)))
     except ShoalError as exc:
         return scim_error(exc)
 
@@ -156,6 +171,7 @@ async def get_user(user_id: str, request: Request, ctx: CtxDep) -> Any:
 async def replace_user(user_id: str, request: Request, ctx: CtxDep) -> Any:
     try:
         await _auth(ctx)
+        await _get_user(ctx, user_id)
         doc = await request.json()
         values = _user_values(doc)
         if doc.get("userName"):
@@ -171,6 +187,7 @@ async def replace_user(user_id: str, request: Request, ctx: CtxDep) -> Any:
 async def patch_user(user_id: str, request: Request, ctx: CtxDep) -> Any:
     try:
         await _auth(ctx)
+        await _get_user(ctx, user_id)
         ops = (await request.json()).get("Operations") or []
         values: dict[str, Any] = {}
         for op in ops:
@@ -201,6 +218,7 @@ async def patch_user(user_id: str, request: Request, ctx: CtxDep) -> Any:
 async def delete_user(user_id: str, ctx: CtxDep) -> Response:
     try:
         await _auth(ctx)
+        await _get_user(ctx, user_id)
         await ctx.engine.directory.delete_user(ctx.tenant_id, user_id)
         await ctx.audit("scim.user.deleted", user_id)
         return Response(status_code=204)
@@ -262,10 +280,11 @@ async def create_group(request: Request, ctx: CtxDep) -> Any:
         await _auth(ctx)
         doc = await request.json()
         directory = ctx.engine.directory
+        members = _member_ids(doc.get("members"))
+        await directory.check_members(ctx.tenant_id, members, "user")
         group = await directory.create_group(ctx.tenant_id, doc["displayName"], external_id=doc.get("externalId"), source="scim")
-        members = [m["value"] for m in doc.get("members") or []]
         if members:
-            await directory.set_group_members(ctx.tenant_id, group.id, members)
+            await directory.set_group_members(ctx.tenant_id, group.id, members, kind="user")
         await ctx.audit("scim.group.created", group.display_name)
         return scim(await _group_doc(ctx, request, group), 201)
     except ShoalError as exc:
@@ -290,7 +309,7 @@ async def replace_group(group_id: str, request: Request, ctx: CtxDep) -> Any:
         doc = await request.json()
         directory = ctx.engine.directory
         group = await directory.update_group(ctx.tenant_id, group_id, display_name=doc.get("displayName"), external_id=doc.get("externalId"))
-        await directory.set_group_members(ctx.tenant_id, group_id, [m["value"] for m in doc.get("members") or []])
+        await directory.set_group_members(ctx.tenant_id, group_id, _member_ids(doc.get("members")), kind="user")
         return scim(await _group_doc(ctx, request, group))
     except ShoalError as exc:
         return scim_error(exc)
@@ -308,16 +327,16 @@ async def patch_group(group_id: str, request: Request, ctx: CtxDep) -> Any:
             value = op.get("value")
             if path.startswith("members"):
                 match = re.search(r'value eq "([^"]+)"', path)
-                ids = [match.group(1)] if match else [m["value"] for m in (value or [])]
+                ids = [match.group(1)] if match else _member_ids(value)
                 if kind == "add":
-                    await directory.add_group_members(ctx.tenant_id, group_id, ids)
+                    await directory.add_group_members(ctx.tenant_id, group_id, ids, kind="user")
                 elif kind == "remove":
                     if match or value:
                         await directory.remove_group_members(ctx.tenant_id, group_id, ids)
                     else:
                         await directory.set_group_members(ctx.tenant_id, group_id, [])
                 elif kind == "replace":
-                    await directory.set_group_members(ctx.tenant_id, group_id, ids)
+                    await directory.set_group_members(ctx.tenant_id, group_id, ids, kind="user")
             elif kind in ("replace", "add"):
                 values = value if path == "" and isinstance(value, dict) else {path: value}
                 if "displayName" in values:
@@ -325,7 +344,7 @@ async def patch_group(group_id: str, request: Request, ctx: CtxDep) -> Any:
                 if "externalId" in values:
                     group = await directory.update_group(ctx.tenant_id, group_id, external_id=values["externalId"])
                 if "members" in values:
-                    await directory.set_group_members(ctx.tenant_id, group_id, [m["value"] for m in values["members"] or []])
+                    await directory.set_group_members(ctx.tenant_id, group_id, _member_ids(values["members"]), kind="user")
         await ctx.audit("scim.group.patched", group.display_name)
         return scim(await _group_doc(ctx, request, await directory.get_group(ctx.tenant_id, group_id)))
     except ShoalError as exc:
