@@ -17,7 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 
-	"github.com/kyonz/ai-workflow-manager/terraform-provider/internal/client"
+	"github.com/kyonz/shoal/terraform-provider/internal/client"
 )
 
 // Acceptance tests run against a real Shoal server. Point them at one with

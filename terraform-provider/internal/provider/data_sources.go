@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/kyonz/ai-workflow-manager/terraform-provider/internal/client"
+	"github.com/kyonz/shoal/terraform-provider/internal/client"
 )
 
 func configureDS(req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) *providerData {

@@ -12,7 +12,7 @@ docker run -p 8080:8080 -e SHOAL_ADMIN_TOKEN=change-me shoal
 
 The image builds the UI from `frontend/` when it exists and serves it from `/`. It runs as
 UID 10001 with SQLite under `/var/lib/shoal` by default; set `SHOAL_DATABASE_URL` for Postgres.
-Release tags publish `ghcr.io/kyonz/ai-workflow-manager` (amd64 and arm64).
+Release tags publish `ghcr.io/kyonz/shoal` (amd64 and arm64).
 
 ## docker compose (Postgres, API, workers)
 

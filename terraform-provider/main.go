@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/kyonz/ai-workflow-manager/terraform-provider/internal/provider"
+	"github.com/kyonz/shoal/terraform-provider/internal/provider"
 )
 
 // version is set by the release build (-ldflags "-X main.version=...").

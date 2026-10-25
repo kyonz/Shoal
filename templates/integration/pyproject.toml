@@ -14,7 +14,7 @@ starter = "shoal_starter:StarterIntegration"
 
 # Until shoal is published, install it from the repository.
 [tool.uv.sources]
-shoal = { git = "https://github.com/kyonz/ai-workflow-manager", subdirectory = "engine" }
+shoal = { git = "https://github.com/kyonz/shoal", subdirectory = "engine" }
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]

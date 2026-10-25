@@ -20,4 +20,4 @@ body:
     attributes:
       value: |
         Integrations can be written in any language with the remote protocol, or in Python with the SDK.
-        See [docs/integrations.md](https://github.com/kyonz/ai-workflow-manager/blob/main/docs/integrations.md).
+        See [docs/integrations.md](https://github.com/kyonz/shoal/blob/main/docs/integrations.md).

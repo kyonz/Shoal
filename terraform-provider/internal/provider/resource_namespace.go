@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/kyonz/ai-workflow-manager/terraform-provider/internal/client"
+	"github.com/kyonz/shoal/terraform-provider/internal/client"
 )
 
 type namespaceResource struct{ data *providerData }

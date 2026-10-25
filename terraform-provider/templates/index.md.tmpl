@@ -6,13 +6,13 @@ description: |-
 
 # Shoal Provider
 
-The Shoal provider manages a [Shoal](https://github.com/kyonz/ai-workflow-manager) tenant through its `/v1` API:
+The Shoal provider manages a [Shoal](https://github.com/kyonz/shoal) tenant through its `/v1` API:
 namespaces, workflows, agents, skills, connections, triggers, campaigns, sandbox profiles, model gateways and
 policies, evals, blueprints, secrets, and who can do what (users, groups, service accounts, roles, role bindings,
 API keys and single sign-on).
 
 Every resource maps one-to-one onto an API object and uses the same field names, so the
-[API reference](https://github.com/kyonz/ai-workflow-manager/blob/main/docs/architecture.md#12-api) and the YAML
+[API reference](https://github.com/kyonz/shoal/blob/main/docs/architecture.md#12-api) and the YAML
 you export from the UI describe the Terraform schema too.
 
 ## Example usage

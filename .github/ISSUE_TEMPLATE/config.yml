@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/kyonz/ai-workflow-manager/security/advisories/new
+    url: https://github.com/kyonz/shoal/security/advisories/new
     about: Please report security problems privately, not in a public issue.
   - name: Questions and ideas
-    url: https://github.com/kyonz/ai-workflow-manager/discussions
+    url: https://github.com/kyonz/shoal/discussions
     about: Ask how to do something or share what you built.

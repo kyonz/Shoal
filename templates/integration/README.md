@@ -1,6 +1,6 @@
 # shoal-starter
 
-A Starter integration for [Shoal](https://github.com/kyonz/ai-workflow-manager).
+A Starter integration for [Shoal](https://github.com/kyonz/shoal).
 
 | Capability | What it gives you |
 | --- | --- |

@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for the report. For a security problem, please use the private
-        [vulnerability report](https://github.com/kyonz/ai-workflow-manager/security/advisories/new) instead.
+        [vulnerability report](https://github.com/kyonz/shoal/security/advisories/new) instead.
   - type: textarea
     id: what-happened
     attributes:

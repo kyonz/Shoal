@@ -42,7 +42,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:${PYTHON_VERSION}-slim
 LABEL org.opencontainers.image.title="shoal" \
       org.opencontainers.image.description="Shoal: multi-tenant engine for multi-agent AI workflows" \
-      org.opencontainers.image.source="https://github.com/kyonz/ai-workflow-manager" \
+      org.opencontainers.image.source="https://github.com/kyonz/shoal" \
       org.opencontainers.image.licenses="Apache-2.0"
 # git and ssh for agents and scripts that work on repositories in local sandboxes.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client tini \
