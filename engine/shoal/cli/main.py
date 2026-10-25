@@ -42,6 +42,8 @@ db_app = typer.Typer(help="Database schema migrations (runs where the server run
 federation_app = typer.Typer(help="Federated tenants: link them on the hub, join from the member.", no_args_is_help=True)
 skills_app = typer.Typer(help="Browse skill sources (marketplaces) and import, upgrade or roll back skills.", no_args_is_help=True)
 app.add_typer(secrets_app, name="secrets")
+credentials_app = typer.Typer(help="Your own credentials for connections that act as each person.", no_args_is_help=True)
+app.add_typer(credentials_app, name="credentials")
 app.add_typer(tenants_app, name="tenants")
 app.add_typer(eval_app, name="eval")
 app.add_typer(integrations_app, name="integrations")
@@ -540,6 +542,51 @@ def secrets_set(
     with api(ctx, namespace) as client:
         row = client.request("PUT", f"/v1/namespaces/{quote(client.target.namespace)}/secrets/{quote(name)}", json={"value": secret})
     console.print(f"secret/{escape(row['name'])} set in {escape(row['namespace'])}")
+
+
+CREDENTIAL_COLUMNS = [
+    ("CONNECTION", lambda c: f"{c['namespace']}/{c['connection']}"), ("KIND", lambda c: c["kind"]),
+    ("FIELDS", lambda c: ",".join(c["fields"])), ("UPDATED", lambda c: age(c["updated_at"])),
+]
+
+
+@credentials_app.command("list")
+def credentials_list(ctx: typer.Context, output: Output = Format.table) -> None:
+    """List the connections you have connected (never values)."""
+    with api(ctx) as client:
+        emit(client.get("/v1/me/credentials"), output, CREDENTIAL_COLUMNS)
+
+
+@credentials_app.command("set")
+def credentials_set(
+    ctx: typer.Context,
+    connection: Annotated[str, typer.Argument(help="<namespace>/<connection>.")],
+    field: Annotated[str, typer.Option("--field", help="Connection field the value fills.")] = "token",
+) -> None:
+    """Store your own credential for a connection (prompts for the value)."""
+    namespace, _, name = connection.rpartition("/")
+    value = typer.prompt(f"{field} for {connection}", hide_input=True)
+    with api(ctx) as client:
+        client.request("PUT", f"/v1/me/credentials/{quote(namespace or 'default')}/{quote(name)}", json={"values": {field: value}})
+    console.print(f"connected {connection}")
+
+
+@credentials_app.command("connect")
+def credentials_connect(ctx: typer.Context, connection: Annotated[str, typer.Argument(help="<namespace>/<connection>.")]) -> None:
+    """Connect your account with OAuth: prints the sign-in URL."""
+    namespace, _, name = connection.rpartition("/")
+    with api(ctx) as client:
+        result = client.request("POST", f"/v1/me/credentials/{quote(namespace or 'default')}/{quote(name)}/oauth")
+    console.print(f"Open this URL to connect {connection}:\n{result['authorize_url']}")
+
+
+@credentials_app.command("remove")
+def credentials_remove(ctx: typer.Context, connection: Annotated[str, typer.Argument(help="<namespace>/<connection>.")]) -> None:
+    """Remove your credential for a connection."""
+    namespace, _, name = connection.rpartition("/")
+    with api(ctx) as client:
+        client.request("DELETE", f"/v1/me/credentials/{quote(namespace or 'default')}/{quote(name)}")
+    console.print(f"removed {connection}")
 
 
 @secrets_app.command("get")

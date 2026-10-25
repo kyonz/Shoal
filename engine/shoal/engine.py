@@ -20,8 +20,10 @@ from typing import Any
 import httpx
 
 from shoal.auth.directory import Directory
+from shoal.auth.oauth import OAuthFlows
 from shoal.auth.oidc import OIDCService
 from shoal.auth.rbac import Authorizer
+from shoal.auth.user_credentials import UserCredentials
 from shoal.blueprints import BlueprintService
 from shoal.campaigns.service import CampaignService
 from shoal.config import Settings, get_settings
@@ -123,6 +125,8 @@ class Engine:
         self.blueprints = BlueprintService(self)
         self.skill_sources = SkillSourceService(self)
         self.signals = Signals(self)
+        self.user_credentials = UserCredentials(self)
+        self.oauth = OAuthFlows(self)
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)
         self.evals = EvalService(self)

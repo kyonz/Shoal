@@ -393,9 +393,19 @@ kept out of the model's reach.
   Shoal serves its Agent Card (skills derived from the workflow inputs/outputs,
   `securitySchemes` for API keys/OAuth) and maps A2A tasks onto runs,
   including streaming and input-required (approval) states.
-- **MCP.** Agents consume MCP servers as tool sources (stdio inside the
-  sandbox, or remote HTTP with OAuth via the credential providers). Shoal also
-  exposes an MCP server so other agents/IDEs can list and run workflows.
+- **MCP.** MCP servers are an ordinary integration (`mcp`), not a special
+  case: each `Connection` with `integration: mcp` is one server (Streamable
+  HTTP URL, a token secret, a tool allow-list). Its tools are listed per
+  connection (`tools/list`, cached briefly) and become actions
+  (`action: mcp.<tool>` with `connection:`), agent tools (`tools:
+  [mcp:<connection>]` or `mcp:<connection>.<tool>`, exposed as
+  `<connection>__<tool>`), wait-condition actions and API calls, like any
+  dynamic integration. Read-only tools (`readOnlyHint`) are marked
+  non-mutating. Credentials follow the connection's `credentials` mode, so a
+  server can use one team token or each person's own token or OAuth grant
+  (§11.4). Stdio-only servers run behind an MCP HTTP proxy for now; running
+  them inside the agent sandbox is planned. Shoal also exposes an MCP server
+  so other agents/IDEs can list and run workflows (planned).
 
 ### 7.3 LLM gateways and model routing
 
@@ -883,6 +893,33 @@ one control plane, and a federated deployment can also sit next to the hub.
   forwarded yet; clients poll the run instead.
 - **Not in scope:** moving a tenant between hosted and federated while
   running (export and re-import instead), and cross-tenant workflows.
+
+### 11.4 Where secrets live
+
+Every credential is encrypted at rest, write-only through the API, resolved at
+the moment of use and redacted from run logs. There are four scopes:
+
+| Scope | Holds | Managed by |
+|---|---|---|
+| **Deployment** | Platform keys (`SHOAL_SECRET_KEY`, operator LLM keys, federation link secrets), from env or a secret backend (`shoal.secrets` plugins: env, db; Vault/KMS planned) | Operator |
+| **Tenant** (`shared` namespace) | Gateway keys and `secret_headers`, org-wide connections, OAuth client secrets | Tenant admins |
+| **Namespace** | A team's connection secrets | Namespace admins/editors |
+| **User** | A person's own token or OAuth grant for one connection (`user_credentials`) | That person only; admins can list and revoke, never read |
+
+**Per-user credentials.** A connection chooses whose credential calls use:
+`credentials: shared` (default), `per_user` or `per_user_or_shared`, and
+which of its fields people supply (`user_fields`, default: the fields in
+`secrets`). The person a call acts for is the run's initiator, mapped to a
+Shoal user through identities (§11.1), so a run started from a Jira webhook
+acts for the person behind the event. Service accounts and unknown people
+never use personal credentials. When a `per_user` connection meets someone
+who has not connected it, the step **waits** (event `credential.required`
+with a link to connect) and resumes as soon as they save the credential,
+rather than failing. People connect under `/v1/me/credentials` (paste a token,
+or `oauth:` on the connection runs an authorization-code flow with PKCE and
+refreshes access tokens before they expire) or with `shoal credentials
+set|connect`. Every set, removal and revocation is audited. This applies to
+every integration, MCP servers included.
 
 ---
 
