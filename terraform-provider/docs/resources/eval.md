@@ -50,11 +50,16 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 |---|---|---|---|
 | `description` | string | optional |  |
 | `workflow` | string | **required** |  |
-| `cases` | list of object | **required** |  |
+| `variants` | list of object | optional | Arms to compare; defaults to one 'default' arm at the current version. |
+| `cases` | list of object | optional |  |
+| `dataset` | object | optional |  |
+| `from_runs` | object | optional |  |
 | `graders` | list of object | **required** |  |
-| `threshold` | number | optional |  Default: `0.8`. |
+| `threshold` | number | optional | A case passes when its weighted score is at least this. Default: `0.8`. |
 | `concurrency` | number | optional |  Default: `5`. |
 | `decision_provider` | string | optional |  |
+| `gate` | object | optional |  |
+| `sinks` | list of object | optional |  |
 
 ## Import
 

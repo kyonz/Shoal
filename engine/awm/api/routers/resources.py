@@ -19,10 +19,13 @@ from awm.api.schemas import (
     ResourceMetadataOut,
     ResourceOut,
     ResourceVersionOut,
+    RollbackIn,
     SecretIn,
     SecretOut,
     TriggerTestIn,
+    VersionDiffOut,
 )
+from awm.core.diff import diff
 from awm.core.errors import InvalidRequest, NotFound
 from awm.core.ids import new_id
 from awm.core.models import KIND_BY_PLURAL, Connection, ResourceBase, Trigger, parse_resource
@@ -101,10 +104,14 @@ def validate_semantics(resource: ResourceBase) -> None:
             raise InvalidRequest(f"invalid schedule: {exc}") from exc
 
 
-async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response) -> ResourceOut:
+MessageQuery = Query(None, max_length=2000, description="Change note stored with the new version.")
+
+
+async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response,
+               message: str | None = None) -> ResourceOut:
     resource = build_resource(kind, name, body)
     row, outcome = await ctx.engine.store.apply_resource(
-        ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec)
+        ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec), message=message
     )
     if outcome != "unchanged":
         await ctx.audit(f"{kind.lower()}.{outcome}", f"{row.namespace}/{name}", namespace=row.namespace, version=row.version)
@@ -131,9 +138,10 @@ def _namespaced_routes(plural: str, kind: str) -> None:
 
     @router.put(f"{base}/{{name}}", tags=tag, response_model=ResourceOut, name=f"put_{plural}",
                 summary=f"Create or replace a {kind}", responses={201: {"description": "Created"}})
-    async def put_one(namespace: str, name: str, body: ResourceIn, ctx: CtxDep, response: Response) -> Any:
+    async def put_one(namespace: str, name: str, body: ResourceIn, ctx: CtxDep, response: Response,
+                      message: str | None = MessageQuery) -> Any:
         await ctx.namespace(namespace, f"{plural}:write")
-        return await _put(ctx, kind, name, namespace, body, response)
+        return await _put(ctx, kind, name, namespace, body, response, message)
 
     @router.get(f"{base}/{{name}}", tags=tag, response_model=ResourceOut, name=f"get_{plural}")
     async def get_one(namespace: str, name: str, ctx: CtxDep) -> Any:
@@ -151,6 +159,24 @@ def _namespaced_routes(plural: str, kind: str) -> None:
     async def versions(namespace: str, name: str, ctx: CtxDep) -> Any:
         await ctx.namespace(namespace, f"{plural}:read")
         return await ctx.engine.store.resource_versions(ctx.tenant_id, kind, name, namespace=namespace)
+
+    @router.get(f"{base}/{{name}}/versions/{{version}}", tags=tag, response_model=ResourceVersionOut, name=f"version_{plural}")
+    async def version(namespace: str, name: str, version: int, ctx: CtxDep) -> Any:
+        await ctx.namespace(namespace, f"{plural}:read")
+        return await ctx.engine.store.get_resource_version_row(ctx.tenant_id, kind, name, version, namespace=namespace)
+
+    @router.get(f"{base}/{{name}}/diff", tags=tag, response_model=VersionDiffOut, name=f"diff_{plural}",
+                summary=f"What changed between two versions of a {kind}")
+    async def diff_versions(namespace: str, name: str, ctx: CtxDep, from_: int = Query(alias="from", ge=1),
+                            to: int | None = Query(None, ge=1, description="Defaults to the current version.")) -> Any:
+        await ctx.namespace(namespace, f"{plural}:read")
+        return await _diff(ctx, kind, name, namespace, from_, to)
+
+    @router.post(f"{base}/{{name}}/rollback", tags=tag, response_model=ResourceOut | VersionDiffOut, name=f"rollback_{plural}",
+                 summary=f"Restore an earlier version of a {kind} as a new version")
+    async def rollback(namespace: str, name: str, body: RollbackIn, ctx: CtxDep) -> Any:
+        await ctx.namespace(namespace, f"{plural}:write")
+        return await _rollback(ctx, kind, name, namespace, body)
 
 
 for _plural, _kind_name in NAMESPACED.items():
@@ -170,13 +196,13 @@ def _tenant_routes(plural: str, kind: str) -> None:
         return [await to_out(ctx, r) for r in await ctx.engine.store.list_resources(ctx.tenant_id, kind)]
 
     @router.put(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"put_{plural}")
-    async def put_one(name: str, body: ResourceIn, ctx: CtxDep, response: Response) -> Any:
+    async def put_one(name: str, body: ResourceIn, ctx: CtxDep, response: Response, message: str | None = MessageQuery) -> Any:
         await ctx.require(verbs["write"])
         if kind == "Blueprint" and (body.spec or {}).get("status") == "featured":
             current = await ctx.engine.store.find_resource(ctx.tenant_id, kind, name)
             if current is None or current.spec.status != "featured":  # type: ignore[attr-defined]
                 await ctx.require("blueprints:feature")
-        return await _put(ctx, kind, name, SHARED_NAMESPACE, body, response)
+        return await _put(ctx, kind, name, SHARED_NAMESPACE, body, response, message)
 
     @router.get(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"get_{plural}")
     async def get_one(name: str, ctx: CtxDep) -> Any:
@@ -190,15 +216,74 @@ def _tenant_routes(plural: str, kind: str) -> None:
         await ctx.audit(f"{kind.lower()}.deleted", name)
 
 
+    @router.get(f"/{plural}/{{name}}/versions", tags=tag, response_model=list[ResourceVersionOut], name=f"versions_{plural}")
+    async def versions(name: str, ctx: CtxDep) -> Any:
+        await ctx.require(verbs["read"])
+        return await ctx.engine.store.resource_versions(ctx.tenant_id, kind, name)
+
+    @router.get(f"/{plural}/{{name}}/diff", tags=tag, response_model=VersionDiffOut, name=f"diff_{plural}")
+    async def diff_versions(name: str, ctx: CtxDep, from_: int = Query(alias="from", ge=1), to: int | None = Query(None, ge=1)) -> Any:
+        await ctx.require(verbs["read"])
+        return await _diff(ctx, kind, name, SHARED_NAMESPACE, from_, to)
+
+    @router.post(f"/{plural}/{{name}}/rollback", tags=tag, response_model=ResourceOut | VersionDiffOut, name=f"rollback_{plural}")
+    async def rollback(name: str, body: RollbackIn, ctx: CtxDep) -> Any:
+        await ctx.require(verbs["write"])
+        return await _rollback(ctx, kind, name, SHARED_NAMESPACE, body)
+
+
 for _plural, _kind_name in TENANT_SCOPED.items():
     _tenant_routes(_plural, _kind_name)
+
+
+# --------------------------------------------------------------------------- versions
+
+
+def _as_written(version: t.ResourceVersion) -> dict[str, Any]:
+    """Diff what people wrote, not server defaults, when the version kept its source."""
+    doc = version.document
+    return {"metadata": doc.get("metadata", {}), "spec": version.source if version.source is not None else doc.get("spec")}
+
+
+async def _diff(ctx: Ctx, kind: str, name: str, namespace: str, from_: int, to: int | None) -> VersionDiffOut:
+    store = ctx.engine.store
+    row = await store.get_resource_row(ctx.tenant_id, kind, name, namespace=namespace, fallback=False)
+    to = to or row.version
+    before = await store.get_resource_version_row(ctx.tenant_id, kind, name, from_, namespace=namespace)
+    after = await store.get_resource_version_row(ctx.tenant_id, kind, name, to, namespace=namespace)
+    return VersionDiffOut(kind=kind, name=name, from_version=from_, to_version=to, changes=diff(_as_written(before), _as_written(after)))
+
+
+async def _rollback(ctx: Ctx, kind: str, name: str, namespace: str, body: RollbackIn) -> Any:
+    store = ctx.engine.store
+    row = await store.get_resource_row(ctx.tenant_id, kind, name, namespace=namespace, fallback=False)
+    target = await store.get_resource_version_row(ctx.tenant_id, kind, name, body.version, namespace=namespace)
+    if body.dry_run:
+        current = await store.get_resource_version_row(ctx.tenant_id, kind, name, row.version, namespace=namespace)
+        return VersionDiffOut(kind=kind, name=name, from_version=row.version, to_version=body.version,
+                              changes=diff(_as_written(current), _as_written(target)))
+    meta = target.document.get("metadata", {})
+    restored = ResourceIn.model_validate(
+        {"metadata": {"description": meta.get("description"), "labels": meta.get("labels") or {}},
+         "spec": target.source if target.source is not None else target.document["spec"]}
+    )
+    resource = build_resource(kind, name, restored)
+    new, outcome = await store.apply_resource(
+        ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(restored.spec),
+        message=body.message or f"Roll back to version {body.version}",
+    )
+    if outcome != "unchanged":
+        await ctx.audit(f"{kind.lower()}.rolled_back", f"{new.namespace}/{name}", namespace=new.namespace,
+                        version=new.version, restored=body.version)
+    return await to_out(ctx, new)
 
 
 # --------------------------------------------------------------------------- apply
 
 
 @router.post("/apply", tags=["resources"], response_model=list[ApplyResult], summary="Apply multi-document YAML or JSON")
-async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_run: bool = False) -> Any:
+async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_run: bool = False,
+                message: str | None = MessageQuery) -> Any:
     raw = (await request.body()).decode()
     try:
         docs = [d for d in yaml.safe_load_all(raw) if d]
@@ -235,7 +320,9 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
             outcome = "unchanged" if existing and existing.to_document() == {**resource.to_document(), "metadata": existing.to_document()["metadata"]} else ("updated" if existing else "created")
             results.append(ApplyResult(kind=resource.to_document()["kind"], name=resource.metadata.name, namespace=ns, outcome=outcome))  # type: ignore[arg-type]
             continue
-        row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, resource, actor=ctx.actor, namespace=ns, source=source)
+        row, outcome = await ctx.engine.store.apply_resource(
+            ctx.tenant_id, resource, actor=ctx.actor, namespace=ns, source=source, message=message
+        )
         if outcome != "unchanged":
             await ctx.audit(f"{row.kind.lower()}.{outcome}", f"{row.namespace}/{row.name}", namespace=row.namespace, version=row.version)
         results.append(ApplyResult(kind=row.kind, name=row.name, namespace=row.namespace, outcome=outcome, version=row.version))  # type: ignore[arg-type]

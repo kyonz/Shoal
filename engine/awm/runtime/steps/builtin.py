@@ -190,6 +190,7 @@ class WorkflowHandler:
                 ctx.tenant_id,
                 step.workflow,
                 inputs,
+                version=step.version,
                 started_by=f"run:{ctx.run.id}",
                 context={**ctx.run.context, "parent": {"run_id": ctx.run.id, "step_id": step.id, "index": index}},
                 parent_run_id=ctx.run.id,

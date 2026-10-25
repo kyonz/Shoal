@@ -329,7 +329,22 @@ class ResourceVersionOut(Out):
     version: int
     created_at: datetime
     created_by: str | None
+    message: str | None = None
     document: dict[str, Any]
+
+
+class RollbackIn(BaseModel):
+    version: int = Field(ge=1, description="Version to restore; it becomes a new, current version.")
+    message: str | None = Field(None, description="Change note; defaults to 'Roll back to version N'.")
+    dry_run: bool = Field(False, description="Return the diff without changing anything.")
+
+
+class VersionDiffOut(BaseModel):
+    kind: str
+    name: str
+    from_version: int
+    to_version: int
+    changes: list[dict[str, Any]] = Field(description="[{op: add|remove|replace|reorder, path, from?, to?}] (JSON-pointer paths).")
 
 
 class SecretIn(BaseModel):

@@ -24,6 +24,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 |---|---|---|---|
 | `description` | string | optional |  |
 | `workflow` | string | optional | Workflow to start. |
+| `workflow_version` | number | optional | Pin to this workflow version; omitted, runs use the current version. |
 | `campaign` | string | optional | Campaign to (re)launch instead of a single run. |
 | `connection` | string | optional | Connection whose events fire this trigger. |
 | `event` | string | **required** | Event type, e.g. 'issue_updated', 'pull_request', 'received', 'schedule'. |

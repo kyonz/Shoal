@@ -225,6 +225,8 @@ class ResourceVersion(Base):
     tenant_id: Mapped[str] = mapped_column(String(40), index=True)
     version: Mapped[int] = mapped_column(Integer)
     document: Mapped[dict[str, Any]] = mapped_column()
+    source: Mapped[dict[str, Any] | None] = mapped_column(doc="Spec as written, restored on rollback.")
+    message: Mapped[str | None] = mapped_column(Text, doc="Why this version was made (change note).")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     created_by: Mapped[str | None] = mapped_column(String(200))
 

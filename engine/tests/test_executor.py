@@ -194,3 +194,36 @@ async def test_child_workflow_fan_out(engine, tenant):
     assert run.status == "succeeded", run.error
     step = await engine.store.get_step(run.id, "fan")
     assert [r["outputs"]["sq"] for r in step.output["results"]] == [1, 4, 9]
+
+
+async def test_pinned_workflow_versions(engine, tenant):
+    def child(label: str) -> Workflow:
+        return wf({"metadata": {"name": "child"}, "spec": {"outputs": {"v": label}, "steps": [{"id": "s", "type": "set", "values": {}}]}})
+
+    await engine.store.apply_resource(tenant.id, child("one"))
+    await engine.store.apply_resource(tenant.id, child("two"))  # version 2 is current
+    await engine.store.apply_resource(
+        tenant.id,
+        wf({"metadata": {"name": "parent"}, "spec": {
+            "outputs": {"pinned": "{{ steps.old.output.v }}", "latest": "{{ steps.new.output.v }}"},
+            "steps": [{"id": "old", "type": "workflow", "workflow": "child", "version": 1},
+                      {"id": "new", "type": "workflow", "workflow": "child"}]}}),
+    )
+    run = await engine.executor.start_run(tenant.id, "parent", {})
+    await engine.run_until_idle()
+    run = await engine.store.get_run(tenant.id, run.id)
+    assert run.status == "succeeded", run.error
+    assert run.outputs == {"pinned": "one", "latest": "two"}
+
+    # a campaign pins the version current at launch, so a mid-campaign change does not split it
+    campaign = await engine.campaigns.launch(
+        tenant.id, parse_resource({"apiVersion": "awm.dev/v1", "kind": "Campaign", "metadata": {"name": "c"},
+                                   "spec": {"workflow": "child", "targets": {"items": [{"id": "a"}, {"id": "b"}]}}}).spec,
+        start=False,
+    )
+    assert campaign.spec["workflow_version"] == 2
+    await engine.store.apply_resource(tenant.id, child("three"))
+    await engine.campaigns.start(tenant.id, campaign.id)
+    await engine.run_until_idle()
+    runs = [r for r in await engine.store.list_runs(tenant.id) if r.campaign_id == campaign.id]
+    assert len(runs) == 2 and {r.workflow_version for r in runs} == {2}

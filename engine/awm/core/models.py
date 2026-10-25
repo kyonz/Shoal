@@ -224,6 +224,7 @@ class WorkflowCallStep(StepBase):
 
     type: Literal["workflow"] = "workflow"  # type: ignore[misc]
     workflow: str
+    version: int | None = Field(None, ge=1, description="Pin the child workflow version; omitted, the current one.")
     with_: dict[str, Any] = Field(default_factory=dict, alias="with")
     for_each: str | None = Field(None, description="Expression producing a list; exposes `item` and `index`.")
     concurrency: int = Field(5, ge=1, le=1000)
@@ -461,6 +462,9 @@ class TriageSpec(Model):
 class TriggerSpec(Model):
     description: str | None = None
     workflow: str | None = Field(None, description="Workflow to start.")
+    workflow_version: int | None = Field(
+        None, ge=1, description="Pin to this workflow version; omitted, runs use the current version."
+    )
     campaign: str | None = Field(None, description="Campaign to (re)launch instead of a single run.")
     connection: str | None = Field(None, description="Connection whose events fire this trigger.")
     event: str = Field(description="Event type, e.g. 'issue_updated', 'pull_request', 'received', 'schedule'.")
@@ -479,6 +483,8 @@ class TriggerSpec(Model):
     def _check(self) -> TriggerSpec:
         if bool(self.workflow) == bool(self.campaign):
             raise ValueError("a trigger targets exactly one of 'workflow' or 'campaign'")
+        if self.workflow_version and not self.workflow:
+            raise ValueError("'workflow_version' only applies to workflow triggers; pin campaigns in the campaign")
         if self.event == "schedule":
             if not self.schedule:
                 raise ValueError("schedule triggers need a cron 'schedule'")
@@ -512,6 +518,9 @@ class CampaignPolicy(Model):
 class CampaignSpec(Model):
     description: str | None = None
     workflow: str
+    workflow_version: int | None = Field(
+        None, ge=1, description="Pin to this workflow version; omitted, each launch pins the version current at launch."
+    )
     targets: TargetSelector
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions over target).")
     policy: CampaignPolicy = Field(default_factory=CampaignPolicy)

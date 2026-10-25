@@ -56,10 +56,10 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `author` | string | optional |  |
 | `tags` | list of string | optional |  |
 | `categories` | list of string | optional |  |
-| `status` | one of `draft`, `published`, `promoted`, `deprecated` | optional |  Default: `draft`. |
-| `visibility` | one of `tenant`, `install`, `public` | optional |  Default: `tenant`. |
+| `status` | one of `draft`, `published`, `featured`, `deprecated` | optional | Only published and featured blueprints can be adopted; featuring needs blueprints:feature. Default: `draft`. |
+| `namespaces` | list of string | optional | Namespaces that may adopt it (empty: all). |
 | `params` | map | optional |  |
-| `resources` | list of map | **required** | Resource templates; {{ params.* }} and {{ prefix }} are substituted. |
+| `resources` | list of map | **required** | Resource templates (apiVersion/kind/metadata/spec). Expressions over `params`, `prefix` and `blueprint` are filled in at adoption; all other {{ }} expressions are left for run time. |
 
 ## Import
 

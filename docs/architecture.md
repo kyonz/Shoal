@@ -202,6 +202,34 @@ Plain Jinja delimiters are used (not `${{ }}`) so specs can be written inline
 in Terraform HCL, which interpolates `${…}` itself. In YAML, quote a value that
 starts with `{{`, e.g. `if: "{{ steps.fix.output.tests_passed }}"`. (Decided.)
 
+### 5.1 Versioning: uplift, adjust, roll back
+
+Every declarative resource (workflows, agents, skills, triggers, campaigns,
+evals, blueprints, …) is versioned by the server. Any change that alters its
+meaning creates a new integer `version`. Resubmitting the same meaning, even
+spelled differently, does not. (Decided.)
+
+- **Change notes.** `PUT …?message=` and `POST /v1/apply?message=` store a note
+  with the new version. `GET …/{name}/versions` lists history (who, when,
+  note) and `GET …/{name}/versions/{n}` returns one version.
+- **Diff.** `GET …/{name}/diff?from=N&to=M` (where `to` defaults to the
+  current version) returns `[{op, path, from, to}]` with JSON-pointer paths.
+  It diffs the spec as written, not server defaults, and matches steps by `id`,
+  so inserting a step reads as one `add`. The UI and `shoal diff` render it.
+- **Rollback.** `POST …/{name}/rollback {version, message?, dry_run?}` restores
+  an earlier version as a **new** version. History only moves forward, so a
+  rollback can itself be rolled back. `dry_run` returns the diff instead.
+- **Pinning.** Runs record the workflow version they ran. A trigger can pin
+  `workflow_version`, and a `workflow` step can pin `version`. A campaign pins
+  `workflow_version` at launch (the current version unless set), so a long
+  campaign never splits across versions mid-flight. Eval runs pin versions
+  through `variants`.
+- **Uplift with confidence.** The intended loop is: change the workflow (vN+1)
+  → run its eval with `baseline: version:N` → the gate passes → move pinned
+  triggers and campaigns to N+1. If production regresses, roll back.
+  Blueprint adoptions upgrade the same way (`PUT …/blueprint-adoptions/{id}
+  {version}`), with a dry-run diff first.
+
 ---
 
 ## 6. Durable runtime
@@ -576,14 +604,19 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   (sandbox profile, model policy). The UI renders an adopt wizard from these
   declarations, with pickers for the connections the namespace can see
   (its own and `shared`).
-- **Adopt.** A namespace owner (anyone with write access to the target
-  namespace) adopts a blueprint into their namespace: the templates are
-  rendered with the parameters and the resulting resources are applied in
-  that namespace, labelled `awm.dev/blueprint=<name>@<version>` and linked to
-  the adoption, so the workflow can be opened in the visual builder and
-  customised. Upgrading to a new version shows a diff and re-applies, keeping
-  local overrides where possible. Removing an adoption removes what it
-  created.
+- **Adopt.** A namespace owner (`blueprints:adopt` plus write access for each
+  kind the blueprint creates) adopts a blueprint into their namespace with
+  `POST /v1/namespaces/{ns}/blueprints/{name}/adopt {params, prefix, version?,
+  dry_run}`. Expressions over `params`, `prefix` and `blueprint` are rendered.
+  Run-time expressions (`inputs`, `steps`, `event`, …) are left as written.
+  The resulting resources are applied in that namespace and labelled with
+  `awm.dev/blueprint`, `awm.dev/blueprint-version` and `awm.dev/adoption`, so
+  the workflow can be opened in the visual builder and customised. `prefix`
+  lets one namespace adopt the same blueprint twice, and a name clash is a
+  409. Adoptions are listed under `…/blueprint-adoptions`. `PUT …/{id}
+  {version?, params?, dry_run}` upgrades or re-parameterises an adoption and
+  deletes resources the new version no longer has. `DELETE` removes the
+  adoption and what it created. (Built.)
 - **Publishing.** Blueprints are tenant-wide resources. Teams publish them
   from a namespace (`blueprints:publish`); they move through
   `draft → published → featured → deprecated`. Featuring is done by tenant

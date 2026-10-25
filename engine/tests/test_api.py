@@ -392,3 +392,33 @@ async def test_connection_actions_are_listed_per_connection(admin):
     names = {a["name"] for a in body["actions"]}
     catalogue = {a["name"] for a in (await admin.get("/v1/integrations/github")).json()["actions"]}
     assert names == catalogue and names
+
+
+async def test_versions_diff_and_rollback(admin):
+    url = "/v1/namespaces/default/workflows/hello"
+    assert (await admin.put(url, json=HELLO)).status_code == 201
+    v2 = json.loads(json.dumps(HELLO))
+    v2["spec"]["steps"].insert(0, {"id": "first", "type": "set", "values": {}})
+    v2["spec"]["steps"][1]["values"]["text"] = "Hi {{ inputs.name }}"
+    r = await admin.put(url, json=v2, params={"message": "Friendlier greeting"})
+    assert r.json()["metadata"]["version"] == 2
+
+    history = (await admin.get(f"{url}/versions")).json()
+    assert [(h["version"], h["message"]) for h in history] == [(2, "Friendlier greeting"), (1, None)]
+    assert (await admin.get(f"{url}/versions/1")).json()["document"]["spec"]["steps"][0]["id"] == "greet"
+
+    changes = (await admin.get(f"{url}/diff", params={"from": 1})).json()["changes"]
+    assert {"op": "add", "path": "/spec/steps/[id=first]", "to": {"id": "first", "type": "set", "values": {}}} in changes
+    assert {"op": "replace", "path": "/spec/steps/[id=greet]/values/text",
+            "from": "Hello {{ inputs.name }}", "to": "Hi {{ inputs.name }}"} in changes
+
+    preview = (await admin.post(f"{url}/rollback", json={"version": 1, "dry_run": True})).json()
+    assert preview["to_version"] == 1 and preview["changes"]
+    assert (await admin.get(url)).json()["metadata"]["version"] == 2
+
+    r = await admin.post(f"{url}/rollback", json={"version": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["metadata"]["version"] == 3 and r.json()["spec"] == HELLO["spec"]
+    assert (await admin.get(f"{url}/versions")).json()[0]["message"] == "Roll back to version 1"
+    assert (await admin.get(f"{url}/diff", params={"from": 1, "to": 3})).json()["changes"] == []
+    assert any(e["action"] == "workflow.rolled_back" for e in (await admin.get("/v1/audit")).json()["items"])

@@ -224,6 +224,7 @@ class Store:
         actor: str | None = None,
         namespace: str | None = None,
         source: dict[str, Any] | None = None,
+        message: str | None = None,
     ) -> tuple[t.Resource, str]:
         """Create or update. Returns (row, 'created' | 'updated' | 'unchanged').
 
@@ -288,6 +289,8 @@ class Store:
                     tenant_id=tenant_id,
                     version=row.version,
                     document=document,
+                    source=source,
+                    message=message,
                     created_by=actor,
                 )
             )
@@ -364,6 +367,11 @@ class Store:
     async def get_resource_version(
         self, tenant_id: str, kind: str, name: str, version: int, *, namespace: str | None = None
     ) -> dict[str, Any]:
+        return (await self.get_resource_version_row(tenant_id, kind, name, version, namespace=namespace)).document
+
+    async def get_resource_version_row(
+        self, tenant_id: str, kind: str, name: str, version: int, *, namespace: str | None = None
+    ) -> t.ResourceVersion:
         row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace)
         async with self.session() as s:
             q = select(t.ResourceVersion).where(
@@ -372,7 +380,7 @@ class Store:
             ver = (await s.execute(q)).scalar_one_or_none()
         if ver is None:
             raise NotFound(f"{kind} '{name}' version {version} not found")
-        return ver.document
+        return ver
 
     async def delete_resource(self, tenant_id: str, kind: str, name: str, *, namespace: str | None = None) -> None:
         row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace, fallback=False)

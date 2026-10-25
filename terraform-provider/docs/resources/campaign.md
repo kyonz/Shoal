@@ -60,6 +60,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 |---|---|---|---|
 | `description` | string | optional |  |
 | `workflow` | string | **required** |  |
+| `workflow_version` | number | optional | Pin to this workflow version; omitted, each launch pins the version current at launch. |
 | `targets` | object | **required** |  |
 | `inputs` | map | optional | Workflow inputs (expressions over target). |
 | `policy` | object | optional |  |

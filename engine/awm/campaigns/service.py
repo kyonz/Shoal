@@ -50,7 +50,11 @@ class CampaignService:
             spec, name = campaign, name or "adhoc"
         if extra_inputs:
             spec = spec.model_copy(update={"inputs": {**spec.inputs, **extra_inputs}})
-        await self.store.get_resource_row(tenant_id, "Workflow", spec.workflow)  # must exist
+        workflow = await self.store.get_resource_row(tenant_id, "Workflow", spec.workflow)  # must exist
+        if spec.workflow_version is None:  # every target runs the version current at launch
+            spec = spec.model_copy(update={"workflow_version": workflow.version})
+        else:
+            await self.store.get_resource_version(tenant_id, "Workflow", spec.workflow, spec.workflow_version)
 
         row = t.CampaignRow(
             id=new_id("cmp"),
@@ -222,6 +226,7 @@ class CampaignService:
                 row.tenant_id,
                 spec.workflow,
                 inputs,
+                version=spec.workflow_version,
                 started_by=f"campaign:{row.id}",
                 context=context,
                 campaign_id=row.id,

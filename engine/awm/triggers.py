@@ -167,6 +167,7 @@ class TriggerService:
                     tenant_id,
                     spec.workflow,
                     outcome["inputs"],
+                    version=spec.workflow_version,
                     started_by=f"trigger:{name}",
                     trigger_name=name,
                     context=context,
