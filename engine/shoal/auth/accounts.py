@@ -57,7 +57,7 @@ class Accounts:
             account = (await s.execute(q)).scalar_one_or_none()
             if account is None:
                 account = t.Account(id=new_id("acc"), oidc_issuer=issuer, oidc_subject=subject,
-                                    display_name=name or email or subject, active=True)
+                                    display_name=name or email or subject, active=True, revoked_sessions={})
                 s.add(account)
             if not account.active:
                 raise Forbidden("your account is deactivated on this instance")

@@ -4,13 +4,32 @@
  * picked by name (`*_secret`), so keys never appear in the Eval.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, DatabaseZap, ExternalLink, Plus, Trash2, Upload } from "lucide-react";
+import { ChevronDown, CloudUpload, DatabaseZap, ExternalLink, Plus, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ApiError, rawJson, type Resource } from "@/api/client";
 import { keys, type JsonSchema } from "@/api/hooks";
 import { humanize } from "@/components/forms/SchemaForm";
-import { Badge, Button, Card, CardHeader, Dialog, EmptyState, Field, Input, NativeSelect, Segmented, Switch } from "@/components/ui";
+import { useCan } from "@/lib/auth";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Dialog,
+  EmptyState,
+  Field,
+  Input,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  MenuTrigger,
+  NativeSelect,
+  Segmented,
+  Switch,
+} from "@/components/ui";
 import { SecretPicker } from "@/pages/connect/shared";
 import type { EditorContext } from "../ResourceEditorPage";
 
@@ -336,18 +355,88 @@ function ImportDialog({ open, onOpenChange, ns, evalName, sinks, initial, onImpo
 
 // --------------------------------------------------------------------------- export a finished run
 
+/** Where a configured destination sends results, e.g. "project triage" or a host. */
+function destinationHint(config: Record<string, unknown> | undefined): string | undefined {
+  const c = config ?? {};
+  const named = c.project ?? c.dataset ?? c.workspace;
+  if (typeof named === "string" && named) return named;
+  const url = c.host ?? c.api_url ?? c.base_url;
+  return typeof url === "string" && url ? url.replace(/^https?:\/\//, "") : undefined;
+}
+
+type ExportResult = { sink: string; url: string | null };
+
+function exportRun(runId: string, sink: string, config?: Record<string, unknown>) {
+  // Without config the server uses the eval's own settings for that sink, so no secrets travel from here.
+  return rawJson<ExportResult>(`/v1/eval-runs/${runId}/export`, { method: "POST", body: JSON.stringify(config ? { sink, config } : { sink }) });
+}
+
+/**
+ * Export a finished run. Destinations already set up on the eval are one click (anyone who can run the
+ * eval). Other settings name secrets, so only people who can edit the eval get them.
+ */
 export function ExportRunButton({ ns, runId, evalSpec }: { ns: string; runId: string; evalSpec?: Record<string, unknown> }) {
   const sinks = useEvalSinks();
+  const canWrite = useCan("evals:write", ns);
   const [open, setOpen] = useState(false);
   const list = sinks.data ?? [];
-  if (!list.length) return null;
-  const configured = (evalSpec?.sinks as SinkRef[] | undefined) ?? [];
+  const configured = ((evalSpec?.sinks as SinkRef[] | undefined) ?? []).filter((c) => list.some((s) => s.name === c.sink));
+  const quick = useMutation({
+    mutationFn: (sink: string) => exportRun(runId, sink),
+    onSuccess: (r) =>
+      toast.success(`Exported to ${sinkLabel(r.sink)}`, r.url ? { action: { label: "Open experiment", onClick: () => window.open(r.url!, "_blank", "noopener") } } : undefined),
+    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+  });
+  if (!list.length || (!configured.length && !canWrite)) return null;
+
+  const dialog = open && <ExportDialog ns={ns} runId={runId} sinks={list} configured={configured} onClose={() => setOpen(false)} />;
+  if (!configured.length)
+    return (
+      <>
+        <Button icon={<CloudUpload className="size-4" />} onClick={() => setOpen(true)}>
+          Export
+        </Button>
+        {dialog}
+      </>
+    );
+  if (configured.length === 1 && !canWrite)
+    return (
+      <Button icon={<CloudUpload className="size-4" />} loading={quick.isPending} onClick={() => quick.mutate(configured[0].sink)}>
+        Export to {sinkLabel(configured[0].sink)}
+      </Button>
+    );
   return (
     <>
-      <Button icon={<CloudUpload className="size-4" />} onClick={() => setOpen(true)}>
-        Export
-      </Button>
-      {open && <ExportDialog ns={ns} runId={runId} sinks={list} configured={configured} onClose={() => setOpen(false)} />}
+      <Menu>
+        <MenuTrigger asChild>
+          <Button icon={<CloudUpload className="size-4" />} loading={quick.isPending}>
+            Export <ChevronDown className="size-3.5 opacity-60" />
+          </Button>
+        </MenuTrigger>
+        <MenuContent className="min-w-64">
+          <MenuLabel>This eval's destinations</MenuLabel>
+          {configured.map((c, i) => {
+            const hint = destinationHint(c.config);
+            return (
+              <MenuItem key={`${c.sink}-${i}`} icon={<CloudUpload />} onSelect={() => quick.mutate(c.sink)}>
+                <span className="flex min-w-0 flex-col">
+                  <span>Export to {sinkLabel(c.sink)}</span>
+                  {hint && <span className="truncate text-[11px] text-faint">{hint}</span>}
+                </span>
+              </MenuItem>
+            );
+          })}
+          {canWrite && (
+            <>
+              <MenuSeparator />
+              <MenuItem icon={<SlidersHorizontal />} onSelect={() => setOpen(true)}>
+                Other settings…
+              </MenuItem>
+            </>
+          )}
+        </MenuContent>
+      </Menu>
+      {dialog}
     </>
   );
 }
@@ -357,9 +446,7 @@ function ExportDialog({ ns, runId, sinks, configured, onClose }: { ns: string; r
   const [sink, setSink] = useState(first?.sink ?? sinks[0].name);
   const [config, setConfig] = useState<Record<string, unknown>>(first?.config ?? starterConfig(sinks[0]));
   const current = sinks.find((s) => s.name === sink);
-  const run = useMutation({
-    mutationFn: () => rawJson<{ sink: string; url: string | null }>(`/v1/eval-runs/${runId}/export`, { method: "POST", body: JSON.stringify({ sink, config }) }),
-  });
+  const run = useMutation({ mutationFn: () => exportRun(runId, sink, config) });
   return (
     <Dialog
       open
@@ -399,7 +486,7 @@ function ExportDialog({ ns, runId, sinks, configured, onClose }: { ns: string; r
         />
       ) : (
         <div className="space-y-4">
-          {configured.length > 0 && <p className="text-xs text-muted">Prefilled from this eval's export settings.</p>}
+          {configured.length > 0 && <p className="text-xs text-muted">Starts from this eval's export settings. Changes apply to this export only and aren't saved to the eval.</p>}
           <Field label="Platform" className="w-64">
             <SinkSelect
               sinks={sinks}

@@ -804,7 +804,8 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **OIDC sign-in.** Generic OpenID Connect (Okta, Microsoft Entra ID, Google,
   Keycloak, Auth0, Dex): authorization-code flow with PKCE, ID tokens verified
   against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
-  Shoal session tokens afterwards. Claims map to the user record and optionally
+  Shoal session tokens afterwards; signing out revokes the session token
+  itself, not only the cookie. Claims map to the user record and optionally
   to role bindings (`groups` claim → group membership). Configured per tenant
   (several providers allowed) and optionally once for the whole instance, plus
   a break-glass admin token for first setup.
@@ -815,7 +816,9 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   immediately; group membership changes flow through to role bindings.
 - **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
-  than the owner holds), with expiry, last-used, and revocation. A key
+  than the owner holds), with expiry, last-used, and revocation.
+  `SHOAL_API_KEY_MAX_DAYS` caps how long a key may live (keys created without
+  an expiry get the cap). A key
   limited to namespaces keeps only the tenant-level `:read` permissions of its
   owner, never tenant administration.
 - **Nobody hands out more than they hold.** Granting a role, changing a custom
@@ -829,6 +832,9 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   are injected at the last moment and redacted from events and logs.
 - **Quotas**: per-tenant concurrency, sandbox minutes and token budgets.
 - **Audit log**: every mutating API call and every agent tool call is recorded.
+  Behind reverse proxies, `SHOAL_TRUSTED_PROXIES` (addresses or CIDRs) makes
+  the log record the client address from `X-Forwarded-For` instead of the
+  proxy's.
 
 ---
 
@@ -925,7 +931,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   data or secrets. Only an empty tenant can be federated; a revoked link can be
   replaced by linking the tenant again. Until then the hub refuses the tenant's
   calls with `503 federation_revoked` instead of serving it as an empty hosted
-  tenant, and the member's Federation page says the hub rejected its link. Operators can manage links as code with
+  tenant, and the member's Federation page says the hub rejected its link.
+  A member that leaves (`shoal federation leave`) tells the hub, which marks
+  the link `left` and refuses the same way, and removes the role bindings it
+  gave hub people and groups. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -984,7 +993,9 @@ the moment of use and redacted from run logs. The `env` provider reads
 readable by every tenant, so instances shared by several organisations set
 `SHOAL_SECRET_ENV_SHARED=false`. Variables that configure Shoal itself
 (`SHOAL_SECRET_KEY`, `SHOAL_SECRET_PROVIDERS`) are never handed out as
-secrets. Deleting a namespace deletes its secrets, role bindings and
+secrets, and names that would contain `__` are not looked up (so tenant
+`acme` cannot read tenant `acme--ops`'s variables); env secrets are
+tenant-wide, readable from every namespace. Deleting a namespace deletes its secrets, role bindings and
 personal credentials; deleting a user deletes their personal credentials.
 There are four scopes:
 

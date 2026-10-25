@@ -10,7 +10,7 @@ from fastapi import Depends, Request
 
 from shoal.auth.accounts import INSTANCE_ADMIN, INSTANCE_ROLES
 from shoal.auth.rbac import Principal
-from shoal.auth.sessions import SESSION_PREFIX, verify_session
+from shoal.auth.sessions import SESSION_PREFIX, is_revoked, verify_session
 from shoal.core.errors import Forbidden, InvalidRequest, NotFound, Unauthorized
 from shoal.core.requestctx import current_request
 from shoal.engine import Engine
@@ -97,6 +97,8 @@ async def _session_principal(engine: Engine, claims: dict[str, Any]) -> Principa
             raise Unauthorized("session account no longer exists") from exc
         if not account.active:
             raise Unauthorized("account is deactivated on this instance")
+        if is_revoked(account, claims):
+            raise Unauthorized("signed out; sign in again")
     instance_role = account.instance_role if account else None
     if user_id:
         try:
@@ -105,6 +107,8 @@ async def _session_principal(engine: Engine, claims: dict[str, Any]) -> Principa
             raise Unauthorized("session user no longer exists") from exc
         if not user.active:
             raise Unauthorized("account is deactivated")
+        if is_revoked(user, claims):
+            raise Unauthorized("signed out; sign in again")
         if account is not None and user.account_id not in (None, account.id):
             raise Unauthorized("session user belongs to another account")
         if instance_role is None:

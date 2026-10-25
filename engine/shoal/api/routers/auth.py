@@ -8,8 +8,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, Response
 
-from shoal.api.deps import SESSION_COOKIE, EngineDep
+from shoal.api.deps import SESSION_COOKIE, EngineDep, _bearer
 from shoal.api.schemas import LoginProvider
+from shoal.auth.sessions import SESSION_PREFIX, revoke_account_session, revoke_session, verify_session
 from shoal.core.errors import NotFound, ShoalError
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -79,8 +80,26 @@ async def callback(request: Request, engine: EngineDep, state: str | None = None
     return response
 
 
-@router.post("/logout", status_code=204, summary="Clear the session cookie")
-async def logout() -> Response:
+@router.post("/logout", status_code=204, summary="Sign out: end the session and clear its cookie")
+async def logout(request: Request, engine: EngineDep) -> Response:
+    token = _bearer(request)
+    if token and token.startswith(SESSION_PREFIX):
+        try:
+            claims = verify_session(engine.settings, token)
+            user = await engine.directory.get_user(claims["tid"], claims["sub"]) if claims.get("sub") else None
+            actor = None
+            if claims.get("acc"):  # an instance account's session, with or without a tenant user
+                account = await engine.accounts.get(claims["acc"])
+                await revoke_account_session(engine.accounts, account, claims)
+                actor = f"account:{account.email or account.id}"
+            elif user is not None:
+                await revoke_session(engine.directory, user, claims)
+            if user is not None:
+                actor = f"user:{user.username}"
+            if actor:
+                await engine.store.audit(claims.get("tid"), actor, "auth.logout", None, user_id=claims.get("sub"))
+        except (ShoalError, KeyError):
+            pass  # expired or unknown: nothing left to end
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

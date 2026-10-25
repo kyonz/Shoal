@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shoal.integrations.egress import DEFAULT_BLOCKED_NETWORKS
@@ -136,6 +137,23 @@ class Settings(BaseSettings):
     assistant_model: str = Field("claude-opus-5-5", description="Model the assistant runs on.")
     assistant_effort: str = Field("medium", description="Reasoning effort for the assistant's model calls.")
     assistant_max_turns: int = Field(16, ge=1, le=100, description="Model calls per user message before it stops.")
+
+    api_key_max_days: int = Field(
+        0, ge=0, description="Longest an API key may live: keys created without an expiry get this one, longer ones "
+        "are refused (0: no limit, keys may never expire).",
+    )
+    trusted_proxies: list[str] = Field(
+        default_factory=list,
+        description="Addresses or CIDRs of reverse proxies and load balancers whose X-Forwarded-For is believed, "
+        "so the audit log records the real client address, e.g. SHOAL_TRUSTED_PROXIES='[\"10.0.0.0/8\"]'.",
+    )
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _proxies_are_networks(cls, value: list[str]) -> list[str]:
+        for proxy in value:
+            ipaddress.ip_network(proxy, strict=False)  # raises on a typo at start-up, not on every request
+        return value
 
     audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
 

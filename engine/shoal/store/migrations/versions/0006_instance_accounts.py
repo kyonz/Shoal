@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 import shoal.store.tables
 
@@ -30,6 +31,7 @@ def upgrade() -> None:
     sa.Column('active', sa.Boolean(), nullable=False),
     sa.Column('created_at', shoal.store.tables.UTCDateTime(timezone=True), nullable=False),
     sa.Column('last_login_at', shoal.store.tables.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('revoked_sessions', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('oidc_issuer', 'oidc_subject')
     )

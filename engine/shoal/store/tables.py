@@ -89,6 +89,7 @@ class Account(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column()
+    revoked_sessions: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="session id -> expiry, for signed-out sessions")
 
 
 class User(Base):

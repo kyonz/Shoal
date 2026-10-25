@@ -105,6 +105,16 @@ async def test_people_switch_between_their_tenants(world):
     actions = [e["action"] for e in (await admin.get("/v1/instance/audit")).json()]
     assert {"tenant.created", "tenant.suspended", "tenant.resumed", "auth.login"} <= set(actions)
 
+    # Signing out ends the session itself, also one held by an account without a tenant user.
+    assert (await support.post("/v1/auth/logout")).status_code == 204
+    assert (await support.get("/v1/me")).status_code == 401
+    assert (await admin.get("/v1/me")).status_code == 200  # other sessions of the same account carry on
+    assert (await in_red.post("/v1/auth/logout")).status_code == 204
+    assert (await in_red.get("/v1/me")).status_code == 401
+    assert (await dana.get("/v1/me")).status_code == 200
+    logouts = await engine.store.list_audit(red.id, action="auth.logout")
+    assert sorted(e.actor for e in logouts) == ["account:root@corp.test", "user:dana@corp.test"]
+
 
 async def test_instance_roles_and_their_limits(world):
     engine, idp, client = world

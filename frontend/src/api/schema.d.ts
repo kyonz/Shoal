@@ -4671,7 +4671,7 @@ export interface components {
             tenant: string;
             /**
              * Status
-             * @description pending (waiting for enrollment), active or revoked.
+             * @description pending (waiting for enrollment), active, revoked (by the hub) or left (by the member).
              */
             status: string;
             /** Connected */
