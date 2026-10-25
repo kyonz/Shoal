@@ -27,6 +27,7 @@ from awm.campaigns.service import CampaignService
 from awm.config import Settings, get_settings
 from awm.core import clock
 from awm.decisions.service import DecisionService
+from awm.evals.service import EvalService
 from awm.identity import IdentityService
 from awm.integrations.manager import IntegrationManager
 from awm.llm.router import ModelRouter
@@ -73,6 +74,11 @@ def _builtin_steps(registry: Registry) -> None:
     registry.register("providers", "openai-compatible", OpenAICompatibleProvider, replace=False)
     registry.register("decision_providers", "llm", LLMDecisionProvider, replace=False)
     registry.register("decision_providers", "jev", JevProvider, replace=False)
+    from awm.evals.sinks.braintrust import BraintrustSink
+    from awm.evals.sinks.langfuse import LangfuseSink
+
+    registry.register("eval_sinks", "braintrust", BraintrustSink, replace=False)
+    registry.register("eval_sinks", "langfuse", LangfuseSink, replace=False)
 
 
 class Engine:
@@ -106,6 +112,7 @@ class Engine:
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)
         self.blueprints = BlueprintService(self)
+        self.evals = EvalService(self)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._stopping = asyncio.Event()
 
@@ -135,6 +142,7 @@ class Engine:
             await self.store.wake_by_keys(run.tenant_id, [f"run:{run.id}"])
             await self.store.wake_run(run.parent_run_id)
         await self.campaigns.on_run_finished(run)
+        await self.evals.on_run_finished(run)
 
     # ------------------------------------------------------------------ work loops
 
@@ -150,6 +158,7 @@ class Engine:
     async def scheduler_tick(self) -> None:
         await self.triggers.tick_schedules()
         await self.campaigns.tick_due()
+        await self.evals.tick_due()
         await self._prune_audit()
 
     async def _prune_audit(self) -> None:

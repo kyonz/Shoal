@@ -613,25 +613,129 @@ class EvalCase(Model):
     name: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     expect: dict[str, Any] = Field(default_factory=dict, description="Available to graders as `expect`.")
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Carried to results and eval sinks.")
+
+
+class EvalDatasetRef(Model):
+    """Cases imported from an eval platform (``awm.eval_sinks`` plugin) each time the eval runs."""
+
+    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    name: str = Field(description="Dataset name on the platform.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
+    limit: int | None = Field(None, ge=1)
+
+
+class EvalRunQuery(Model):
+    """Grade past runs instead of starting new ones (online evals over production runs)."""
+
+    workflow: str | None = Field(None, description="Defaults to the eval's workflow.")
+    status: list[Literal["succeeded", "failed"]] = Field(default_factory=lambda: ["succeeded"])
+    since: Duration | None = Field(None, description="Only runs created within this window.")
+    labels: dict[str, str] = Field(default_factory=dict)
+    version: int | None = Field(None, description="Only runs of this workflow version.")
+    limit: int = Field(50, ge=1, le=5000)
 
 
 class Grader(Model):
+    """Scores one case from 0 to 1.
+
+    * ``expression``: ``check`` is evaluated with ``outputs``, ``expect``, ``inputs``, ``run`` and
+      ``case``; true/false score 1/0 and a number is used as the score (clamped to 0..1).
+    * ``json_schema``: ``subject`` must validate against ``schema``.
+    * ``llm_judge``: a pinned judge model places ``subject`` on the ``levels`` rubric.
+    * ``decision``: a decision model (Jev or the LLM fallback) answers a ``score`` or ``boolean`` question.
+    """
+
     name: str
-    type: Literal["expression", "decision"] = "expression"
-    check: str | None = Field(None, description="expression: evaluated with outputs, expect, run.")
+    type: Literal["expression", "json_schema", "llm_judge", "decision"] = "expression"
+    check: str | None = Field(None, description="expression: evaluated with outputs, expect, inputs, run, case.")
+    schema_: dict[str, Any] | None = Field(None, alias="schema", description="json_schema: the JSON schema.")
     question: DecisionQuestion | None = Field(None, description="decision: a score or boolean question.")
     state: Any = Field("{{ outputs }}", description="decision: state to send (expressions allowed).")
+    subject: Any = Field("{{ outputs }}", description="json_schema / llm_judge: what is graded (expressions allowed).")
+    rubric: str | None = Field(None, description="llm_judge: grading instructions.")
+    levels: list[str] = Field(
+        default_factory=lambda: ["fail", "pass"], description="llm_judge: ordered rubric levels, worst first."
+    )
+    model: str = Field("claude-sonnet-5-5", description="llm_judge: pinned judge model.")
+    gateway: str = Field("anthropic", description="llm_judge: Gateway resource or provider plugin.")
+    provider: str | None = Field(None, description="decision: provider plugin; defaults to the eval's.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Provider or gateway settings.")
     weight: float = Field(1.0, gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> Grader:
+        if self.type == "expression" and not self.check:
+            raise ValueError(f"grader '{self.name}': expression graders need 'check'")
+        if self.type == "json_schema" and not self.schema_:
+            raise ValueError(f"grader '{self.name}': json_schema graders need 'schema'")
+        if self.type == "llm_judge" and (not self.rubric or len(self.levels) < 2):
+            raise ValueError(f"grader '{self.name}': llm_judge graders need a 'rubric' and at least 2 levels")
+        if self.type == "decision" and (self.question is None or self.question.type == "choice"):
+            raise ValueError(f"grader '{self.name}': decision graders need a score or boolean 'question'")
+        return self
+
+
+class EvalSinkRef(Model):
+    """Export each finished eval run (traces and scores) to an eval platform."""
+
+    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
+
+
+class EvalGate(Model):
+    """Pass/fail rule for an eval run, used to gate promotion of a new version."""
+
+    fail_under: float | None = Field(None, ge=0, le=1, description="Minimum mean score.")
+    max_regression: float | None = Field(
+        None, ge=0, le=1, description="Maximum drop in mean score against the baseline run."
+    )
+    baseline: str | None = Field(
+        None, description="'previous' (last completed run), 'version:N' (latest run at workflow version N) or a run id."
+    )
+
+
+class EvalVariant(Model):
+    """One arm of a comparison: a workflow version plus input overrides (e.g. a different agent or model policy)."""
+
+    name: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,100}$")
+    version: int | None = Field(None, ge=1, description="Workflow version; defaults to the current one.")
+    inputs: dict[str, Any] = Field(default_factory=dict, description="Merged over every case's inputs.")
 
 
 class EvalSpec(Model):
     description: str | None = None
     workflow: str
-    cases: list[EvalCase] = Field(min_length=1)
+    variants: list[EvalVariant] = Field(
+        default_factory=list, description="Arms to compare; defaults to one 'default' arm at the current version."
+    )
+    cases: list[EvalCase] = Field(default_factory=list)
+    dataset: EvalDatasetRef | None = None
+    from_runs: EvalRunQuery | None = None
     graders: list[Grader] = Field(min_length=1)
-    threshold: float = Field(0.8, ge=0, le=1)
+    threshold: float = Field(0.8, ge=0, le=1, description="A case passes when its weighted score is at least this.")
     concurrency: int = Field(5, ge=1)
     decision_provider: str | None = None
+    gate: EvalGate = Field(default_factory=EvalGate)
+    sinks: list[EvalSinkRef] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self) -> EvalSpec:
+        if not (self.cases or self.dataset or self.from_runs):
+            raise ValueError("an eval needs 'cases', a 'dataset' or 'from_runs'")
+        if self.from_runs and (self.cases or self.dataset):
+            raise ValueError("'from_runs' grades past runs and cannot be combined with 'cases' or 'dataset'")
+        names = [c.name for c in self.cases]
+        if len(names) != len(set(names)):
+            raise ValueError("case names must be unique")
+        graders = [g.name for g in self.graders]
+        if len(graders) != len(set(graders)):
+            raise ValueError("grader names must be unique")
+        variants = [v.name for v in self.variants]
+        if len(variants) != len(set(variants)):
+            raise ValueError("variant names must be unique")
+        return self
 
 
 # --------------------------------------------------------------------------- envelopes

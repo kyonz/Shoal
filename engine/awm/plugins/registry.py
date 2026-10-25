@@ -3,7 +3,7 @@
 Plugins are discovered from Python entry points (``awm.sandboxes``,
 ``awm.integrations``, ``awm.providers``, ``awm.agent_runtimes``,
 ``awm.credentials``, ``awm.secrets``, ``awm.steps``,
-``awm.decision_providers``) and can also be
+``awm.decision_providers``, ``awm.eval_sinks``) and can also be
 registered programmatically, which is how tests inject fakes.
 """
 
@@ -27,6 +27,7 @@ GROUPS = (
     "secrets",
     "steps",
     "decision_providers",
+    "eval_sinks",
 )
 
 

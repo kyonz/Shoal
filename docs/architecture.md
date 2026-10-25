@@ -355,6 +355,18 @@ quality is measured, not assumed.
 - **Online evals** sample production runs (e.g. "was the Jira fix PR
   merged within 7 days?", judge-scored PR quality) and trend them on the
   dashboard.
+- **Versions and comparison.** Every eval result records the workflow
+  version it ran (and the versions of the agents and sub-workflows it used),
+  so scores are kept per resource version: `GET …/evals/{name}/scores`
+  trends them, an eval run can pin `variants` (version × input overrides) to
+  A/B versions in one run, and `baseline` (`previous`, `version:N` or a run
+  id) adds a case-by-case diff (regressions, improvements, grader deltas).
+- **Eval platforms.** `awm.eval_sinks` plugins connect Braintrust and
+  Langfuse (and any other platform): finished eval runs export as
+  experiments / sessions (one trace per case with step spans, plus every
+  grader score), production runs export as traces, and datasets import as
+  cases (live via `spec.dataset`, or into a new Eval version via
+  `POST …/evals/{name}/import`). A failed export never fails the eval.
 - **Inline quality gates.** A `grade` step type scores an upstream output with
   a rubric inside a workflow, so a run can retry, escalate to a human or stop
   when quality is below a threshold.
@@ -683,7 +695,8 @@ credential performed it*, and lets policy decide what the run may do.
 - Resources: `tenants`, `api-keys`, `agents`, `skills`, `workflows`
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),
-  `sandbox-profiles`, `hooks/{trigger_id}`.
+  `sandbox-profiles`, `evals` (+runs, scores, import), `eval-runs`
+  (+results, compare, export, cancel), `eval-sinks`, `hooks/{trigger_id}`.
 - Live updates: `GET /v1/runs/{id}/events` (SSE).
 - Outbound: tenant-configurable webhooks for run/campaign lifecycle events.
 
@@ -870,7 +883,7 @@ modal = "awm_modal:ModalBackend"
 ```
 
 Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
-`awm.agent_runtimes`, `awm.gateways`, `awm.decision_providers`,
+`awm.agent_runtimes`, `awm.gateways`, `awm.decision_providers`, `awm.eval_sinks`,
 `awm.credentials`, `awm.secrets`, `awm.steps`, `awm.orchestrators`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.

@@ -435,3 +435,72 @@ class AuditEntry(Base):
     user_agent: Mapped[str | None] = mapped_column(String(300))
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+
+
+class EvalRun(Base):
+    """One execution of an Eval over one or more variants (workflow version + input overrides).
+
+    Scores are recorded per resource version so versions can be compared and gated.
+    """
+
+    __tablename__ = "eval_runs"
+    __table_args__ = (
+        Index("ix_eval_runs_eval", "tenant_id", "namespace", "eval_name", "created_at"),
+        Index("ix_eval_runs_status", "status", "next_tick_at"),
+    )
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
+    eval_name: Mapped[str] = mapped_column(String(63))
+    eval_version: Mapped[int] = mapped_column(Integer)
+    spec: Mapped[dict[str, Any]] = mapped_column(doc="Snapshot of the eval spec for this run.")
+    workflow_name: Mapped[str] = mapped_column(String(63))
+    workflow_version: Mapped[int] = mapped_column(Integer, doc="Workflow version of the first variant.")
+    variants: Mapped[list[Any]] = mapped_column(
+        default=list, doc="[{name, workflow_version, inputs, versions: {'Kind/name': version}}]."
+    )
+    mode: Mapped[str] = mapped_column(String(20), default="cases")  # cases | runs
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    summary: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    gate: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="Gate settings and, once finished, its verdict.")
+    baseline_id: Mapped[str | None] = mapped_column(String(40))
+    exports: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="Sink -> export status.")
+    error: Mapped[dict[str, Any] | None] = mapped_column()
+    labels: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    started_by: Mapped[str | None] = mapped_column(String(200))
+    initiator: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column()
+    next_tick_at: Mapped[datetime | None] = mapped_column()
+    lease_expires_at: Mapped[datetime | None] = mapped_column()
+
+
+class EvalResult(Base):
+    """One case of one variant of an eval run: the workflow run it produced and every grader's score."""
+
+    __tablename__ = "eval_results"
+    __table_args__ = (
+        UniqueConstraint("eval_run_id", "variant", "case_name"),
+        Index("ix_eval_results_status", "eval_run_id", "status"),
+        Index("ix_eval_results_version", "tenant_id", "workflow_name", "workflow_version"),
+    )
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    eval_run_id: Mapped[str] = mapped_column(ForeignKey("eval_runs.id", ondelete="CASCADE"))
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    variant: Mapped[str] = mapped_column(String(100), default="default")
+    workflow_name: Mapped[str] = mapped_column(String(63))
+    workflow_version: Mapped[int] = mapped_column(Integer)
+    case_name: Mapped[str] = mapped_column(String(300))
+    position: Mapped[int] = mapped_column(Integer, default=0, doc="Order of the case in the dataset.")
+    case: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    run_id: Mapped[str | None] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | running | graded | error | cancelled
+    outputs: Mapped[dict[str, Any] | None] = mapped_column()
+    scores: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="Grader -> {score, passed, detail}.")
+    score: Mapped[float | None] = mapped_column(Float)
+    passed: Mapped[bool | None] = mapped_column(Boolean)
+    error: Mapped[dict[str, Any] | None] = mapped_column()
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column()
