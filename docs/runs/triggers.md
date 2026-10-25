@@ -54,6 +54,10 @@ Each integration's events are listed on its page under **Integrations**:
 | [Slack](../slack/events-and-commands.md) | `app_mention`, `message`, `reaction_added`, `slash_command`, shortcuts and more |
 | [Generic webhook](#generic-webhooks) | `received`, or the type named by a header or a body field |
 
+To fire only for a known set of repositories or projects, keep the set in a [target list](campaigns.md#target-lists)
+and check it in the filter: `{{ event.repository.full_name in lists['core-repos'] }}`. `filter`, `inputs` and
+`dedupe_key` all see `lists`.
+
 ## Schedules
 
 ```yaml

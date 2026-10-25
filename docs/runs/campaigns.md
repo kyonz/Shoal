@@ -36,8 +36,10 @@ spec:
 
 ### Targets
 
-Targets come from one of two places:
+Targets come from one of three places:
 
+- **A [target list](#target-lists)**: `targets: {list: core-repos}`, a named set shared by several campaigns and
+  triggers.
 - **An integration query**: `connection` + `resource` + `filter`. Each integration lists its resources and their
   filters on its page under **Integrations**. Built in: GitHub `repository` (by org or owner, permission, archived,
   fork, visibility, topic, language, name glob) and `pull_request`, and Jira `issue` (by JQL). Results are paged through
@@ -48,10 +50,47 @@ Targets are **snapshotted at launch**, so a campaign's target set doesn't change
 repositories. In each run, `{{ target.… }}` is the target's data plus its `key`, and `{{ campaign.id }}` and
 `{{ campaign.name }}` identify the launch. Runs are labelled `campaign=<name>` and `target=<key>`.
 
+## Target lists
+
+A **target list** names a set of targets once, such as the repositories a team owns, so several campaigns and triggers
+can share it. Lists are namespaced resources under **Operate › Target lists**.
+
+```yaml
+apiVersion: shoal.dev/v1
+kind: TargetList
+metadata: {name: core-repos, description: The services the platform team owns.}
+spec:
+  connection: github-acme          # optional: look the items up through a query
+  resource: repository
+  filter: {org: acme, archived: false}
+  key: "{{ target.full_name }}"
+  items:                           # optional: exactly these targets
+    - {full_name: acme/api}
+    - {full_name: acme/web}
+```
+
+| You give | The list is |
+| --- | --- |
+| `items` only | Exactly those targets, as written. |
+| `connection` + `resource` (+ `filter`) only | A saved query, run each time the list is used. |
+| Both | Exactly the listed targets, each looked up through the query so it carries the integration's details (default branch, language, ...). A listed target the query doesn't return (renamed, archived, no access) is reported as missing. |
+
+![A target list: four repositories, looked up through the github-acme connection](../assets/screenshots/runs/target-list.png)
+
+- **In a campaign:** `targets: {list: core-repos}`, or choose **A target list** in the editor. The list is resolved at
+  launch, and listed targets that are missing become `skipped` targets with a reason, so they show on the dashboard.
+- **In a trigger:** `filter`, `inputs` and `dedupe_key` see a list's keys as `lists['core-repos']` (or
+  `lists.core_repos`), for example `{{ event.repository.full_name in lists['core-repos'] }}`. Triggers cache a resolved
+  list for 60 seconds, and naming a list that doesn't exist is a delivery error.
+- **Check it:** `GET /v1/namespaces/{ns}/target-lists/{name}/resolve` shows what a list resolves to now, with any
+  missing targets, and `POST /v1/namespaces/{ns}/target-lists/preview` does the same for an unsaved spec.
+
+![A campaign over the core-repos target list](../assets/screenshots/runs/campaign-list-mode.png)
+
 ## The campaign editor
 
-**Campaigns › New campaign** has the same fields as the YAML: the workflow, the targets (query an integration, with a
-form for that resource's filter, or a fixed JSON list), the inputs per target and the policy. **Preview targets** runs
+**Campaigns › New campaign** has the same fields as the YAML: the workflow, the targets (a target list, a query of an integration
+with a form for that resource's filter, or a fixed JSON list), the inputs per target and the policy. **Preview targets** runs
 the query now and shows the first ten matches, so you can check the filter before launching.
 
 ![The campaign editor querying GitHub repositories in the acme org](../assets/screenshots/runs/campaign-editor.png)

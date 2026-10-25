@@ -23,7 +23,7 @@ under **Docs**.
   - [Triggers](runs/triggers.md): start runs from webhooks, events and schedules.
   - [Approvals](runs/approvals.md): pause for a person's decision.
   - [Signals and waiting](runs/signals.md): send data into a waiting run, or wait for an event.
-  - [Campaigns](runs/campaigns.md): run one workflow over many targets.
+  - [Campaigns](runs/campaigns.md): run one workflow over many targets, and [target lists](runs/campaigns.md#target-lists) to share them.
 - [The assistant](assistant/README.md): set things up and explain failures from any page.
 
 ## Connect
@@ -52,6 +52,7 @@ under **Docs**.
 
 - [Deploying](../deploy/README.md): the container image, docker compose and the Helm chart.
 - [Operating Shoal](operations/README.md): workers, leases, scaling, metrics and settings.
+- [Running at high throughput](scaling.md): connection pools, agent worker pools, quotas and overload behaviour.
 - [Running on Temporal](temporal.md): use a Temporal cluster you already run.
 - [The CLI](cli.md) and the [Terraform provider](../terraform-provider/docs/index.md).
 - [Plugins](plugins.md): add model providers, sandbox backends, secret backends and more.

@@ -20,8 +20,9 @@ Helm chart runs two API replicas and two workers by default, each with a PodDisr
 There is no queue to run besides the database. Each worker loops:
 
 1. **Claim** runs that are due (new, woken by an event or signal, or whose wait or retry timer has passed), up to its
-   free capacity (`SHOAL_WORKER_CONCURRENCY`, default 16). Claiming takes a **lease** on the run
-   (`SHOAL_LEASE_SECONDS`, default 60), so no other worker touches it.
+   free capacity (`SHOAL_WORKER_CONCURRENCY`, default 16), taking turns across tenants so one tenant's backlog doesn't
+   delay another's. Claiming takes a **lease** on the run (`SHOAL_LEASE_SECONDS`, default 60), so no other worker
+   touches it.
 2. **Advance** each run: run its ready steps, checkpoint after each one, and renew the lease every third of its length
    while it works.
 3. When a run reaches a wait (an approval, a signal, `max_wait: 7d`), **release** it. A waiting run holds no worker and
@@ -43,14 +44,24 @@ A lower lease means faster recovery but more database writes. The default suits 
 
 ## Scaling
 
-- **More runs at once:** add workers, or raise `SHOAL_WORKER_CONCURRENCY` on each. Most of a run's time is spent waiting
-  on models, sandboxes and other services, so a worker can carry many runs; scale on CPU, and watch the database's
-  connection count.
+- **More runs at once:** add workers, or raise `SHOAL_WORKER_CONCURRENCY` on each. Most of an agent run's time is spent
+  waiting on models, sandboxes and other services, so a worker can carry many of them; scale on CPU, and watch the
+  database's connection count.
+- **Agent lanes:** runs with an `agent`, `decide` or `grade` step go to the agent lane, the rest to the standard lane.
+  Run a separate high-concurrency agent pool (`SHOAL_WORKER_LANES='["agent"]'`, or `worker.agentPool.enabled` in
+  Helm) so short workflows never queue behind long agent runs. See
+  [Workers and agent lanes](../scaling.md#workers-and-agent-lanes).
 - **More API traffic:** add API replicas, or `shoal serve --processes N --no-worker`.
 - **Long-running work** costs nothing while it waits. A run that waits a week for a review holds no worker; its sandbox
   can be suspended with `suspend_on_wait` where the backend supports it.
+- **Overload and quotas:** a busy API process answers `503` with `Retry-After` rather than queueing everyone, and a
+  tenant over its request rate or pending-run quota gets `429`. The system admin can set quotas per tenant. See
+  [How Shoal behaves under overload](../scaling.md#how-shoal-behaves-under-overload) and
+  [Tenant quotas](../scaling.md#tenant-quotas).
 - **Keeping bursts in check:** a trigger's `rate_limit` and `overlap`, and a campaign's `concurrency`, stop one busy
   workflow from filling every worker.
+- **Database:** connection pools, PgBouncer and read replicas are covered in
+  [Running Shoal at high throughput](../scaling.md#database-connections).
 - **Temporal:** if you already run Temporal, Shoal can hand it the scheduling of runs instead of the database. Workers
   then run as Temporal activity workers. See [Running Shoal on Temporal](../temporal.md).
 
@@ -79,6 +90,7 @@ Every setting is an environment variable with the `SHOAL_` prefix (or a line in 
 | `SHOAL_ADMIN_TOKEN` | | The break-glass admin token, for first setup. |
 | `SHOAL_INSTANCE_OIDC`, `SHOAL_INSTANCE_ADMINS` | | One sign-in for everyone, and who becomes an instance admin. See [Tenants](../administration/tenants.md#signing-in). |
 | `SHOAL_WORKER_CONCURRENCY` | `16` | Runs one worker advances at once. |
+| `SHOAL_WORKER_LANES` | both | Which runs a worker takes: `standard`, `agent` or both. |
 | `SHOAL_LEASE_SECONDS` | `60` | How long a worker's claim on a run lasts without renewal. |
 | `SHOAL_POLL_INTERVAL_SECONDS` | `1` | How often an idle worker looks for work. |
 | `SHOAL_ORCHESTRATOR` | `builtin` | `temporal` to schedule runs on Temporal, with `SHOAL_TEMPORAL_*`. |
@@ -92,7 +104,9 @@ Every setting is an environment variable with the `SHOAL_` prefix (or a line in 
 | `SHOAL_ASSISTANT_*` | | The [assistant](../assistant/README.md): on or off, gateway, model, effort. |
 | `SHOAL_DEFAULT_DECISION_PROVIDER` | `llm` | The provider for [decisions](../agents/decisions.md). |
 
-The full list, with descriptions, is in `engine/shoal/config.py`.
+Database pools, overload limits, quotas, model retries and webhook processing are in the
+[high-throughput settings reference](../scaling.md#settings-reference). The full list, with descriptions, is in
+`engine/shoal/config.py`.
 
 ## Upgrades and backups
 

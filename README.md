@@ -270,7 +270,7 @@ class, an entry point and a contract test), so new ones install without engine c
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes ([guide](docs/connections/README.md#personal-credentials)).
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking ([guide](docs/runs/campaigns.md)).
-- **Target lists** name a set of targets once (the repos a team owns), so campaigns can run over just those and trigger filters can check against them.
+- **Target lists** name a set of targets once (the repos a team owns), so campaigns can run over just those and trigger filters can check against them ([guide](docs/runs/campaigns.md#target-lists)).
 - **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue ([guide](docs/blueprints/README.md)). Every tenant starts with [Shoal's own](docs/blueprints/bundled.md) for the common scenarios.
 
 ### Quality
@@ -312,7 +312,7 @@ Every guide is also built into the web UI under **Docs**. Start at the [document
 | Read | For |
 |---|---|
 | [Workflows](docs/workflows/README.md) | Writing workflows: [steps](docs/workflows/steps.md), [expressions](docs/workflows/expressions.md), [script steps](docs/workflows/script-steps.md), the [visual builder](docs/workflows/builder.md) and [versions](docs/workflows/versions.md) |
-| [Runs](docs/runs/README.md) | Following runs, [triggers](docs/runs/triggers.md), [approvals](docs/runs/approvals.md), [signals and waits](docs/runs/signals.md) and [campaigns](docs/runs/campaigns.md) |
+| [Runs](docs/runs/README.md) | Following runs, [triggers](docs/runs/triggers.md), [approvals](docs/runs/approvals.md), [signals and waits](docs/runs/signals.md) and [campaigns and target lists](docs/runs/campaigns.md) |
 | [Agents](docs/agents/README.md) | Agents, tools and runtimes, [gateways and model policies](docs/agents/gateways.md), [decisions](docs/agents/decisions.md) and [sandboxes](docs/agents/sandboxes.md) |
 | [GitHub](docs/github/README.md) | Setting up GitHub, PR triggers, actions, and [attribution and merge governance](docs/github/attribution.md) |
 | [Jira](docs/jira/README.md) | Setting up Jira, issue triggers, actions and the bugfix journey |
