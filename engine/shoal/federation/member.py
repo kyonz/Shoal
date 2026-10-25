@@ -20,6 +20,7 @@ import httpx
 from sqlalchemy import select
 
 from shoal import __version__
+from shoal.auth.directory import HUB_SUBJECT_KINDS
 from shoal.auth.rbac import Principal
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest, NotFound, Unauthorized
@@ -126,15 +127,32 @@ class FederationMember:
                     setattr(row, key, value)
         return row  # the hub hears about the new ceiling on the next poll
 
-    async def leave(self, tenant_id: str) -> None:
+    async def leave(self, tenant_id: str) -> dict[str, Any]:
+        """Stop the connector, tell the hub (best effort), and remove the roles hub people held here."""
         row = await self.membership(tenant_id)
         if row is None:
             raise NotFound("this tenant is not a federation member")
         task = self._tasks.pop(row.id, None)
         if task:
             task.cancel()
+        self.connector_errors.pop(row.id, None)
+        hub_notified = False
+        try:
+            secret = self.engine.secrets.cipher.decrypt(row.secret_ciphertext)
+            async with self._http(base_url=row.hub_url, timeout=10) as client:
+                r = await client.post("/v1/federation/leave", headers={"Authorization": f"Bearer {p.credential(row.link_id, secret)}"})
+            hub_notified = r.status_code < 300
+        except Exception as exc:  # the hub may be gone for good; leaving must still work
+            log.warning("federation: could not tell the hub this member left: %s", exc)
+        directory = self.engine.directory
+        removed = 0
+        for binding in await directory.list_bindings(tenant_id):
+            if binding.subject_kind in HUB_SUBJECT_KINDS:
+                await directory.unbind(tenant_id, binding.id)
+                removed += 1
         async with self.store.session() as s:
             await s.delete(await s.get(t.FederationMembership, row.id))
+        return {"hub_notified": hub_notified, "bindings_removed": removed}
 
     # ------------------------------------------------------------------ inbound authentication
 

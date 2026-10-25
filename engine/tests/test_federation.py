@@ -337,3 +337,44 @@ async def test_federated_tenant_cannot_join_another_hub(world):
     token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
     r = await hub_api.put("/v1/federation/membership", json={"hub_url": "http://other.test", "token": token})
     assert r.status_code == 409, r.text
+
+
+async def test_leaving_tells_the_hub_and_removes_hub_roles(world):
+    hub, member, hub_app, member_app, client = world
+    hub_api = client(hub_app, await _tenant(hub_app, client, "acme"))
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    await member_api.put("/v1/federation/membership", json={
+        "hub_url": "http://hub.test", "token": token, "max_mode": "read_write",
+        "grants": [{"role": "viewer", "subject_kind": "hub_user", "subject_id": "sa:admin"},
+                   {"role": "viewer", "subject_kind": "hub_group", "subject_id": "platform"}],
+    })
+    local = len(await member.directory.list_bindings((await member.store.get_tenant_by_slug("acme")).id))
+
+    assert (await member_api.delete("/v1/federation/membership")).status_code == 204
+    bindings = (await member_api.get("/v1/role-bindings")).json()
+    assert not [b for b in bindings if b["subject_kind"] in ("hub_user", "hub_group")]
+    assert len(bindings) == local - 2
+    entry = (await member_api.get("/v1/audit", params={"action": "federation.left"})).json()["items"][0]
+    assert entry["data"]["hub_notified"] is True and entry["data"]["bindings_removed"] == 2
+
+    assert (await client(hub_app).get("/v1/federation/links/acme")).json()["status"] == "left"
+    r = await hub_api.get("/v1/namespaces/default/workflows")
+    assert r.status_code == 503 and r.json()["code"] == "federation_revoked" and "left" in r.json()["detail"]
+    assert (await client(hub_app).post("/v1/federation/links/acme/enrollment")).status_code == 409
+    assert (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).status_code == 201
+
+
+async def test_leaving_works_when_the_hub_is_gone(world):
+    hub, member, hub_app, member_app, client = world
+    await _tenant(hub_app, client, "acme")
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    await member_api.put("/v1/federation/membership", json={"hub_url": "http://hub.test", "token": token})
+
+    def gone(request):
+        raise httpx.ConnectError("hub unreachable")
+
+    member.http_transport = httpx.MockTransport(gone)
+    assert (await member_api.delete("/v1/federation/membership")).status_code == 204
+    assert (await member_api.get("/v1/federation/membership")).status_code == 404
