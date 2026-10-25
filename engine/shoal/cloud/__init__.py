@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from shoal.core.errors import NotFound, StepError
 from shoal.core.models import CloudIdentitySpec
@@ -76,6 +77,11 @@ class IssueRequest:
         """Stable, tenant-unique name of the identity: the OIDC ``sub`` and the AWS ExternalId."""
         return f"tenant:{self.tenant_id}:namespace:{self.namespace}:cloud-identity:{self.name}"
 
+    @property
+    def namespace_subjects(self) -> str:
+        """Pattern matching every identity in this identity's namespace (trust bound to the namespace)."""
+        return f"tenant:{self.tenant_id}:namespace:{self.namespace}:cloud-identity:*"
+
 
 @dataclass
 class CloudSession:
@@ -90,7 +96,23 @@ class CredentialProvider(Protocol):
 
     async def issue(self, request: IssueRequest) -> CloudSession: ...
 
-    def trust_policy(self, request: IssueRequest) -> dict[str, Any]: ...
+    def trust_policy(self, request: IssueRequest, scope: TrustScope = "identity") -> dict[str, Any]:
+        """The trust the role needs; ``scope`` binds it to this identity or to every identity in its namespace."""
+        ...
+
+
+TrustScope = Literal["identity", "namespace"]
+
+# Hints for the errors people hit while setting a role up.
+TEST_HINTS = {
+    "InvalidIdentityToken": "AWS could not verify Shoal's token: create the IAM OIDC provider for the issuer, and make "
+    "sure AWS can fetch <issuer>/.well-known/openid-configuration and jwks.json over public HTTPS.",
+    "AccessDenied": "The role's trust policy does not match: compare it with the generated one (principal, audience, "
+    "subject or ExternalId) and check it allows sts:TagSession and sts:SetSourceIdentity.",
+    "ValidationError": "AWS rejected the request: check the role ARN, and that the duration is within the role's "
+    "maximum session duration.",
+    "RegionDisabledException": "STS is not enabled in this region for the account; activate it or pick another region.",
+}
 
 
 def _matches(patterns: list[str], candidates: list[str]) -> bool:
@@ -134,13 +156,38 @@ class CloudIdentities:
     def provider(self, name: str) -> CredentialProvider:
         return self.engine.plugin("credentials", name)
 
-    async def trust_policy(self, tenant_id: str, namespace: str, name: str) -> dict[str, Any]:
+    async def trust_policy(self, tenant_id: str, namespace: str, name: str, *, scope: TrustScope = "identity",
+                           spec: CloudIdentitySpec | None = None) -> dict[str, Any]:
+        """The trust policy and setup steps for a saved identity, or for ``spec`` (a draft) when given."""
+        if spec is None:
+            row = await self.engine.store.get_resource_row(tenant_id, "CloudIdentity", name, namespace=namespace)
+            spec = CloudIdentitySpec.model_validate(row.document["spec"])
+            namespace = row.namespace
+        request = IssueRequest(tenant_id, namespace, name, spec)
+        ns = namespace
+        return {"identity": f"{ns}/{name}", "provider": spec.provider, "trust": spec.trust,
+                "subject": request.subject, "scope": scope,
+                **self.provider(spec.provider).trust_policy(request, scope)}
+
+    async def test(self, tenant_id: str, namespace: str, name: str, *, actor: str | None) -> dict[str, Any]:
+        """Assume the role once, as a run would, and report what happened; the credentials are discarded."""
         row = await self.engine.store.get_resource_row(tenant_id, "CloudIdentity", name, namespace=namespace)
         spec = CloudIdentitySpec.model_validate(row.document["spec"])
-        request = IssueRequest(tenant_id, row.namespace, name, spec)
-        ns = row.namespace
-        return {"identity": f"{ns}/{name}", "provider": spec.provider, "trust": spec.trust,
-                "subject": request.subject, **self.provider(spec.provider).trust_policy(request)}
+        target = f"{row.namespace}/{name}"
+        attribution = Attribution(
+            tenant_id=tenant_id, namespace=row.namespace, workflow="shoal-test", run_id=f"test-{uuid.uuid4().hex[:12]}",
+            step_id="test", attempt=1, initiator=initiator_label({"actor": actor}) if actor else None,
+        )
+        try:
+            session = await self.provider(spec.provider).issue(IssueRequest(tenant_id, row.namespace, name, spec, attribution))
+        except StepError as exc:
+            code = exc.details.get("aws_error")
+            await self.engine.store.audit(tenant_id, actor, "cloud-identity.tested", target, outcome="failure",
+                                          namespace=row.namespace, error=exc.message)
+            return {"ok": False, "identity": target, "error": exc.message, "code": code, "hint": TEST_HINTS.get(code or "")}
+        facts = {k: v for k, v in session.facts.items() if k != "tags"}
+        await self.engine.store.audit(tenant_id, actor, "cloud-identity.tested", target, namespace=row.namespace, **facts)
+        return {"ok": True, "identity": target, "expires_at": session.expires_at.isoformat(), **facts}
 
     async def environment(self, ctx: StepContext, names: list[str], *, agent: str | None = None) -> dict[str, str]:
         """Issue a session for each identity and return the sandbox env; refusals fail the step."""

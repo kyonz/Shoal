@@ -269,61 +269,6 @@ function BackendConfig({ spec, setSpec, readOnly }: { spec: Record<string, unkno
   );
 }
 
-// --------------------------------------------------------------------------- cloud identities
-
-interface TrustPolicy {
-  identity: string;
-  subject: string;
-  trust: string;
-  role_arn: string;
-  policy: Record<string, unknown>;
-  setup: string[];
-  notes: string[];
-}
-
-function TrustPolicyTab({ ns, name, version }: { ns: string; name: string; version: number | undefined }) {
-  const { data, error } = useQuery({
-    queryKey: ["cloud-identities", "trust-policy", ns, name, version],
-    queryFn: () => rawJson<TrustPolicy>(`/v1/namespaces/${ns}/cloud-identities/${name}/trust-policy`),
-  });
-  if (error) return <EmptyState className="py-10" title="No trust policy" description={String(error)} />;
-  if (!data) return null;
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader
-          title="Trust policy"
-          description={`Set this on ${data.role_arn} so Shoal can assume it for ${data.identity}. Sessions are tagged with the run and its initiator.`}
-        />
-        <div className="p-4">
-          <CodeEditor value={JSON.stringify(data.policy, null, 2)} language="json" readOnly minHeight="220px" maxHeight="480px" onChange={() => undefined} />
-        </div>
-      </Card>
-      <Card>
-        <CardHeader title="Setup" description={`Subject / ExternalId: ${data.subject}`} />
-        <div className="space-y-2 p-4 text-sm">
-          {data.setup.map((line) => (
-            <pre key={line} className="overflow-x-auto rounded bg-muted p-2 font-mono text-xs">{line}</pre>
-          ))}
-          {data.notes.map((note) => (
-            <p key={note} className="text-muted-foreground">{note}</p>
-          ))}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-export const cloudIdentityExtension: EditorExtension = {
-  tabs: (ctx) => [
-    {
-      value: "trust",
-      label: "Trust policy",
-      content: <TrustPolicyTab ns={ctx.ns} name={ctx.name!} version={ctx.resource?.metadata.version} />,
-    },
-  ],
-};
-
 // --------------------------------------------------------------------------- gateways
 
 export const gatewayExtension: EditorExtension = {

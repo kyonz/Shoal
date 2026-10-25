@@ -381,11 +381,32 @@ async def _connection(ctx: Ctx, namespace: str, name: str) -> Connection:
     return Connection.model_validate(row.document)
 
 
+TrustScopeQuery = Query("identity", pattern="^(identity|namespace)$",
+                        description="identity: only this identity may assume the role; namespace: any identity in its namespace.")
+
+
 @router.get("/namespaces/{namespace}/cloud-identities/{name}/trust-policy", tags=["cloud-identities"],
-            summary="The trust policy the cloud role needs so this identity can assume it")
-async def cloud_identity_trust_policy(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+            summary="The trust policy and setup steps the cloud role needs so this identity can assume it")
+async def cloud_identity_trust_policy(namespace: str, name: str, ctx: CtxDep, scope: str = TrustScopeQuery) -> dict[str, Any]:
     await ctx.namespace(namespace, "cloud-identities:read")
-    return await ctx.engine.cloud.trust_policy(ctx.tenant_id, namespace, name)
+    return await ctx.engine.cloud.trust_policy(ctx.tenant_id, namespace, name, scope=scope)  # type: ignore[arg-type]
+
+
+@router.post("/namespaces/{namespace}/cloud-identities/{name}/trust-policy", tags=["cloud-identities"],
+             summary="Preview the trust policy for a draft identity (not saved)")
+async def preview_cloud_identity_trust_policy(namespace: str, name: str, body: ResourceIn, ctx: CtxDep,
+                                              scope: str = TrustScopeQuery) -> dict[str, Any]:
+    await ctx.namespace(namespace, "cloud-identities:read")
+    resource = build_resource("CloudIdentity", name, body)
+    return await ctx.engine.cloud.trust_policy(ctx.tenant_id, namespace, name, scope=scope,  # type: ignore[arg-type]
+                                               spec=resource.spec)  # type: ignore[attr-defined]
+
+
+@router.post("/namespaces/{namespace}/cloud-identities/{name}/test", tags=["cloud-identities"],
+             summary="Assume the role once, as a run would, to check the setup (credentials are discarded)")
+async def test_cloud_identity(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "cloud-identities:write")
+    return await ctx.engine.cloud.test(ctx.tenant_id, namespace, name, actor=ctx.actor)
 
 
 async def _caller(ctx: Ctx) -> dict[str, Any]:
