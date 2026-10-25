@@ -25,7 +25,7 @@ import {
 import { useCan } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { dateTime, relTime } from "@/lib/format";
-import { nsPath, useNs } from "@/lib/ns";
+import { useNs } from "@/lib/ns";
 import {
   Badge,
   Button,
@@ -52,7 +52,7 @@ import {
   useConfirm,
 } from "@/components/ui";
 import { KeyValueInput, SchemaForm, type Widget } from "@/components/forms/SchemaForm";
-import { KINDS, NAME_RE } from "./kinds";
+import { KINDS, NAME_RE, kindPath, kindPermissions } from "./kinds";
 
 export interface Draft {
   name: string;
@@ -72,6 +72,8 @@ export interface EditorContext {
   resource: Resource | undefined;
   canWrite: boolean;
   dirty: boolean;
+  /** Save errors by top-level spec property. */
+  errors: Record<string, string>;
 }
 
 export interface EditorExtension {
@@ -140,9 +142,11 @@ function parseErrors(err: unknown): { byField: Record<string, string>; list: str
     const loc = Array.isArray(e.loc) ? e.loc : String(e.loc).split(".");
     const i = loc.indexOf("spec");
     const path = (i >= 0 ? loc.slice(i + 1) : loc.filter((p) => p !== "body")).join(".");
-    const key = i >= 0 ? loc[i + 1] : undefined;
-    if (key && !byField[key]) byField[key] = loc.length > i + 2 ? `${loc.slice(i + 2).join(".")}: ${e.msg}` : e.msg;
-    list.push(path ? `${path}: ${e.msg}` : e.msg);
+    const msg = e.msg.replace(/^Value error, /, "");
+    // Whole-spec validators name the field at the start: "headers ['x-api-key'] look like credentials; …".
+    const key = i >= 0 ? (loc[i + 1] ?? /^([a-z_]+) (\[|cannot )/.exec(msg)?.[1]) : undefined;
+    if (key && !byField[key]) byField[key] = loc.length > i + 2 ? `${loc.slice(i + 2).join(".")}: ${msg}` : msg;
+    list.push(path ? `${path}: ${msg}` : msg);
   }
   return { byField, list };
 }
@@ -175,11 +179,9 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
   const qc = useQueryClient();
   const confirm = useConfirm();
   const tenantScoped = TENANT_SCOPED.includes(cfg.plural);
-  const canPublish = useCan("blueprints:publish");
-  const canWriteKind = useCan(`${plural}:write`, ns);
-  const canDeleteKind = useCan(`${plural}:delete`, ns);
-  const canWrite = plural === "blueprints" ? canPublish : canWriteKind;
-  const canDelete = plural === "blueprints" ? canPublish : canDeleteKind;
+  const perms = kindPermissions(plural);
+  const canWrite = useCan(perms.write, perms.tenant ? undefined : ns);
+  const canDelete = useCan(perms.delete, perms.tenant ? undefined : ns);
 
   const schemas = useSchemas();
   const specSchema = schemas.data?.[plural]?.spec_schema;
@@ -210,9 +212,17 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
 
   const dirty = !!draft && JSON.stringify(draft) !== baseline;
   const nameError = isNew && draft && draft.name && !NAME_RE.test(draft.name) ? "Lowercase letters, digits and dashes; must start and end with a letter or digit." : undefined;
-  const errors = useMemo(() => parseErrors(saveError), [saveError]);
+  const [failedSpec, setFailedSpec] = useState<Record<string, unknown> | null>(null);
+  const errors = useMemo(() => {
+    const parsed = parseErrors(saveError);
+    // A field's error goes away once that field is edited.
+    const byField = Object.fromEntries(
+      Object.entries(parsed.byField).filter(([k]) => !draft || !failedSpec || JSON.stringify(draft.spec[k]) === JSON.stringify(failedSpec[k])),
+    );
+    return { ...parsed, byField };
+  }, [saveError, draft, failedSpec]);
 
-  const listPath = ext.listPath?.(ns) ?? nsPath(ns, plural);
+  const listPath = ext.listPath?.(ns) ?? kindPath(plural, ns);
 
   const save = useCallback(async () => {
     if (!draft || !canWrite) return;
@@ -238,9 +248,10 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
       const d = fromResource(res, specSchema);
       setDraft(d);
       setBaseline(JSON.stringify(d));
-      if (isNew) navigate(ext.afterCreatePath?.(ns, draft.name) ?? nsPath(ns, plural, draft.name), { replace: true });
+      if (isNew) navigate(ext.afterCreatePath?.(ns, draft.name) ?? kindPath(plural, ns, draft.name), { replace: true });
     } catch (e) {
       setSaveError(e);
+      setFailedSpec(draft.spec);
       toast.error(e instanceof Error ? e.message : "Save failed");
     }
   }, [draft, canWrite, isNew, nameError, put, specSchema, navigate, ns, plural, ext, cfg]);
@@ -319,7 +330,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
   }
 
   const setSpec = (spec: Record<string, unknown>) => setDraft((d) => (d ? { ...d, spec } : d));
-  const ctx: EditorContext = { ns, plural, name, isNew, draft, spec: draft.spec, setSpec, resource: resource.data, canWrite, dirty };
+  const ctx: EditorContext = { ns, plural, name, isNew, draft, spec: draft.spec, setSpec, resource: resource.data, canWrite, dirty, errors: errors.byField };
   const extraTabs = isNew ? [] : ext.tabs?.(ctx) ?? [];
   const meta = resource.data?.metadata;
 
@@ -433,7 +444,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
             <div className="min-w-0 space-y-4">
               <Card className="p-4">
                 <div className="grid gap-3.5 sm:grid-cols-2">
-                  <Field label="Name" required error={nameError} description={isNew ? (tenantScoped ? "Unique in the organisation; used in links and adoptions." : "Unique in the namespace; other resources refer to it by name.") : "Names cannot be changed."}>
+                  <Field label="Name" required error={nameError} description={isNew ? (cfg.admin ? "Unique in the organisation; agents and model policies refer to it by name." : tenantScoped ? "Unique in the organisation; used in links and adoptions." : "Unique in the namespace; other resources refer to it by name.") : "Names cannot be changed."}>
                     <Input
                       mono
                       autoFocus={isNew}

@@ -130,6 +130,36 @@ integration can be described as a remote manifest, and (given a sample
 delivery) that genuine webhooks verify while tampered or unsigned ones are
 rejected and parsed event types are declared. The built-in integrations pass it.
 
+## Per-user credentials
+
+Any connection can act with each person's own credential instead of one shared
+one: set `credentials: per_user` (or `per_user_or_shared`) on the connection and,
+optionally, `user_fields` (which connection fields people supply; default: the
+fields in `secrets`). Integrations need no code for this: `ctx.config` simply
+holds the person's values, and `ctx.acting_as` names whose they are. Add `oauth:`
+(authorize URL, token URL, scopes, client id, client secret secret) to let people
+connect with OAuth instead of pasting a token. See architecture §11.4.
+
+## MCP servers
+
+The built-in `mcp` integration turns any Model Context Protocol server into a
+connection, with its tools as actions, so most "integrations" need no code at all:
+
+```yaml
+kind: Connection
+metadata: {name: linear}
+spec:
+  integration: mcp
+  config:
+    url: https://mcp.linear.app/mcp
+    tools: ["list_*", "create_issue"]     # optional allow-list (globs)
+  secrets: {token: linear-team-token}     # sent as a bearer token
+  credentials: per_user_or_shared         # or each person's own token / OAuth
+```
+
+Workflows call `action: mcp.create_issue` with `connection: linear`; agents list
+`tools: [mcp:linear]` and see `linear__create_issue`.
+
 ## Remote integrations (any language)
 
 A remote integration is an HTTP service speaking protocol

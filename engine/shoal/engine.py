@@ -20,10 +20,14 @@ from typing import Any
 import httpx
 
 from shoal.auth.directory import Directory
+from shoal.auth.oauth import OAuthFlows
 from shoal.auth.oidc import OIDCService
 from shoal.auth.rbac import Authorizer
+from shoal.auth.user_credentials import UserCredentials
+from shoal.auth.workload import WorkloadIssuer
 from shoal.blueprints import BlueprintService
 from shoal.campaigns.service import CampaignService
+from shoal.cloud import CloudIdentities
 from shoal.config import Settings, get_settings
 from shoal.core import clock
 from shoal.core.errors import PluginError
@@ -84,6 +88,9 @@ def _builtin_steps(registry: Registry) -> None:
 
     registry.register("eval_sinks", "braintrust", BraintrustSink, replace=False)
     registry.register("eval_sinks", "langfuse", LangfuseSink, replace=False)
+    from shoal.cloud.aws import AwsProvider
+
+    registry.register("credentials", "aws", AwsProvider, replace=False)
     from shoal.runtime.orchestrator import BuiltinOrchestrator
 
     registry.register("orchestrators", "builtin", BuiltinOrchestrator, replace=False)
@@ -124,6 +131,8 @@ class Engine:
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
         self.identities = IdentityService(self)
+        self.workload = WorkloadIssuer(self.settings)
+        self.cloud = CloudIdentities(self)
         self.models = ModelRouter(self)
         self.decisions = DecisionService(self)
         self.executor = Executor(self)
@@ -131,6 +140,8 @@ class Engine:
         self.campaigns = CampaignService(self)
         self.blueprints = BlueprintService(self)
         self.signals = Signals(self)
+        self.user_credentials = UserCredentials(self)
+        self.oauth = OAuthFlows(self)
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)
         self.evals = EvalService(self)

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from shoal.core import clock
-from shoal.core.errors import Conflict, NotFound, StepError
+from shoal.core.errors import Conflict, CredentialRequired, NotFound, StepError
 from shoal.core.expressions import ExpressionError, referenced_secrets, render
 from shoal.core.ids import new_id
 from shoal.core.models import (
@@ -340,6 +340,14 @@ class Executor:
                     result = await handler.run(ctx)
             else:
                 result = await handler.run(ctx)
+        except CredentialRequired as exc:
+            if exc.owner is None:
+                await self._fail_step(ctx, exc.message, retryable=False, details=exc.details)
+                return
+            # Wait for the person to connect; saving the credential wakes the step, which then runs again.
+            connect = f"{self.engine.settings.public_url.rstrip('/')}/settings/credentials?connection={exc.namespace}/{exc.connection}"
+            await events.emit(run, "credential.required", {**exc.details, "message": exc.message, "connect_url": connect}, step_id=step.id)
+            result = Suspended(wait_keys=[exc.wait_key], reason=exc.message)
         except StepError as exc:
             await self._fail_step(ctx, exc.message, retryable=exc.retryable, details=exc.details)
             return

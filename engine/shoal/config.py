@@ -35,6 +35,28 @@ class Settings(BaseSettings):
         'e.g. SHOAL_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
     )
 
+    oidc_issuer: str | None = Field(
+        None,
+        description="Issuer of Shoal's workload identity tokens (defaults to public_url). Cloud providers fetch "
+        "<issuer>/.well-known/openid-configuration; a private deployment can publish those two documents "
+        "on public HTTPS (e.g. an S3 bucket) and set the issuer to that URL.",
+    )
+    identity_signing_key: SecretStr | None = Field(
+        None, description="PEM EC P-256 private key for workload identity tokens; derived from secret_key when unset."
+    )
+    aws_ambient: bool = Field(
+        False,
+        description="Let CloudIdentities with trust 'ambient' assume roles with this deployment's own AWS identity "
+        "(env, IRSA, EKS Pod Identity, ECS or instance role).",
+    )
+    aws_deployment_role_arn: str | None = Field(
+        None, description="This deployment's own IAM role, shown in generated trust policies for 'ambient' identities."
+    )
+    aws_sts_endpoint: str | None = Field(
+        None, description="STS endpoint override (VPC endpoint, FIPS); defaults to https://sts.<region>.amazonaws.com."
+    )
+    aws_audience: str = Field("sts.amazonaws.com", description="Audience of web identity tokens presented to AWS STS.")
+
     worker_id: str | None = None
     worker_concurrency: int = Field(16, ge=1)
     poll_interval_seconds: float = Field(1.0, gt=0)

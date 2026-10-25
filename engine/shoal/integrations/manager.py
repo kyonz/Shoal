@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from shoal.core.errors import InvalidRequest, NotFound
+from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound
 from shoal.core.models import Connection
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
@@ -31,15 +31,26 @@ class IntegrationManager:
     ) -> ConnectionContext:
         row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
         resource = Connection.model_validate(row.document)
-        integration = self.get(resource.spec.integration)
-        values: dict[str, Any] = dict(resource.spec.config)
+        spec = resource.spec
+        integration = self.get(spec.integration)
+        values: dict[str, Any] = dict(spec.config)
+        user_fields = set(spec.user_fields or spec.secrets)
+        if spec.oauth:
+            user_fields.add(spec.oauth.token_field)
+        personal = await self._personal(tenant_id, row.namespace, name, spec, initiator, user_fields)
         # A connection shared from the `shared` namespace reads its secrets there, where its owners keep them.
         with use_namespace(row.namespace):
-            for field, secret_name in resource.spec.secrets.items():
+            for field, secret_name in spec.secrets.items():
+                if personal is not None and field in user_fields:
+                    continue
                 value = await self.engine.secrets.get(tenant_id, secret_name)
                 if value is None:
                     raise InvalidRequest(f"connection '{name}': secret '{secret_name}' for field '{field}' is not set")
                 values[field] = value
+        acting_as = None
+        if personal is not None:
+            values.update({k: v for k, v in personal[1].items() if k in user_fields})
+            acting_as = personal[0]
         config = integration.connection_model.model_validate(values)
         return ConnectionContext(
             engine=self.engine,
@@ -49,6 +60,29 @@ class IntegrationManager:
             integration=integration,
             initiator=initiator,
             run_id=run_id,
+            acting_as=acting_as,
+        )
+
+    async def _personal(
+        self, tenant_id: str, namespace: str, name: str, spec: Any, initiator: dict[str, Any] | None, fields: set[str]
+    ) -> tuple[str, dict[str, Any]] | None:
+        """(owner, values) when the call uses the initiator's own credential; None for the shared one."""
+        if spec.credentials == "shared":
+            return None
+        creds = self.engine.user_credentials
+        owner = await creds.owner_for(tenant_id, initiator)
+        values = await creds.get(tenant_id, owner, namespace, name) if owner else None
+        if values is not None and values.get("_oauth"):
+            values = await self.engine.oauth.fresh(tenant_id, owner, namespace, name, spec, values)  # type: ignore[arg-type]
+        if values is not None:
+            return owner, values  # type: ignore[return-value]
+        if spec.credentials == "per_user_or_shared":
+            return None
+        who = (initiator or {}).get("display_name") or owner or "the person this run acts for"
+        raise CredentialRequired(
+            f"connection '{name}' uses each person's own credential and {who} has not connected it"
+            + ("" if owner else " (runs started by service accounts or unknown people cannot use it)"),
+            tenant_id=tenant_id, owner=owner, namespace=namespace, connection=name, fields=sorted(fields),
         )
 
     async def resolve_name(self, tenant_id: str, integration: str, preferred: str | None) -> str:

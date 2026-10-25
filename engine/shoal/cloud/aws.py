@@ -1,0 +1,364 @@
+"""AWS credential provider: short-lived STS sessions for an IAM role.
+
+``web_identity`` calls ``AssumeRoleWithWebIdentity`` with a Shoal-signed token
+(an unsigned STS call; Shoal needs no AWS credentials). ``ambient`` calls
+``AssumeRole`` signed with the deployment's own credentials, found the way the
+AWS SDKs find them: environment, IRSA web identity token file, EKS Pod
+Identity / ECS container endpoint, then EC2 instance metadata (IMDSv2).
+
+The STS calls go through httpx (and the engine's injectable transport), so
+the whole exchange is testable without AWS.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import json
+import os
+import re
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any
+from urllib.parse import quote, urlencode, urlsplit
+
+import httpx
+
+from shoal.cloud import CloudSession, IssueRequest
+from shoal.core import clock
+from shoal.core.errors import StepError
+
+if TYPE_CHECKING:
+    from shoal.engine import Engine
+
+STS_VERSION = "2011-06-15"
+RETRYABLE_CODES = {"Throttling", "ThrottlingException", "IDPCommunicationError", "ServiceUnavailable", "InternalFailure"}
+
+
+@dataclass
+class AwsCredentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None = None
+    expires_at: datetime | None = None
+
+
+# --------------------------------------------------------------------------- SigV4
+
+
+def _hmac(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+
+def sigv4_headers(method: str, url: str, body: bytes, creds: AwsCredentials, region: str, service: str,
+                  now: datetime, headers: dict[str, str] | None = None) -> dict[str, str]:
+    """Headers (including Authorization) that sign a request with AWS Signature Version 4."""
+    parts = urlsplit(url)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date = amz_date[:8]
+    out = {**(headers or {}), "host": parts.netloc, "x-amz-date": amz_date}
+    if creds.session_token:
+        out["x-amz-security-token"] = creds.session_token
+    canonical = {k.lower(): " ".join(str(v).split()) for k, v in out.items()}
+    signed = ";".join(sorted(canonical))
+    query = "&".join(
+        f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}"
+        for k, v in sorted(tuple(p.split("=", 1)) if "=" in p else (p, "") for p in parts.query.split("&") if p)
+    )
+    request = "\n".join([
+        method.upper(),
+        quote(parts.path or "/", safe="/-_.~"),
+        query,
+        "".join(f"{k}:{canonical[k]}\n" for k in sorted(canonical)),
+        signed,
+        hashlib.sha256(body).hexdigest(),
+    ])
+    scope = f"{date}/{region}/{service}/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(request.encode()).hexdigest()])
+    key = _hmac(_hmac(_hmac(_hmac(f"AWS4{creds.secret_access_key}".encode(), date), region), service), "aws4_request")
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    out["Authorization"] = (
+        f"AWS4-HMAC-SHA256 Credential={creds.access_key_id}/{scope}, SignedHeaders={signed}, Signature={signature}"
+    )
+    return out
+
+
+# --------------------------------------------------------------------------- STS
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _find(root: ET.Element, name: str) -> str | None:
+    for el in root.iter():
+        if _local(el.tag) == name:
+            return (el.text or "").strip()
+    return None
+
+
+def _parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def partition(role_arn: str) -> str:
+    return role_arn.split(":")[1]
+
+
+def account(role_arn: str) -> str:
+    return role_arn.split(":")[4]
+
+
+def sts_endpoint(engine: Engine, region: str, part: str = "aws") -> str:
+    if engine.settings.aws_sts_endpoint:
+        return engine.settings.aws_sts_endpoint.rstrip("/") + "/"
+    suffix = "amazonaws.com.cn" if part == "aws-cn" else "amazonaws.com"
+    return f"https://sts.{region}.{suffix}/"
+
+
+async def sts_call(engine: Engine, region: str, params: dict[str, str], *, creds: AwsCredentials | None = None,
+                   part: str = "aws") -> ET.Element:
+    """POST an STS query action; signed when ``creds`` are given. Raises StepError on AWS errors."""
+    url = sts_endpoint(engine, region, part)
+    body = urlencode({**params, "Version": STS_VERSION}).encode()
+    headers = {"content-type": "application/x-www-form-urlencoded; charset=utf-8"}
+    if creds is not None:
+        headers = sigv4_headers("POST", url, body, creds, region, "sts", clock.now(), headers)
+    action = params["Action"]
+    try:
+        async with httpx.AsyncClient(timeout=15, transport=engine.http_transport) as client:
+            response = await client.post(url, content=body, headers=headers)
+    except httpx.HTTPError as exc:
+        raise StepError(f"AWS STS {action} unreachable: {exc}", retryable=True) from exc
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError:
+        raise StepError(f"AWS STS {action} returned HTTP {response.status_code}", retryable=response.status_code >= 500) from None
+    if response.status_code >= 400 or _local(root.tag) == "ErrorResponse":
+        code = _find(root, "Code") or str(response.status_code)
+        message = _find(root, "Message") or ""
+        raise StepError(
+            f"AWS STS {action} failed: {code}: {message}".rstrip(": "),
+            retryable=code in RETRYABLE_CODES or response.status_code >= 500,
+            details={"aws_error": code},
+        )
+    return root
+
+
+def _credentials(root: ET.Element) -> AwsCredentials:
+    access_key, secret, token, expiration = (_find(root, k) for k in ("AccessKeyId", "SecretAccessKey", "SessionToken", "Expiration"))
+    if not access_key or not secret:
+        raise StepError("AWS STS response had no credentials")
+    return AwsCredentials(access_key, secret, token, _parse_time(expiration) if expiration else None)
+
+
+# --------------------------------------------------------------------------- the deployment's own credentials
+
+
+def _read(path: str) -> str:
+    with open(path) as f:  # a small local file (projected service account token)
+        return f.read().strip()
+
+
+IMDS = "http://169.254.169.254"
+ECS_HOST = "http://169.254.170.2"
+
+
+class AmbientCredentials:
+    """The deployment's own AWS credentials, resolved like the AWS SDKs and cached until near expiry."""
+
+    def __init__(self, engine: Engine):
+        self.engine = engine
+        self._cached: AwsCredentials | None = None
+        self._lock = asyncio.Lock()
+
+    async def get(self) -> AwsCredentials:
+        async with self._lock:
+            cached = self._cached
+            if cached and (cached.expires_at is None or cached.expires_at - clock.now() > timedelta(minutes=5)):
+                return cached
+            self._cached = await self._resolve()
+            return self._cached
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=5, transport=self.engine.http_transport)
+
+    async def _resolve(self) -> AwsCredentials:
+        env = os.environ
+        if env.get("AWS_ACCESS_KEY_ID") and env.get("AWS_SECRET_ACCESS_KEY"):
+            return AwsCredentials(env["AWS_ACCESS_KEY_ID"], env["AWS_SECRET_ACCESS_KEY"], env.get("AWS_SESSION_TOKEN"))
+        region = env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION") or "us-east-1"
+        if env.get("AWS_WEB_IDENTITY_TOKEN_FILE") and env.get("AWS_ROLE_ARN"):  # IRSA
+            token = _read(env["AWS_WEB_IDENTITY_TOKEN_FILE"])  # rotated by the kubelet; read each time
+            root = await sts_call(self.engine, region, {
+                "Action": "AssumeRoleWithWebIdentity", "RoleArn": env["AWS_ROLE_ARN"],
+                "RoleSessionName": env.get("AWS_ROLE_SESSION_NAME") or "shoal", "WebIdentityToken": token,
+            }, part=partition(env["AWS_ROLE_ARN"]))
+            return _credentials(root)
+        full_uri = env.get("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        relative = env.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        if full_uri or relative:  # EKS Pod Identity, ECS task role
+            headers = {}
+            if env.get("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"):
+                headers["Authorization"] = _read(env["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"])
+            elif env.get("AWS_CONTAINER_AUTHORIZATION_TOKEN"):
+                headers["Authorization"] = env["AWS_CONTAINER_AUTHORIZATION_TOKEN"]
+            return await self._json_credentials(full_uri or f"{ECS_HOST}{relative}", headers)
+        return await self._imds()
+
+    async def _json_credentials(self, url: str, headers: dict[str, str]) -> AwsCredentials:
+        try:
+            async with self._client() as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise StepError(f"could not read the deployment's AWS credentials from {url}: {exc}", retryable=True) from exc
+        return AwsCredentials(data["AccessKeyId"], data["SecretAccessKey"], data.get("Token"),
+                              _parse_time(data["Expiration"]) if data.get("Expiration") else None)
+
+    async def _imds(self) -> AwsCredentials:
+        try:
+            async with self._client() as client:
+                token = (await client.put(f"{IMDS}/latest/api/token",
+                                          headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"})).text
+                headers = {"X-aws-ec2-metadata-token": token}
+                base = f"{IMDS}/latest/meta-data/iam/security-credentials/"
+                role = (await client.get(base, headers=headers)).text.strip().splitlines()[0]
+        except (httpx.HTTPError, IndexError) as exc:
+            raise StepError(
+                "this deployment has no AWS identity (set AWS_* env, IRSA, EKS Pod Identity or an instance role)",
+            ) from exc
+        return await self._json_credentials(base + role, headers)
+
+
+# --------------------------------------------------------------------------- provider
+
+_SESSION_CHARS = re.compile(r"[^\w+=,.@-]")
+_TAG_CHARS = re.compile(r"[^\w\s.:/=+\-@]")
+
+
+def session_name(value: str) -> str:
+    return (_SESSION_CHARS.sub("-", value)[:64]).ljust(2, "-")
+
+
+def tag_value(value: str) -> str:
+    return _TAG_CHARS.sub("-", value)[:256]
+
+
+class AwsProvider:
+    """``shoal.credentials`` plugin ``aws``."""
+
+    name = "aws"
+
+    def setup(self, engine: Engine) -> None:
+        self.engine = engine
+        self.ambient = AmbientCredentials(engine)
+
+    def _issuer_host(self) -> str:
+        return re.sub(r"^https?://", "", self.engine.workload.issuer)
+
+    async def issue(self, request: IssueRequest) -> CloudSession:
+        cfg = request.spec.aws
+        assert cfg is not None and request.attribution is not None
+        att = request.attribution
+        source_identity = session_name(att.initiator or "shoal")
+        tags = {k: tag_value(v) for k, v in att.tags().items()}
+        params: dict[str, str] = {
+            "RoleArn": cfg.role_arn,
+            "RoleSessionName": session_name(f"shoal-{att.run_id}-{att.step_id}"),
+            "DurationSeconds": str(int(cfg.duration.total_seconds())),
+        }
+        if cfg.session_policy:
+            params["Policy"] = json.dumps(cfg.session_policy, separators=(",", ":"))
+        for i, arn in enumerate(cfg.policy_arns, 1):
+            params[f"PolicyArns.member.{i}.arn"] = arn
+        if request.spec.trust == "web_identity":
+            token = self.engine.workload.issue(request.subject, self.engine.settings.aws_audience, {
+                "https://aws.amazon.com/tags": {
+                    "principal_tags": {k: [v] for k, v in tags.items()},
+                    "transitive_tag_keys": sorted(tags),
+                },
+                "https://aws.amazon.com/source_identity": source_identity,
+            })
+            params.update(Action="AssumeRoleWithWebIdentity", WebIdentityToken=token)
+            root = await sts_call(self.engine, cfg.region, params, part=partition(cfg.role_arn))
+        else:
+            if not self.engine.settings.aws_ambient:
+                raise StepError("trust 'ambient' is not enabled on this deployment (SHOAL_AWS_AMBIENT); use web_identity")
+            params.update(Action="AssumeRole", ExternalId=request.subject, SourceIdentity=source_identity)
+            for i, (key, value) in enumerate(sorted(tags.items()), 1):
+                params[f"Tags.member.{i}.Key"] = key
+                params[f"Tags.member.{i}.Value"] = value
+                params[f"TransitiveTagKeys.member.{i}"] = key
+            creds = await self.ambient.get()
+            root = await sts_call(self.engine, cfg.region, params, creds=creds, part=partition(cfg.role_arn))
+        creds = _credentials(root)
+        expires_at = creds.expires_at or clock.now() + cfg.duration
+        env = {
+            "AWS_ACCESS_KEY_ID": creds.access_key_id,
+            "AWS_SECRET_ACCESS_KEY": creds.secret_access_key,
+            "AWS_SESSION_TOKEN": creds.session_token or "",
+            "AWS_REGION": cfg.region,
+            "AWS_DEFAULT_REGION": cfg.region,
+            "AWS_CREDENTIAL_EXPIRATION": expires_at.isoformat().replace("+00:00", "Z"),
+        }
+        return CloudSession(
+            env=env,
+            secrets=[s for s in (creds.secret_access_key, creds.session_token) if s],
+            expires_at=expires_at,
+            facts={
+                "role_arn": cfg.role_arn,
+                "assumed_role_arn": _find(root, "Arn"),
+                "session_name": params["RoleSessionName"],
+                "source_identity": source_identity,
+                "access_key_id": creds.access_key_id,  # not secret; correlates with CloudTrail
+                "tags": tags,
+            },
+        )
+
+    def trust_policy(self, request: IssueRequest) -> dict[str, Any]:
+        cfg = request.spec.aws
+        assert cfg is not None
+        part, acct = partition(cfg.role_arn), account(cfg.role_arn)
+        actions = ["sts:TagSession", "sts:SetSourceIdentity"]
+        notes: list[str] = []
+        setup: list[str] = []
+        if request.spec.trust == "web_identity":
+            issuer = self.engine.workload.issuer
+            host = self._issuer_host()
+            audience = self.engine.settings.aws_audience
+            statement = {
+                "Sid": "ShoalWorkloadIdentity",
+                "Effect": "Allow",
+                "Principal": {"Federated": f"arn:{part}:iam::{acct}:oidc-provider/{host}"},
+                "Action": ["sts:AssumeRoleWithWebIdentity", *actions],
+                "Condition": {"StringEquals": {f"{host}:aud": audience, f"{host}:sub": request.subject}},
+            }
+            setup.append(f"aws iam create-open-id-connect-provider --url {issuer} --client-id-list {audience}")
+            if not issuer.startswith("https://"):
+                notes.append(f"AWS must reach {issuer}/.well-known/openid-configuration over public HTTPS; "
+                             "set SHOAL_OIDC_ISSUER or publish the discovery document and JWKS (e.g. on S3).")
+        else:
+            deployment = self.engine.settings.aws_deployment_role_arn or "<this Shoal deployment's IAM role ARN>"
+            statement = {
+                "Sid": "ShoalDeployment",
+                "Effect": "Allow",
+                "Principal": {"AWS": deployment},
+                "Action": ["sts:AssumeRole", *actions],
+                "Condition": {"StringEquals": {"sts:ExternalId": request.subject}},
+            }
+            notes.append(f"The deployment role needs sts:AssumeRole, sts:TagSession and sts:SetSourceIdentity on {cfg.role_arn}.")
+            if not self.engine.settings.aws_ambient:
+                notes.append("trust 'ambient' is not enabled on this deployment (SHOAL_AWS_AMBIENT=true).")
+        return {
+            "role_arn": cfg.role_arn,
+            "policy": {"Version": "2012-10-17", "Statement": [statement]},
+            "setup": setup
+            + [f"aws iam update-assume-role-policy --role-name {cfg.role_arn.rsplit('/', 1)[-1]} --policy-document file://trust.json"],
+            "notes": notes,
+            "session_tags": sorted({"shoal:tenant", "shoal:namespace", "shoal:workflow", "shoal:run", "shoal:step",
+                                    "shoal:initiator", "shoal:agent"}),
+        }

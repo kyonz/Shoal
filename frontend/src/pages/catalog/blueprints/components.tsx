@@ -10,6 +10,7 @@ import { relTime } from "@/lib/format";
 import { nsPath } from "@/lib/ns";
 import { Badge, Button, Dialog, EmptyState, ErrorNotice, Field, Input, NativeSelect, Switch, Table, Td, Th, Tr, useConfirm } from "@/components/ui";
 import { SecretPicker } from "../extensions";
+import { kindPath } from "../kinds";
 import {
   PLURAL_BY_KIND,
   isFeatured,
@@ -118,7 +119,7 @@ export function OutcomeList({ items, ns, links }: { items: AppliedResource[]; ns
           <li key={`${r.kind}/${r.name}`} className="flex items-center gap-2 px-3 py-2 text-[13px]">
             <Badge className="w-28 justify-center">{r.kind || "resource"}</Badge>
             {links && plural ? (
-              <Link to={nsPath(ns, plural, r.name)} className="font-mono text-xs text-accent hover:underline">{r.name}</Link>
+              <Link to={kindPath(plural, ns, r.name)} className="font-mono text-xs text-accent hover:underline">{r.name}</Link>
             ) : (
               <span className="font-mono text-xs">{r.name}</span>
             )}
@@ -308,7 +309,7 @@ export function AdoptionsTable({ ns, adoptions, latest }: { ns: string; adoption
                       const r = resourceRef(x);
                       const plural = PLURAL_BY_KIND[r.kind];
                       return plural ? (
-                        <Link key={`${r.kind}${r.name}`} to={nsPath(ns, plural, r.name)}>
+                        <Link key={`${r.kind}${r.name}`} to={kindPath(plural, ns, r.name)}>
                           <Badge className="font-mono hover:border-accent">{r.name}</Badge>
                         </Link>
                       ) : (
