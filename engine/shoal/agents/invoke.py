@@ -59,15 +59,8 @@ async def resolve_env(ctx: StepContext, agent: AgentSpec) -> dict[str, str]:
 
 
 async def resolve_provider_config(ctx: StepContext, agent: AgentSpec) -> dict[str, Any]:
-    config = dict(agent.provider_config)
-    secret_name = config.pop("api_key_secret", None)
-    if secret_name:
-        value = await ctx.engine.secrets.get(ctx.tenant_id, secret_name)
-        if value is None:
-            raise StepError(f"secret '{secret_name}' (provider api key) is not set")
-        config["api_key"] = value
-        ctx.redactor.add(value)
-    return config
+    """Model settings only: endpoints and credentials come from the (central) Gateway."""
+    return dict(agent.provider_config)
 
 
 async def run_agent(

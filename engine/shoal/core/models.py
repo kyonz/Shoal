@@ -15,6 +15,7 @@ JSON schemas are published through the API so the UI and SDKs can render forms.
 from __future__ import annotations
 
 import enum
+import re
 from datetime import timedelta
 from typing import Annotated, Any, ClassVar, Literal
 
@@ -459,9 +460,18 @@ class AgentSpec(Model):
     sandbox: str | None = None
     env: dict[str, str] = Field(default_factory=dict, description="Sandbox env; values may use expressions.")
     limits: AgentLimits = Field(default_factory=AgentLimits)
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: dict[str, Any] = Field(
+        default_factory=dict, description="Model settings (temperature, effort, ...). Endpoints and credentials belong on a Gateway."
+    )
     runtime_config: dict[str, Any] = Field(default_factory=dict)
     guard: ToolGuardSpec | None = Field(None, description="Optional decision-model screening of tool calls.")
+
+    @model_validator(mode="after")
+    def _no_endpoint_overrides(self) -> AgentSpec:
+        bad = sorted({*credential_fields(self.provider_config), *(set(self.provider_config) & GATEWAY_ONLY)})
+        if bad:
+            raise ValueError(f"provider_config cannot set {bad}: endpoints and credentials are managed on Gateways")
+        return self
 
 
 class SkillSpec(Model):
@@ -591,15 +601,42 @@ class IdentitySpec(Model):
     github_token_secret: str | None = Field(None, description="Secret holding the user's linked GitHub OAuth token.")
 
 
+# Header and config names that carry credentials; they must come from secrets, never clear text.
+CREDENTIAL_NAME = re.compile(r"(^|[-_])(authorization|auth|api[-_]?key|key|token|secret|password|passwd|cookie|credentials?)($|[-_])", re.I)
+
+
+# Agent provider_config may tune a model but not redirect it around the central gateway.
+GATEWAY_ONLY = frozenset({"base_url", "headers", "api_key", "endpoint", "url", "region", "project"})
+
+
+def credential_fields(values: dict[str, Any]) -> list[str]:
+    return sorted(k for k in values if CREDENTIAL_NAME.search(k))
+
+
 class GatewaySpec(Model):
-    """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...)."""
+    """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...).
+
+    Gateways are tenant-wide and managed by admins (``gateways:manage``).
+    Credentials come only from secrets in the tenant's ``shared`` namespace.
+    """
 
     description: str | None = None
     type: str = Field("anthropic", description="Provider plugin: anthropic, openai-compatible, scripted, ...")
     base_url: str | None = None
-    api_key_secret: str | None = None
-    headers: dict[str, str] = Field(default_factory=dict)
+    api_key_secret: str | None = Field(None, description="Secret (in `shared`) holding the API key.")
+    headers: dict[str, str] = Field(default_factory=dict, description="Non-secret headers.")
+    secret_headers: dict[str, str] = Field(
+        default_factory=dict, description="Header name to secret name (in `shared`), e.g. {x-portkey-api-key: portkey-key}."
+    )
     config: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _no_clear_text_credentials(self) -> GatewaySpec:
+        if bad := credential_fields(self.headers):
+            raise ValueError(f"headers {bad} look like credentials; put them in secret_headers (header: secret name)")
+        if bad := credential_fields(self.config):
+            raise ValueError(f"config {bad} look like credentials; use api_key_secret or secret_headers")
+        return self
 
 
 class ModelCandidate(Model):

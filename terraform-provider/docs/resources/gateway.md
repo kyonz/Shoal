@@ -2,26 +2,39 @@
 page_title: "shoal_gateway Resource - shoal"
 subcategory: ""
 description: |-
-  An LLM gateway: how model requests are sent (provider, base URL, headers, credentials).
-  Maps to /v1/namespaces/{namespace}/gateways/{name}. spec is written as a plain object (HCL, or yamldecode(file(...))) and uses the same fields as the spec of the YAML resource.
+  An LLM gateway: how model requests are sent (provider, base URL, headers). Tenant-wide and managed by tenant admins (gateways:manage); credentials are secrets in the shared namespace (api_key_secret, secret_headers), never clear text.
+  Maps to /v1/gateways/{name}. spec is written as a plain object (HCL, or yamldecode(file(...))) and uses the same fields as the spec of the YAML resource.
 ---
 
 # shoal_gateway (Resource)
 
-An LLM gateway: how model requests are sent (provider, base URL, headers, credentials).
+An LLM gateway: how model requests are sent (provider, base URL, headers). Tenant-wide and managed by tenant admins (`gateways:manage`); credentials are secrets in the `shared` namespace (`api_key_secret`, `secret_headers`), never clear text.
 
-Maps to `/v1/namespaces/{namespace}/gateways/{name}`. `spec` is written as a plain object (HCL, or `yamldecode(file(...))`) and uses the same fields as the `spec` of the YAML resource.
+Maps to `/v1/gateways/{name}`. `spec` is written as a plain object (HCL, or `yamldecode(file(...))`) and uses the same fields as the `spec` of the YAML resource.
 
 ## Example Usage
 
 ```terraform
-resource "shoal_gateway" "litellm" {
+# Tenant-wide; needs gateways:manage. Secrets live in the `shared` namespace.
+variable "litellm_key" {
+  type      = string
+  sensitive = true
+}
+
+resource "shoal_secret" "litellm_key" {
   namespace = "shared"
-  name      = "litellm"
+  name      = "litellm-key"
+  value     = var.litellm_key
+}
+
+resource "shoal_gateway" "litellm" {
+  name = "litellm"
   spec = {
-    type           = "anthropic"
-    base_url       = "https://llm-gateway.acme.internal"
-    api_key_secret = "litellm-key"
+    type           = "openai-compatible"
+    base_url       = "https://llm-gateway.acme.internal/v1"
+    api_key_secret = shoal_secret.litellm_key.name
+    headers        = { "x-team" = "platform" }                  # non-secret headers only
+    secret_headers = { "x-litellm-api-key" = shoal_secret.litellm_key.name }
   }
 }
 ```
@@ -38,17 +51,20 @@ resource "shoal_gateway" "litellm" {
 
 - `description` (String) Human description shown in the UI.
 - `labels` (Map of String) Labels for filtering and selection.
-- `namespace` (String) Namespace. Defaults to the provider's `namespace`. Changing it recreates the resource.
 
 ### Read-Only
 
 - `id` (String) `<namespace>/<name>`.
+- `namespace` (String) Always `shared`: Gateway resources are tenant-wide.
 - `status` (Map of String) Server-computed details, e.g. `webhook_url` for connections or `next_fire_at` for scheduled triggers.
 - `version` (Number) Server version, incremented on every change.
 
 ## `spec` fields
 
 How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...).
+
+Gateways are tenant-wide and managed by admins (``gateways:manage``).
+Credentials come only from secrets in the tenant's ``shared`` namespace.
 
 These are the top-level fields of the Gateway spec, the same as `spec:` in YAML. Nested objects are described in the
 server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
@@ -58,12 +74,13 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `description` | string | optional |  |
 | `type` | string | optional | Provider plugin: anthropic, openai-compatible, scripted, ... Default: `anthropic`. |
 | `base_url` | string | optional |  |
-| `api_key_secret` | string | optional |  |
-| `headers` | map | optional |  |
+| `api_key_secret` | string | optional | Secret (in `shared`) holding the API key. |
+| `headers` | map | optional | Non-secret headers. |
+| `secret_headers` | map | optional | Header name to secret name (in `shared`), e.g. {x-portkey-api-key: portkey-key}. |
 | `config` | map | optional |  |
 
 ## Import
 
 ```shell
-terraform import shoal_gateway.litellm shared/litellm
+terraform import shoal_gateway.litellm litellm
 ```

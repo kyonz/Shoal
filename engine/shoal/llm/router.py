@@ -20,7 +20,15 @@ from typing import TYPE_CHECKING, Any
 
 from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
 from shoal.core.errors import StepError
-from shoal.core.models import AgentSpec, ModelCandidate, ModelPolicySpec, ModelRule
+from shoal.core.models import (
+    GATEWAY_ONLY,
+    AgentSpec,
+    ModelCandidate,
+    ModelPolicySpec,
+    ModelRule,
+    credential_fields,
+)
+from shoal.core.scope import SHARED_NAMESPACE, use_namespace
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
@@ -130,24 +138,34 @@ class ModelRouter:
             config.update(spec.config)
             if spec.base_url:
                 config["base_url"] = spec.base_url
-            if spec.headers:
-                config["headers"] = dict(spec.headers)
-            if spec.api_key_secret:
-                key = await self.engine.secrets.get(tenant_id, spec.api_key_secret)
-                if key is None:
-                    raise StepError(f"secret '{spec.api_key_secret}' (gateway '{gateway}' api key) is not set")
-                config["api_key"] = key
-                if redactor is not None:
-                    redactor.add(key)
+            headers = dict(spec.headers)
+            with use_namespace(SHARED_NAMESPACE):  # gateways are tenant-wide; so are their secrets
+                for header, secret in spec.secret_headers.items():
+                    headers[header] = await self._secret(tenant_id, gateway, secret, redactor)
+                if spec.api_key_secret:
+                    config["api_key"] = await self._secret(tenant_id, gateway, spec.api_key_secret, redactor)
+            if headers:
+                config["headers"] = headers
         else:
             provider_name = gateway
         if provider_name not in self.engine.registry.names("providers"):
             raise StepError(f"unknown gateway or provider '{gateway}'")
-        config.update(overrides or {})
+        overrides = overrides or {}
+        if bad := sorted({*credential_fields(overrides), *(set(overrides) & GATEWAY_ONLY)}):
+            raise StepError(f"provider_config cannot set {bad}: endpoints and credentials are managed on Gateways")
+        config.update(overrides)
         if effort:
             config["effort"] = effort
         provider = self.engine.plugin("providers", provider_name)
         return ModelTarget(gateway, provider_name, provider, model, config, rule)
+
+    async def _secret(self, tenant_id: str, gateway: str, name: str, redactor: Redactor | None) -> str:
+        value = await self.engine.secrets.get(tenant_id, name)
+        if value is None:
+            raise StepError(f"secret '{name}' (gateway '{gateway}') is not set in the 'shared' namespace")
+        if redactor is not None:
+            redactor.add(value)
+        return value
 
     # ------------------------------------------------------------------ policies
 
