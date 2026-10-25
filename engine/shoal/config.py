@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     assistant_enabled: bool = Field(True, description="Serve the chat assistant (POST /v1/assistant/chat).")
     assistant_gateway: str = Field(
-        "anthropic", description="Gateway resource (looked up in the user's namespace, then shared) or provider plugin."
+        "anthropic", description="Gateway resource (tenant-wide) or provider plugin name."
     )
     assistant_model: str = Field("claude-opus-5-5", description="Model the assistant runs on.")
     assistant_effort: str = Field("medium", description="Reasoning effort for the assistant's model calls.")

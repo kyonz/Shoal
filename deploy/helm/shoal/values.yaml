@@ -21,8 +21,8 @@ config:
   leaseSeconds: 60
   logLevel: INFO
   logJson: true
-  # The chat assistant in the UI (POST /v1/assistant/chat). gateway is a Gateway
-  # resource (in the user's namespace or shared) or a provider plugin name.
+  # The chat assistant in the UI (POST /v1/assistant/chat). gateway is a
+  # tenant Gateway resource or a provider plugin name.
   assistant:
     enabled: true
     gateway: anthropic

@@ -12,7 +12,6 @@ from shoal.api.deps import CtxDep
 from shoal.assistant.chat import Assistant
 from shoal.core.errors import Forbidden, InvalidRequest, ShoalError
 from shoal.core.requestctx import current_request
-from shoal.core.scope import use_namespace
 from shoal.llm.router import DEFAULT_POLICY, ModelClient, ModelRouter
 
 router = APIRouter(prefix="/v1/assistant", tags=["assistant"])
@@ -90,13 +89,12 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
     tenant = ctx.tenant_id
     if not ModelRouter.permitted(settings.assistant_model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
         raise Forbidden(f"model '{settings.assistant_model}' is not permitted by the tenant's model policy")
-    with use_namespace(namespace):
-        try:
-            target = await ctx.engine.models.gateway_target(
-                tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
-            )
-        except ShoalError as exc:
-            raise AssistantUnavailable(f"assistant gateway: {exc.message}") from exc
+    try:
+        target = await ctx.engine.models.gateway_target(
+            tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
+        )
+    except ShoalError as exc:
+        raise AssistantUnavailable(f"assistant gateway: {exc.message}") from exc
 
     headers = {k: v for k, v in request.headers.items() if k.lower() in FORWARDED_HEADERS}
     headers["x-shoal-client"] = "assistant"

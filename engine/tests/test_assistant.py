@@ -64,7 +64,7 @@ async def api(engine):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test") as client:
         r = await client.post("/v1/tenants", json={"slug": "acme", "name": "Acme"}, headers={"Authorization": f"Bearer {ADMIN}"})
         client.headers["Authorization"] = f"Bearer {r.json()['api_key']}"
-        r = await client.put("/v1/namespaces/shared/gateways/assistant-test",
+        r = await client.put("/v1/gateways/assistant-test",
                              json={"spec": {"type": "scripted", "config": {"function": "assistant-test"}}})
         assert r.status_code in (200, 201), r.text
         yield client
@@ -194,7 +194,7 @@ async def test_auto_approve_and_endpoint_discovery(api):
 async def test_policy_and_disable(api, engine):
     play([{"type": "text", "text": "hi"}])
     assert (await api.get("/v1/assistant")).json()["model"] == engine.settings.assistant_model
-    await api.put("/v1/namespaces/shared/model-policies/default", json={"spec": {
+    await api.put("/v1/model-policies/default", json={"spec": {
         "allow_models": ["claude-haiku-*"], "rules": [{"name": "all", "candidates": [{"model": "claude-haiku-5-5"}]}]}})
     r = await api.post("/v1/assistant/chat", json={"message": "hi"})
     assert r.status_code == 403
