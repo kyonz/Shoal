@@ -221,6 +221,10 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   },
 }));
 
+export function isDirty(s: Pick<BuilderState, "spec" | "layout" | "meta" | "saved">): boolean {
+  return snapshotKey(s) !== s.saved;
+}
+
 export function useDirty(): boolean {
-  return useBuilder((s) => snapshotKey(s) !== s.saved);
+  return useBuilder(isDirty);
 }
