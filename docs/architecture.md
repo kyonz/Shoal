@@ -59,6 +59,7 @@ first release must satisfy.
 | **Connection** | A tenant's configured instance of an integration (credentials + settings). |
 | **Trigger** | A binding: event source (webhook / schedule / poll) + filter → workflow inputs. |
 | **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
+| **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
 
 All of these are pydantic models in `awm.core.models` and are serialisable to
@@ -300,6 +301,57 @@ kept out of the model's reach.
   sandbox, or remote HTTP with OAuth via the credential providers). AWM also
   exposes an MCP server so other agents/IDEs can list and run workflows.
 
+### 7.3 LLM gateways and model routing
+
+Model access is pluggable at two levels.
+
+- **Gateways** (`awm.gateways` entry point) are how requests reach a model:
+  `anthropic` (direct, official SDK), `bedrock`, `vertex`, `foundry`, any
+  Anthropic-compatible base URL (LiteLLM proxy, Portkey, Cloudflare AI
+  Gateway, an internal gateway), and `openai-compatible` (OpenRouter, vLLM,
+  Ollama, Azure OpenAI). A gateway is a tenant-configurable resource with
+  credentials, base URL, default headers, timeouts and retry policy, so a
+  platform team can force all traffic through its own gateway for logging,
+  caching and spend control.
+- **Model policies** (`ModelPolicy` resources) decide *which* model runs.
+  Agents name a model directly (`claude-opus-5-5`) or a policy/class
+  (`model: policy:coding`). A policy is an ordered set of rules matching on
+  tenant, agent, workflow, labels and task class, and yields candidates with:
+  - allow/deny lists per tenant (only approved models and gateways);
+  - cost ceilings per call/step/run, and downgrade rules when a budget is low;
+  - data-residency constraints (region/`inference_geo`, "no third-party
+    gateways for this tenant");
+  - fallbacks on rate limits, outages or refusals (provider-side fallbacks
+    are used where the gateway supports them);
+  - weighted splits for A/B comparisons, recorded per run so evals can
+    compare them.
+- The chosen gateway and model, the reason (rule id) and usage/cost are
+  written to the run events, so spend and quality can be attributed.
+
+### 7.4 Evaluations
+
+Workflows and agents change (prompt, model, skills, workflow version), so
+quality is measured, not assumed.
+
+- **`Eval` resources** define a dataset of cases (workflow inputs plus
+  expectations, or a query over past runs) and one or more **graders**:
+  expression checks over outputs, JSON-schema checks, a script grader that
+  runs in a sandbox (e.g. "do the tests pass on the produced branch"), and
+  LLM-as-judge graders with a rubric and a pinned judge model.
+- **Eval runs** reuse the campaign engine: each case is a target, so
+  concurrency, budgets and progress tracking come for free. Results are
+  scored per case and aggregated per variant (workflow version × agent ×
+  model policy), with diffs against a baseline.
+- **Gates.** An eval can gate promotion of a new workflow version or model
+  policy (must not regress beyond a threshold), and runs in CI through the
+  API/CLI (`awm eval run --baseline v12 --fail-under 0.9`).
+- **Online evals** sample production runs (e.g. "was the Jira fix PR
+  merged within 7 days?", judge-scored PR quality) and trend them on the
+  dashboard.
+- **Inline quality gates.** A `grade` step type scores an upstream output with
+  a rubric inside a workflow, so a run can retry, escalate to a human or stop
+  when quality is below a threshold.
+
 ---
 
 ## 8. Sandboxes (multi-engine execution)
@@ -433,6 +485,47 @@ spec:
 
 ---
 
+### 11.1 Initiator attribution and delegated authority
+
+AWM is usually operated by a platform team, so its credentials (a GitHub App,
+a service account) can reach repositories the person who triggered a run
+cannot. AWM therefore tracks *who drove the work* separately from *which
+credential performed it*, and lets policy decide what the run may do.
+
+- **Initiator.** Every run records an initiator: the user behind the API key
+  or UI session, the human in a webhook event (e.g. the Jira user who moved
+  the ticket), or whoever launched the campaign. Child runs and campaign runs
+  inherit it.
+- **Identities.** `Identity` resources map a person across systems
+  (`email`, `github` login, `jira` account id, Slack id). Users can link their
+  GitHub account through OAuth, which stores a per-user token as a secret.
+  Webhook actors are resolved to identities so a Jira-triggered run knows the
+  GitHub login of the person who asked.
+- **Auth modes per connection** (`attribution.mode`):
+  - `user` — act with the initiator's own GitHub OAuth token. GitHub's own
+    permissions apply; the run fails clearly if the user has not linked an
+    account (optional `fallback: app`).
+  - `app` — act with the GitHub App / service credentials, and apply the
+    governance policy below to keep the initiator's authority visible and
+    enforced.
+- **Governance policy (GitHub App mode)**, enforced inside the integration so
+  workflows cannot bypass it, with every decision written to the audit log
+  and the step output:
+  - *Provenance labels* on PRs/issues, e.g. `awm:automated` and
+    `awm:initiator-can-merge` / `awm:initiator-cannot-merge`, plus a
+    `Requested-by: @login` trailer in PR bodies and `Co-authored-by` commit
+    trailers, so downstream systems can tell whether the work was driven by
+    someone with the right permissions.
+  - *Forced ownership* — assign the PR to the initiator and/or request their
+    review, or assign to the repository's CODEOWNERS.
+  - *Merge gating* — when the initiator lacks write access to the target
+    repository, AWM will not use the App's broader rights to merge on its
+    own. It requires an approval from someone who does have write access
+    (checked per reviewer), and optionally an *agent-assisted merge check*:
+    a reviewer agent step that checks the diff against policy and posts its
+    verdict as a review before merge. Policies can also require labels or
+    block merging entirely (`elevation: deny | qualified_approval | allow`).
+
 ## 12. API
 
 - REST + JSON under `/v1`, generated OpenAPI 3.1 spec, cursor pagination,
@@ -535,8 +628,8 @@ modal = "awm_modal:ModalBackend"
 ```
 
 Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
-`awm.agent_runtimes`, `awm.credentials`, `awm.secrets`, `awm.steps`,
-`awm.orchestrators`.
+`awm.agent_runtimes`, `awm.gateways`, `awm.credentials`, `awm.secrets`,
+`awm.steps`, `awm.orchestrators`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.
 
