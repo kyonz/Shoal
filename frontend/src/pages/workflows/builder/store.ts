@@ -216,10 +216,15 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   },
 
   setSpec: (spec, key) => {
-    const { layout, commit, selected } = get();
-    const nextLayout = autoLayout(spec.steps, pruneLayout(layout, spec.steps));
+    const { spec: prev, layout, commit, selected } = get();
+    const renamed = renamedSteps(prev.steps, spec.steps);
+    const carried = { ...layout };
+    for (const [from, to] of renamed) if (layout[from]) carried[to] = layout[from];
+    const nextLayout = autoLayout(spec.steps, pruneLayout(carried, spec.steps));
     commit({ spec, layout: nextLayout }, key);
-    if (selected && !spec.steps.some((s) => s.id === selected)) set({ selected: null });
+    const follow = selected ? renamed.get(selected) : undefined;
+    if (follow) set({ selected: follow });
+    else if (selected && !spec.steps.some((s) => s.id === selected)) set({ selected: null });
   },
 
   setMeta: (meta, key) => {
@@ -227,6 +232,22 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     commit({ meta: { ...cur, ...meta } }, key ?? "meta");
   },
 }));
+
+/**
+ * Steps whose id changed between two versions of the list (old id -> new id):
+ * a step at the same position whose old id is gone and whose new id is new.
+ * Editing an id in the YAML view then keeps its place on the canvas.
+ */
+export function renamedSteps(before: StepDoc[], after: StepDoc[]): Map<string, string> {
+  const oldIds = new Set(before.map((s) => s.id));
+  const newIds = new Set(after.map((s) => s.id));
+  const out = new Map<string, string>();
+  after.forEach((step, i) => {
+    const was = before[i];
+    if (was && !newIds.has(was.id) && !oldIds.has(step.id)) out.set(was.id, step.id);
+  });
+  return out;
+}
 
 export function isDirty(s: Pick<BuilderState, "spec" | "layout" | "meta" | "saved">): boolean {
   return snapshotKey(s) !== s.saved;
