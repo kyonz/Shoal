@@ -185,6 +185,7 @@ spec:
 | `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
 | `map` | Fan out a sub-list of steps over a list with a concurrency limit. |
 | `workflow` | Call another workflow as a child run. |
+| `decide` | Ask a decision model typed questions (choice / score / boolean) and branch on the answer and confidence. |
 
 Every step accepts `if`, `retry` (attempts, backoff), `timeout`, and
 `on_error` (`fail` · `continue` · `goto:<step>`). Steps form a DAG: by default
@@ -352,6 +353,49 @@ quality is measured, not assumed.
 - **Inline quality gates.** A `grade` step type scores an upstream output with
   a rubric inside a workflow, so a run can retry, escalate to a human or stop
   when quality is below a threshold.
+
+### 7.5 Decision models (System One / Jev)
+
+Many steps in an agentic system are not generation but *decisions*: is this
+ticket suitable for automation, is this tool call safe, which model should
+handle this, is this PR good enough to merge. Typed "System One" decision
+models such as TypeSafe's **Jev** answer exactly that: given a `state` (text
+or JSON) and named questions, they return typed answers with probabilities
+and a confidence value, in roughly 70-500 ms and at a fraction of LLM cost.
+They cannot generate text or code, so they complement agents rather than
+replace them.
+
+- **Decision providers** (`awm.decision_providers` entry point) share one
+  contract: `decide(state, questions) -> answers`. Question types are
+  `choice` (pick one of up to 255 options), `score` (place on an ordered
+  rubric) and `boolean` (Jev's *noul*: probability a statement is true).
+  Providers: `jev` (TypeSafe API via its SDK, or via OpenRouter / Vercel AI
+  Gateway where configured) and `llm` (any model through the gateways in
+  §7.3 using structured output) as the self-hostable fallback.
+- **`decide` step.** A workflow step that asks typed questions about any
+  expression (issue text, diff summary, prior outputs) and exposes
+  `answer`, `probabilities` and `confidence` for branching with `if`. A
+  `min_confidence` setting routes low-confidence decisions to a human
+  `approval` or to an LLM fallback instead of acting.
+- **Where AWM uses decisions natively:**
+  - *Trigger triage* — semantic trigger filters ("is this a reproducible bug
+    in scope for automation?") evaluated before a run starts.
+  - *Tool-call gating* — in the agent runtime, mutating tool calls are
+    screened (irreversibility, intent mismatch, scope) against thresholds;
+    calls above them are blocked or held for approval.
+  - *Model routing* — model policies (§7.3) can score task difficulty and
+    pick the model and effort from the result.
+  - *Campaign targeting* — classify targets (e.g. "repo has a test suite")
+    before fan-out so budget is not spent on unsuitable targets.
+  - *Merge checks and grading* — cheap rubric scores for the agent-assisted
+    merge check (§11.1), the `grade` step and online evals (§7.4).
+  - *Content screening* — flag likely prompt injection in fetched pages and
+    webhook payloads before they reach an agent (a filter, not a security
+    boundary).
+- **Caveats.** Jev is closed-weight and hosted only (no on-premises option),
+  which matters for data residency; performance figures are vendor claims.
+  Every decision use is therefore optional, provider-pluggable, logged with
+  its probabilities, and backed by thresholds the operator controls.
 
 ---
 
@@ -664,8 +708,8 @@ modal = "awm_modal:ModalBackend"
 ```
 
 Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
-`awm.agent_runtimes`, `awm.gateways`, `awm.credentials`, `awm.secrets`,
-`awm.steps`, `awm.orchestrators`.
+`awm.agent_runtimes`, `awm.gateways`, `awm.decision_providers`,
+`awm.credentials`, `awm.secrets`, `awm.steps`, `awm.orchestrators`, `awm.registries`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.
 
