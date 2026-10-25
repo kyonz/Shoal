@@ -250,6 +250,11 @@ Every agent and script step runs in a sandbox: `local`, `docker`, `kubernetes`, 
 `space` (which suspends and wakes during long waits) or any provider that speaks the remote sandbox
 protocol. Sandbox profiles are per namespace, so one team can run on Kubernetes while another uses E2B.
 
+Everything above is a plugin: integrations, model providers, sandboxes, secret backends, eval sinks,
+decision providers, agent runtimes and cloud credential providers all follow one pattern (a base
+class, an entry point and a contract test), so new ones install without engine changes
+([guide](docs/plugins.md)).
+
 ### Integrations, campaigns and blueprints
 - **GitHub, Jira, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
@@ -297,6 +302,7 @@ A Temporal orchestrator backend and a skills marketplace.
 | [Architecture](docs/architecture.md) | Concepts, the runtime, plugin contracts and the API surface |
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
+| [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
 | [Terraform provider](terraform-provider/docs/index.md) | Managing Shoal as code |
 | [Web UI](frontend/README.md) | Developing the frontend |
