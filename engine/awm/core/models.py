@@ -236,8 +236,58 @@ class SetStep(StepBase):
     values: dict[str, Any]
 
 
+class DecisionQuestion(Model):
+    """A typed question for a decision model (Jev-style System One, or an LLM fallback)."""
+
+    type: Literal["choice", "score", "boolean"]
+    instructions: str
+    options: dict[str, str] = Field(default_factory=dict, description="choice: option key -> description.")
+    levels: list[str] = Field(default_factory=list, description="score: ordered rubric levels, lowest first.")
+
+    @model_validator(mode="after")
+    def _check(self) -> DecisionQuestion:
+        if self.type == "choice" and not (2 <= len(self.options) <= 255):
+            raise ValueError("choice questions need 2-255 options")
+        if self.type == "score" and len(self.levels) < 2:
+            raise ValueError("score questions need at least 2 levels")
+        return self
+
+
+class DecideStep(StepBase):
+    """Ask a decision model typed questions about some state and branch on the answers."""
+
+    type: Literal["decide"] = "decide"  # type: ignore[misc]
+    provider: str | None = Field(None, description="Decision provider name; defaults to the tenant default.")
+    state: Any = Field(description="Text or JSON (expressions allowed) the questions are about.")
+    questions: dict[str, DecisionQuestion] = Field(min_length=1)
+    min_confidence: float | None = Field(None, ge=0, le=1)
+    on_low_confidence: Literal["continue", "fail", "approval"] = Field(
+        "continue", description="'approval' holds the run for a human when any answer is below min_confidence."
+    )
+
+
+class GradeStep(StepBase):
+    """Score an output against a rubric; fail or flag below a threshold."""
+
+    type: Literal["grade"] = "grade"  # type: ignore[misc]
+    provider: str | None = None
+    subject: Any = Field(description="What to grade (expression).")
+    instructions: str
+    levels: list[str] = Field(min_length=2, description="Ordered rubric levels, worst first.")
+    threshold: float = Field(0.7, ge=0, le=1, description="Minimum normalised score (0..1) to pass.")
+    on_fail: Literal["fail", "continue"] = "continue"
+
+
 Step = Annotated[
-    AgentStep | ActionStep | ScriptStep | WaitStep | ApprovalStep | WorkflowCallStep | SetStep,
+    AgentStep
+    | ActionStep
+    | ScriptStep
+    | WaitStep
+    | ApprovalStep
+    | WorkflowCallStep
+    | SetStep
+    | DecideStep
+    | GradeStep,
     Field(discriminator="type"),
 ]
 
@@ -438,6 +488,116 @@ class CampaignSpec(Model):
     policy: CampaignPolicy = Field(default_factory=CampaignPolicy)
 
 
+class IdentitySpec(Model):
+    """One person across systems, used to attribute runs to the human who drove them."""
+
+    display_name: str | None = None
+    email: str | None = None
+    github: str | None = Field(None, description="GitHub login.")
+    jira_account_id: str | None = None
+    slack_id: str | None = None
+    actors: list[str] = Field(
+        default_factory=list, description="AWM actors that are this person, e.g. 'user:dana@acme.com'."
+    )
+    github_token_secret: str | None = Field(None, description="Secret holding the user's linked GitHub OAuth token.")
+
+
+class GatewaySpec(Model):
+    """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...)."""
+
+    description: str | None = None
+    type: str = Field("anthropic", description="Provider plugin: anthropic, openai-compatible, scripted, ...")
+    base_url: str | None = None
+    api_key_secret: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelCandidate(Model):
+    model: str
+    gateway: str | None = Field(None, description="Gateway resource or provider plugin name.")
+    weight: float = Field(1.0, gt=0)
+    effort: str | None = None
+
+
+class ModelRuleMatch(Model):
+    agents: list[str] = Field(default_factory=list)
+    workflows: list[str] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
+    difficulty: list[str] = Field(default_factory=list, description="Match routed difficulty levels.")
+
+
+class ModelRule(Model):
+    name: str
+    match: ModelRuleMatch = Field(default_factory=ModelRuleMatch)
+    candidates: list[ModelCandidate] = Field(min_length=1)
+    strategy: Literal["fallback", "weighted"] = Field(
+        "fallback", description="'fallback' tries candidates in order; 'weighted' splits traffic (A/B)."
+    )
+
+
+class ModelPolicySpec(Model):
+    description: str | None = None
+    allow_models: list[str] = Field(default_factory=list, description="If set, only these models may run.")
+    deny_models: list[str] = Field(default_factory=list)
+    difficulty_router: DecisionQuestion | None = Field(
+        None, description="Optional score question; its level is matched by rules' match.difficulty."
+    )
+    decision_provider: str | None = None
+    rules: list[ModelRule] = Field(min_length=1)
+
+
+class BlueprintParam(Model):
+    type: Literal["string", "number", "boolean", "connection", "secret", "choice"] = "string"
+    description: str | None = None
+    integration: str | None = Field(None, description="For type=connection: the integration it must be.")
+    default: Any = None
+    options: list[str] = Field(default_factory=list)
+    required: bool = True
+
+
+class BlueprintSpec(Model):
+    title: str
+    summary: str
+    readme: str = ""
+    version: str = Field("0.1.0", pattern=r"^\d+\.\d+\.\d+([-+].+)?$")
+    icon: str | None = None
+    author: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    status: Literal["draft", "published", "promoted", "deprecated"] = "draft"
+    visibility: Literal["tenant", "install", "public"] = "tenant"
+    params: dict[str, BlueprintParam] = Field(default_factory=dict)
+    resources: list[dict[str, Any]] = Field(
+        min_length=1, description="Resource templates; ${{ params.* }} and ${{ prefix }} are substituted."
+    )
+
+
+class EvalCase(Model):
+    name: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    expect: dict[str, Any] = Field(default_factory=dict, description="Available to graders as `expect`.")
+
+
+class Grader(Model):
+    name: str
+    type: Literal["expression", "decision"] = "expression"
+    check: str | None = Field(None, description="expression: evaluated with outputs, expect, run.")
+    question: DecisionQuestion | None = Field(None, description="decision: a score or boolean question.")
+    state: Any = Field("${{ outputs }}", description="decision: state to send (expressions allowed).")
+    weight: float = Field(1.0, gt=0)
+
+
+class EvalSpec(Model):
+    description: str | None = None
+    workflow: str
+    cases: list[EvalCase] = Field(min_length=1)
+    graders: list[Grader] = Field(min_length=1)
+    threshold: float = Field(0.8, ge=0, le=1)
+    concurrency: int = Field(5, ge=1)
+    decision_provider: str | None = None
+
+
 # --------------------------------------------------------------------------- envelopes
 
 
@@ -499,14 +659,58 @@ class Campaign(ResourceBase):
     plural: ClassVar[str] = "campaigns"
 
 
+class Identity(ResourceBase):
+    kind: Literal["Identity"] = "Identity"
+    spec: IdentitySpec
+    plural: ClassVar[str] = "identities"
+
+
+class Gateway(ResourceBase):
+    kind: Literal["Gateway"] = "Gateway"
+    spec: GatewaySpec
+    plural: ClassVar[str] = "gateways"
+
+
+class ModelPolicy(ResourceBase):
+    kind: Literal["ModelPolicy"] = "ModelPolicy"
+    spec: ModelPolicySpec
+    plural: ClassVar[str] = "model-policies"
+
+
+class Blueprint(ResourceBase):
+    kind: Literal["Blueprint"] = "Blueprint"
+    spec: BlueprintSpec
+    plural: ClassVar[str] = "blueprints"
+
+
+class Eval(ResourceBase):
+    kind: Literal["Eval"] = "Eval"
+    spec: EvalSpec
+    plural: ClassVar[str] = "evals"
+
+
 AnyResource = Annotated[
-    Workflow | Agent | Skill | SandboxProfile | Connection | Trigger | Campaign,
+    Workflow
+    | Agent
+    | Skill
+    | SandboxProfile
+    | Connection
+    | Trigger
+    | Campaign
+    | Identity
+    | Gateway
+    | ModelPolicy
+    | Blueprint
+    | Eval,
     Field(discriminator="kind"),
 ]
 
 RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
-    for cls in (Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign)
+    for cls in (
+        Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
+        Identity, Gateway, ModelPolicy, Blueprint, Eval,
+    )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}
 
