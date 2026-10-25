@@ -80,6 +80,15 @@ resource "shoal_identity" "ada" {
   name = "ada"
   spec = { display_name = "Ada Lovelace", email = "ada@acme.example", github = "ada", actors = ["user:ada@acme.example"] }
 }
+
+resource "shoal_skill_source" "public" {
+  name = "public-skills"
+  spec = {
+    source = "git"
+    title  = "Public skills"
+    config = { url = "https://github.com/anthropics/skills", ref = "main", path = "skills" }
+  }
+}
 `, workflowYAML, greeting)
 }
 
@@ -99,6 +108,7 @@ func TestAccDeclarativeResources(t *testing.T) {
 					resource.TestCheckResourceAttr("shoal_workflow.inline", "version", "1"),
 					resource.TestMatchResourceAttr("shoal_connection.github", "status.webhook_url", regexp.MustCompile(`/v1/hooks/`)),
 					resource.TestCheckResourceAttr("shoal_identity.ada", "namespace", "shared"),
+					resource.TestCheckResourceAttr("shoal_skill_source.public", "namespace", "shared"),
 					resource.TestCheckResourceAttrSet("shoal_secret.token", "updated_at"),
 				),
 			},
@@ -120,6 +130,12 @@ func TestAccDeclarativeResources(t *testing.T) {
 				ResourceName:      "shoal_identity.ada",
 				ImportState:       true,
 				ImportStateId:     "ada",
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "shoal_skill_source.public",
+				ImportState:       true,
+				ImportStateId:     "public-skills",
 				ImportStateVerify: true,
 			},
 			{

@@ -1,0 +1,38 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+A skills marketplace the tenant imports skills from (a git repository, a registry, or any
+``shoal.skill_sources`` plugin). Tenant-wide; its secrets are read from the ``shared`` namespace.
+
+These are the top-level fields of the SkillSource spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `source` | string | **required** | Skill source plugin: git, registry, or any installed plugin. |
+| `title` | string | optional |  |
+| `description` | string | optional |  |
+| `config` | map | optional | Non-secret settings (see the plugin's schema). |
+| `secrets` | map | optional | Config field -> secret name in `shared`. |
+| `namespaces` | list of string | optional | Namespaces that may browse and import (empty: all). |
+| `enabled` | bool | optional |  Default: `true`. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

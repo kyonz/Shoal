@@ -1,0 +1,1 @@
+terraform import shoal_skill_source.anthropic anthropic-skills

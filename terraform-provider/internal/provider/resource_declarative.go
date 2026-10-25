@@ -43,6 +43,7 @@ var declarativeKinds = []declarativeKind{
 	{"eval", "Eval", "evals", false, "An evaluation suite: cases run against a workflow or agent and graded.", ""},
 	{"identity", "Identity", "identities", true, "A person across systems (email, GitHub login, Jira account, Shoal users), used to attribute runs and pull requests to the human who drove them. Tenant-wide.", ""},
 	{"blueprint", "Blueprint", "blueprints", true, "A blueprint in the tenant's catalogue: a versioned bundle of templated resources that namespace owners adopt into their namespace. Tenant-wide.", ""},
+	{"skill_source", "SkillSource", "skill-sources", true, "A skill source (marketplace): a git repository in the Agent Skills layout, a skill registry, or any installed skill source plugin, from which namespaces import skills. Tenant-wide and managed by tenant admins (`skill-sources:manage`); credentials are secrets in the `shared` namespace, never clear text.", ""},
 }
 
 type declarativeModel struct {
