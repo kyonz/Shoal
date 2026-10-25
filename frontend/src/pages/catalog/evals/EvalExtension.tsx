@@ -29,6 +29,7 @@ import { JsonField, TagInput } from "@/components/forms/SchemaForm";
 import { DecisionProviderSelect } from "../extensions";
 import type { EditorContext, EditorExtension } from "../ResourceEditorPage";
 import { ResourcePicker } from "../widgets";
+import { PlatformCard } from "./Platforms";
 import { isMissingEndpoint, pct, useEvalRuns, useEvalScores, useStartEvalRun } from "./api";
 
 interface EvalCase {
@@ -94,6 +95,7 @@ export const evalExtension: EditorExtension = {
     <>
       <CasesEditor ctx={ctx} />
       <GradersEditor ctx={ctx} />
+      <PlatformCard ctx={ctx} />
     </>
   ),
   actions: (ctx) => (ctx.isNew ? null : <RunEvalButton ctx={ctx} />),
