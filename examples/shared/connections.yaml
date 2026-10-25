@@ -1,0 +1,35 @@
+# Connections reference secrets by name. Create them first, e.g.:
+#   shoal secrets set github-token   ghp_...
+#   shoal secrets set github-webhook-secret  "$(openssl rand -hex 32)"
+apiVersion: shoal.dev/v1
+kind: Connection
+metadata:
+  name: github-acme
+  description: GitHub org "acme" (fine-grained token or GitHub App)
+spec:
+  integration: github
+  config:
+    # Attribution and governance (architecture §11.1). In "app" mode Shoal acts with
+    # this connection's credentials but keeps the initiator's authority visible
+    # (labels, Requested-by trailer) and enforced (merge gating).
+    attribution:
+      mode: app                    # or "user": act with the initiator's linked GitHub token
+      elevation: qualified_approval  # initiator without write access -> need a write-access approval
+      request_initiator_review: true
+      require_merge_check: false   # true: require a passing shoal/merge-check status
+  secrets:
+    token: github-token
+    webhook_secret: github-webhook-secret
+---
+apiVersion: shoal.dev/v1
+kind: Connection
+metadata:
+  name: jira-acme
+spec:
+  integration: jira
+  config:
+    base_url: https://acme.atlassian.net
+    email: automation@acme.example
+  secrets:
+    api_token: jira-api-token
+    webhook_secret: jira-webhook-secret

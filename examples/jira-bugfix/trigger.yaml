@@ -1,0 +1,16 @@
+# Fires when an issue moves into the "Ready for AI" column.
+# Point a Jira webhook (Issue updated) or an Automation "Send web request" at the
+# connection's webhook URL: `shoal connections webhook-url jira-acme`.
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata:
+  name: jira-ready-for-ai
+spec:
+  workflow: jira-bugfix
+  connection: jira-acme
+  event: issue_updated
+  filter: "{{ event.status_change and event.status_change.to == 'Ready for AI' }}"
+  inputs:
+    issue_key: "{{ event.issue_key }}"
+    repo: "{{ event.issue.fields.customfield_10050 or 'acme/api' }}"
+  dedupe_key: "{{ event.issue_key }}:{{ event.timestamp }}"

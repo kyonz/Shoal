@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "shoal.fullname" . }}
+  labels:
+    {{- include "shoal.labels" . | nindent 4 }}
+data:
+  SHOAL_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
+  SHOAL_CORS_ORIGINS: {{ (.Values.config.corsOrigins | default (list .Values.config.publicUrl)) | toJson | quote }}
+  SHOAL_DEFAULT_SANDBOX_BACKEND: {{ .Values.config.defaultSandboxBackend | quote }}
+  SHOAL_DEFAULT_DECISION_PROVIDER: {{ .Values.config.defaultDecisionProvider | quote }}
+  SHOAL_WORKER_CONCURRENCY: {{ .Values.config.workerConcurrency | quote }}
+  SHOAL_LEASE_SECONDS: {{ .Values.config.leaseSeconds | quote }}
+  SHOAL_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  SHOAL_LOG_JSON: {{ .Values.config.logJson | quote }}
+  SHOAL_ASSISTANT_ENABLED: {{ .Values.config.assistant.enabled | quote }}
+  SHOAL_ASSISTANT_GATEWAY: {{ .Values.config.assistant.gateway | quote }}
+  SHOAL_ASSISTANT_MODEL: {{ .Values.config.assistant.model | quote }}
+  SHOAL_ASSISTANT_EFFORT: {{ .Values.config.assistant.effort | quote }}
+  SHOAL_ASSISTANT_MAX_TURNS: {{ .Values.config.assistant.maxTurns | quote }}
+  SHOAL_ORCHESTRATOR: {{ .Values.orchestrator.type | quote }}
+  {{- if eq .Values.orchestrator.type "temporal" }}
+  {{- with .Values.orchestrator.temporal }}
+  SHOAL_TEMPORAL_ADDRESS: {{ required "orchestrator.temporal.address is required when orchestrator.type is temporal" .address | quote }}
+  SHOAL_TEMPORAL_NAMESPACE: {{ .namespace | quote }}
+  SHOAL_TEMPORAL_TASK_QUEUE: {{ .taskQueue | quote }}
+  SHOAL_TEMPORAL_TLS: {{ .tls | quote }}
+  SHOAL_TEMPORAL_PASS_TIMEOUT_SECONDS: {{ .passTimeoutSeconds | quote }}
+  SHOAL_TEMPORAL_RECONCILE_AFTER_SECONDS: {{ .reconcileAfterSeconds | quote }}
+  {{- if .mtlsSecret }}
+  SHOAL_TEMPORAL_TLS_CERT_PATH: /etc/shoal/temporal-tls/tls.crt
+  SHOAL_TEMPORAL_TLS_KEY_PATH: /etc/shoal/temporal-tls/tls.key
+  {{- if .mtlsCa }}
+  SHOAL_TEMPORAL_TLS_CA_PATH: /etc/shoal/temporal-tls/ca.crt
+  {{- end }}
+  {{- end }}
+  {{- if .versioning.buildId }}
+  SHOAL_TEMPORAL_BUILD_ID: {{ .versioning.buildId | quote }}
+  SHOAL_TEMPORAL_DEPLOYMENT_NAME: {{ .versioning.deploymentName | default .taskQueue | quote }}
+  SHOAL_TEMPORAL_VERSIONING_BEHAVIOR: {{ .versioning.behavior | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}

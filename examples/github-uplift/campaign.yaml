@@ -1,0 +1,36 @@
+apiVersion: shoal.dev/v1
+kind: Campaign
+metadata:
+  name: coverage-uplift
+  description: Every active repo I administer in acme to 100% test coverage.
+spec:
+  workflow: repo-uplift
+  targets:
+    connection: github-acme
+    resource: repository
+    filter:
+      org: acme
+      permission: admin
+      archived: false
+      fork: false
+    key: "{{ target.full_name }}"
+  inputs:
+    repo: "{{ target.full_name }}"
+    goal: Raise test coverage to 100%
+  policy:
+    concurrency: 10
+    runs_per_hour: 30
+    max_failures: 10
+    budget_usd: 500
+---
+# Optional: relaunch the campaign every Monday at 02:00 Auckland time.
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata:
+  name: weekly-coverage-uplift
+spec:
+  event: schedule
+  schedule: "0 2 * * MON"
+  timezone: Pacific/Auckland
+  campaign: coverage-uplift
+  enabled: false

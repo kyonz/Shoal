@@ -1,0 +1,69 @@
+{{- if .Values.kubernetesSandboxes.enabled }}
+{{- $rules := list
+  (dict "apiGroups" (list "") "resources" (list "pods") "verbs" (list "create" "get" "list" "watch" "delete"))
+  (dict "apiGroups" (list "") "resources" (list "pods/exec" "pods/log") "verbs" (list "create" "get")) }}
+{{- if .Values.kubernetesSandboxes.clusterWide }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "shoal.fullname" . }}-sandboxes
+  labels:
+    {{- include "shoal.labels" . | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "shoal.fullname" . }}-sandboxes
+  labels:
+    {{- include "shoal.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "shoal.fullname" . }}-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "shoal.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
+{{- range $ns := .Values.kubernetesSandboxes.namespaces }}
+{{- if $.Values.kubernetesSandboxes.createNamespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    {{- include "shoal.labels" $ | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "shoal.fullname" $ }}-sandboxes
+  namespace: {{ $ns }}
+  labels:
+    {{- include "shoal.labels" $ | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "shoal.fullname" $ }}-sandboxes
+  namespace: {{ $ns }}
+  labels:
+    {{- include "shoal.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "shoal.fullname" $ }}-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "shoal.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,17 @@
+apiVersion: shoal.dev/v1
+kind: Agent
+metadata:
+  name: bugfixer
+spec:
+  description: Reproduces, fixes and tests a reported bug, then pushes a branch.
+  provider: anthropic
+  model: claude-opus-5-5
+  instructions: |
+    You are a senior engineer on call. Reproduce the bug with a failing test first, fix the root cause
+    (not the symptom), and make sure the whole test suite passes. Keep the diff minimal.
+  tools: [shell, read_file, write_file, edit_file, list_files]
+  credentials: [github]
+  limits:
+    max_turns: 120
+    timeout: 90m
+    budget_usd: 15

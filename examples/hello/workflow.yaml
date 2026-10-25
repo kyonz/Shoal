@@ -1,0 +1,16 @@
+# The smallest Shoal workflow: no model, sandbox or connection needed.
+#   shoal apply -f examples/hello/ && shoal run hello -i name=Dana --wait
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata:
+  name: hello
+  description: Says hello. Use it to check that a fresh server runs workflows.
+spec:
+  inputs:
+    name: {type: string}
+  outputs:
+    greeting: "{{ steps.greet.output.text }}"
+  steps:
+    - id: greet
+      type: set
+      values: {text: "Hello {{ inputs.name }}"}

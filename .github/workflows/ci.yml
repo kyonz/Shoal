@@ -1,0 +1,175 @@
+name: CI
+
+# Manual only: builds and tests run locally with scripts/check.sh.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: Engine (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+      - name: Install
+        run: uv sync --locked --all-extras
+      - name: Ruff
+        run: uv run ruff check --output-format=github .
+      - name: Pytest
+        run: uv run pytest -q
+      - name: CLI smoke test
+        run: uv run shoal --help >/dev/null
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Detect the frontend
+        id: detect
+        run: |
+          if [ -f frontend/package.json ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::notice::no frontend/ yet; skipping"; fi
+          if [ -f frontend/package-lock.json ]; then echo "lockfile=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-node@v5
+        if: steps.detect.outputs.present == 'true'
+        with:
+          node-version: 22
+          cache: ${{ steps.detect.outputs.lockfile == 'true' && 'npm' || '' }}
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Lint
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run lint --if-present
+      - name: Type check
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run typecheck --if-present
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm test --if-present
+      - name: Build
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run build
+
+  terraform-provider:
+    name: Terraform provider
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform-provider
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: terraform-provider/go.mod
+          cache-dependency-path: terraform-provider/go.sum
+      - name: Format
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Unit tests
+        run: go test ./...
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+      - name: Start an engine for acceptance tests
+        working-directory: engine
+        env:
+          SHOAL_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/acc.db
+          SHOAL_ADMIN_TOKEN: acc-admin-token
+          SHOAL_PUBLIC_URL: http://127.0.0.1:8080
+          SHOAL_LOCAL_SANDBOX_ROOT: ${{ runner.temp }}/sandboxes
+        run: |
+          uv sync --locked
+          nohup uv run shoal serve --port 8080 > "${{ runner.temp }}/engine.log" 2>&1 &
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
+          key=$(uv run shoal --server http://127.0.0.1:8080 --token acc-admin-token tenants create acc -o json | jq -r .api_key)
+          echo "::add-mask::$key"
+          echo "SHOAL_ENDPOINT=http://127.0.0.1:8080" >> "$GITHUB_ENV"
+          echo "SHOAL_API_KEY=$key" >> "$GITHUB_ENV"
+      - name: Acceptance tests
+        env:
+          TF_ACC: "1"
+        run: go test ./... -v -count=1 -timeout 20m
+      - name: Engine log
+        if: failure()
+        run: cat "${{ runner.temp }}/engine.log"
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - name: Lint
+        run: helm lint --strict deploy/helm/shoal
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin kubeconform
+      - name: Render and validate
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/shoal
+          helm template shoal "$chart" | kubeconform -strict -summary -skip ServiceMonitor
+          helm template shoal "$chart" \
+            --set postgresql.enabled=false,database.url=postgresql+asyncpg://u:p@db/shoal \
+            --set ingress.enabled=true,api.autoscaling.enabled=true,worker.autoscaling.enabled=true \
+            --set kubernetesSandboxes.enabled=true,metrics.serviceMonitor.enabled=true,api.embeddedWorker=true \
+            | kubeconform -strict -summary -skip ServiceMonitor
+          helm template shoal "$chart" --set secrets.existingSecret=shoal-creds,worker.enabled=false,kubernetesSandboxes.enabled=true,kubernetesSandboxes.clusterWide=true \
+            | kubeconform -strict -summary
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          tags: shoal:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker run -d --name shoal -p 8080:8080 -e SHOAL_ADMIN_TOKEN=ci shoal:ci
+          for _ in $(seq 1 30); do curl -sf http://localhost:8080/readyz && break; sleep 1; done
+          docker run --rm --network host shoal:ci --server http://localhost:8080 --token ci tenants create ci
+          docker logs shoal
+      - name: Validate docker compose
+        run: docker compose -f deploy/docker-compose.yaml config -q

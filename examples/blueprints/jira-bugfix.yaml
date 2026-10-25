@@ -1,0 +1,172 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: jira-bugfix
+  description: Acceptance journey J2
+spec:
+  title: Jira bugfix with writeback
+  summary: When a ticket moves to Ready for AI, an agent fixes the bug, opens a PR and reports back on the ticket.
+  version: 1.0.0
+  status: featured
+  author: Shoal
+  tags:
+  - jira
+  - github
+  - bugfix
+  categories:
+  - engineering
+  readme: |
+    Adopt with your Jira and GitHub connections. Then point a Jira webhook (Issue updated) at the Jira connection's webhook URL.
+    Tickets moved into the **Ready for AI** column are fixed on a branch, a PR is opened and the ticket gets a comment with the result.
+    Tickets need the repository (owner/name) in custom field 10050; edit the trigger after adopting to use another field.
+  params:
+    jira:
+      type: connection
+      integration: jira
+      description: Jira site to watch and write back to.
+    github:
+      type: connection
+      integration: github
+      description: GitHub connection used to push the fix and open the PR.
+  resources:
+  - kind: Agent
+    metadata:
+      name: '{{ prefix }}bugfixer'
+    spec:
+      description: Reproduces, fixes and tests a reported bug, then pushes a branch.
+      provider: anthropic
+      model: claude-opus-5-5
+      instructions: |
+        You are a senior engineer on call. Reproduce the bug with a failing test first, fix the root cause
+        (not the symptom), and make sure the whole test suite passes. Keep the diff minimal.
+      tools:
+      - shell
+      - read_file
+      - write_file
+      - edit_file
+      - list_files
+      credentials:
+      - github
+      limits:
+        max_turns: 120
+        timeout: 90m
+        budget_usd: 15
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}jira-bugfix'
+      description: Fix the bug in a Jira ticket, open a PR and report back on the ticket.
+    spec:
+      inputs:
+        issue_key:
+          type: string
+        repo:
+          type: string
+          description: owner/name of the repository to fix
+      connections:
+        jira: '{{ params.jira }}'
+        github: '{{ params.github }}'
+      defaults:
+        agent: '{{ prefix }}bugfixer'
+      steps:
+      - id: issue
+        type: action
+        action: jira.get_issue
+        with:
+          key: '{{ inputs.issue_key }}'
+      - id: start
+        type: action
+        action: jira.transition_issue
+        with:
+          key: '{{ inputs.issue_key }}'
+          to: In Progress
+        on_error: continue
+      - id: fix
+        type: agent
+        needs:
+        - issue
+        prompt: |
+          Fix this bug in https://github.com/{{ inputs.repo }}.
+
+          {{ steps.issue.output.key }}: {{ steps.issue.output.summary }}
+
+          {{ steps.issue.output.description }}
+
+          Clone the repository, create the branch `fix/{{ inputs.issue_key | lower }}`, add a regression
+          test, fix the bug, run the full test suite, commit referencing {{ inputs.issue_key }} and push.
+        outputs:
+          tests_passed:
+            type: boolean
+          branch:
+            type: string
+          root_cause:
+            type: string
+          test_summary:
+            type: string
+            description: Test results, e.g. 412 passed, 0 failed
+        on_error: continue
+      - id: pr
+        type: action
+        needs:
+        - fix
+        - start
+        if: '{{ steps.fix.status == ''succeeded'' and steps.fix.output.tests_passed }}'
+        action: github.create_pull_request
+        with:
+          repo: '{{ inputs.repo }}'
+          head: '{{ steps.fix.output.branch }}'
+          title: '{{ inputs.issue_key }}: {{ steps.issue.output.summary }}'
+          body: |
+            Fixes [{{ inputs.issue_key }}]({{ steps.issue.output.url }}).
+
+            **Root cause:** {{ steps.fix.output.root_cause }}
+
+            **Tests:** {{ steps.fix.output.test_summary }}
+      - id: report_success
+        type: action
+        if: '{{ steps.pr.status == ''succeeded'' }}'
+        action: jira.add_comment
+        with:
+          key: '{{ inputs.issue_key }}'
+          body: |
+            Shoal opened a fix: {{ steps.pr.output.url }}
+
+            Root cause: {{ steps.fix.output.root_cause }}
+            Tests: {{ steps.fix.output.test_summary }}
+      - id: to_review
+        type: action
+        if: '{{ steps.pr.status == ''succeeded'' }}'
+        action: jira.transition_issue
+        with:
+          key: '{{ inputs.issue_key }}'
+          to: In Review
+        on_error: continue
+      - id: report_failure
+        type: action
+        needs:
+        - pr
+        if: '{{ steps.pr.status != ''succeeded'' }}'
+        action: jira.add_comment
+        with:
+          key: '{{ inputs.issue_key }}'
+          body: |
+            Shoal could not produce a passing fix automatically.
+
+            {{ steps.fix.output.summary or steps.fix.error.message }}
+
+            Run: {{ run.url }}
+      outputs:
+        pr_url: '{{ steps.pr.output.url }}'
+        tests_passed: '{{ steps.fix.output.tests_passed or false }}'
+  - kind: Trigger
+    metadata:
+      name: '{{ prefix }}jira-ready-for-ai'
+    spec:
+      workflow: '{{ prefix }}jira-bugfix'
+      connection: '{{ params.jira }}'
+      event: issue_updated
+      filter: '{{ event.status_change and event.status_change.to == ''Ready for AI'' and event.issue.fields.customfield_10050
+        }}'
+      inputs:
+        issue_key: '{{ event.issue_key }}'
+        repo: '{{ event.issue.fields.customfield_10050 }}'
+      dedupe_key: '{{ event.issue_key }}:{{ event.timestamp }}'

@@ -1,0 +1,231 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: github-uplift
+  description: Acceptance journey J1
+spec:
+  title: GitHub org uplift
+  summary: Raise every repository in an org towards a goal (100% coverage by default), wait up to a week for review, merge
+    where allowed.
+  version: 1.0.0
+  status: featured
+  author: Shoal
+  tags:
+  - github
+  - campaign
+  - coverage
+  categories:
+  - engineering
+  readme: |
+    Adopt, then launch the campaign from Campaigns (or enable its weekly schedule trigger).
+    Each repository gets a PR; the run waits up to 7 days for review and merges when the initiator has merge rights.
+  params:
+    github:
+      type: connection
+      integration: github
+      description: GitHub connection with access to the org.
+    org:
+      type: string
+      description: GitHub organisation to uplift.
+    goal:
+      type: string
+      default: Raise test coverage to 100%
+      description: What each PR should achieve.
+    budget_usd:
+      type: number
+      default: 500
+      description: Campaign spend limit in USD.
+    sandbox:
+      type: string
+      default: default
+      description: Sandbox profile the agent runs in.
+  resources:
+  - kind: Skill
+    metadata:
+      name: '{{ prefix }}test-coverage'
+    spec:
+      description: How to measure and raise test coverage across common stacks.
+      instructions: |
+        # Raising test coverage
+
+        1. Detect the stack (pyproject/setup.cfg -> pytest + coverage.py; package.json -> jest/vitest --coverage;
+           go.mod -> go test -cover; Cargo.toml -> cargo llvm-cov).
+        2. Measure the baseline before changing anything and record it.
+        3. Write focused, meaningful tests for untested branches. Never delete or weaken existing tests, never
+           add coverage-exclusion pragmas to hit the number, and do not change production behaviour.
+        4. Re-run the full suite; every test must pass. Measure coverage again.
+        5. If 100% is unreachable without contortions (generated code, platform branches), stop at a sensible
+           ceiling and explain the remaining gaps.
+  - kind: Agent
+    metadata:
+      name: '{{ prefix }}uplift'
+    spec:
+      description: Raises a repository to a quality goal and pushes a branch.
+      provider: anthropic
+      model: claude-opus-5-5
+      instructions: |
+        You are a senior engineer improving a repository to meet a quality goal. Keep changes focused,
+        idiomatic for the codebase, and easy to review. Always run the full test suite before finishing.
+      skills:
+      - '{{ prefix }}test-coverage'
+      tools:
+      - shell
+      - read_file
+      - write_file
+      - edit_file
+      - list_files
+      credentials:
+      - github
+      limits:
+        max_turns: 150
+        timeout: 2h
+        budget_usd: 20
+      provider_config:
+        effort: high
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}repo-uplift'
+      description: Uplift one repository, wait up to a week for review, merge when allowed.
+    spec:
+      inputs:
+        repo:
+          type: string
+          description: owner/name
+        goal:
+          type: string
+          default: Raise test coverage to 100%
+        merge_method:
+          type: string
+          default: squash
+          enum:
+          - merge
+          - squash
+          - rebase
+      connections:
+        github: '{{ params.github }}'
+      defaults:
+        agent: '{{ prefix }}uplift'
+        sandbox: '{{ params.sandbox }}'
+      steps:
+      - id: uplift
+        type: agent
+        prompt: |
+          Repository: https://github.com/{{ inputs.repo }}
+          Goal: {{ inputs.goal }}
+
+          Clone the repository into the workspace, create the branch `shoal/uplift-{{ run.id }}`, make the
+          changes needed to reach the goal, run the full test suite, commit with a clear message and
+          `git push -u origin` the branch. If the goal is already met, change nothing and set changed=false.
+        outputs:
+          changed:
+            type: boolean
+            description: True if a branch with changes was pushed
+          branch:
+            type: string
+            required: false
+          metric_before:
+            type: number
+            required: false
+          metric_after:
+            type: number
+            required: false
+          pr_body:
+            type: string
+            required: false
+            description: Markdown PR description
+        retry:
+          max_attempts: 2
+          backoff: 5m
+      - id: open_pr
+        type: action
+        if: '{{ steps.uplift.output.changed }}'
+        action: github.create_pull_request
+        with:
+          repo: '{{ inputs.repo }}'
+          head: '{{ steps.uplift.output.branch }}'
+          title: 'chore: {{ inputs.goal }}'
+          body: |
+            {{ steps.uplift.output.pr_body }}
+
+            ---
+            Opened by Shoal ([run]({{ run.url }})). This PR is merged automatically once approved.
+          labels:
+          - automated
+      - id: await_review
+        type: wait
+        if: '{{ steps.open_pr.status == ''succeeded'' }}'
+        condition:
+          action: github.get_pull_request
+          with:
+            repo: '{{ inputs.repo }}'
+            number: '{{ steps.open_pr.output.number }}'
+          check: '{{ result.review_decision == ''approved'' or result.state != ''open'' }}'
+          poll_interval: 30m
+          wake_on:
+          - github:pr:{{ inputs.repo }}#{{ steps.open_pr.output.number }}
+        max_wait: 7d
+        on_timeout: continue
+      - id: merge
+        type: action
+        if: '{{ steps.await_review.output.satisfied and steps.await_review.output.result.state == ''open'' }}'
+        action: github.merge_pull_request
+        with:
+          repo: '{{ inputs.repo }}'
+          number: '{{ steps.open_pr.output.number }}'
+          method: '{{ inputs.merge_method }}'
+      - id: report_unmerged
+        type: action
+        needs:
+        - merge
+        if: '{{ steps.merge.status == ''succeeded'' and not steps.merge.output.merged }}'
+        action: github.add_comment
+        with:
+          repo: '{{ inputs.repo }}'
+          number: '{{ steps.open_pr.output.number }}'
+          body: 'Approved, but Shoal could not merge: {{ steps.merge.output.reason }}'
+      - id: nudge
+        type: action
+        needs:
+        - await_review
+        if: '{{ steps.await_review.output.timed_out }}'
+        action: github.add_comment
+        with:
+          repo: '{{ inputs.repo }}'
+          number: '{{ steps.open_pr.output.number }}'
+          body: No review after 7 days, so this PR was left open for a human to decide.
+      outputs:
+        pr_url: '{{ steps.open_pr.output.url }}'
+        merged: '{{ steps.merge.output.merged or false }}'
+        metric_after: '{{ steps.uplift.output.metric_after }}'
+  - kind: Campaign
+    metadata:
+      name: '{{ prefix }}coverage-uplift'
+      description: Every active repo I administer in acme to 100% test coverage.
+    spec:
+      workflow: '{{ prefix }}repo-uplift'
+      targets:
+        connection: '{{ params.github }}'
+        resource: repository
+        filter:
+          org: '{{ params.org }}'
+          permission: admin
+          archived: false
+          fork: false
+        key: '{{ target.full_name }}'
+      inputs:
+        repo: '{{ target.full_name }}'
+        goal: '{{ params.goal }}'
+      policy:
+        concurrency: 10
+        runs_per_hour: 30
+        max_failures: 10
+        budget_usd: '{{ params.budget_usd }}'
+  - kind: Trigger
+    metadata:
+      name: '{{ prefix }}weekly-coverage-uplift'
+    spec:
+      event: schedule
+      schedule: 0 2 * * MON
+      timezone: Pacific/Auckland
+      campaign: '{{ prefix }}coverage-uplift'
+      enabled: false

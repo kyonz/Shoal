@@ -1,0 +1,203 @@
+# Default values for the shoal chart.
+
+image:
+  repository: ghcr.io/kyonz/ai-workflow-manager
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Server settings, passed as SHOAL_* environment variables to every pod.
+config:
+  # External base URL: webhook URLs, A2A agent cards and OIDC redirects use it.
+  publicUrl: "http://localhost:8080"
+  corsOrigins: []
+  defaultSandboxBackend: local
+  defaultDecisionProvider: llm
+  workerConcurrency: 16
+  leaseSeconds: 60
+  logLevel: INFO
+  logJson: true
+  # The chat assistant in the UI (POST /v1/assistant/chat). gateway is a
+  # tenant Gateway resource or a provider plugin name.
+  assistant:
+    enabled: true
+    gateway: anthropic
+    model: claude-opus-5-5
+    effort: medium
+    maxTurns: 16
+
+# What drives runs. "builtin" needs nothing but the database. "temporal" hands
+# scheduling (durable timers, wake-ups, retrying passes whose worker died) to a
+# Temporal cluster you already run; Shoal's database stays the source of truth
+# for resources, runs, steps, events and approvals. See docs/temporal.md.
+orchestrator:
+  type: builtin
+  temporal:
+    # Frontend host:port, e.g. temporal-frontend.temporal.svc:7233 or <ns>.<account>.tmprl.cloud:7233
+    address: ""
+    namespace: default
+    # Give each Shoal installation that shares a Temporal namespace its own task queue.
+    taskQueue: shoal
+    tls: false
+    # API key (Temporal Cloud) from a Secret you manage; implies TLS.
+    apiKeySecret:
+      name: ""
+      key: api-key
+    # mTLS: a Secret with tls.crt and tls.key, mounted into every pod; set mtlsCa
+    # when it also holds the server's CA as ca.crt.
+    mtlsSecret: ""
+    mtlsCa: false
+    passTimeoutSeconds: 86400
+    reconcileAfterSeconds: 60
+    # Temporal worker versioning: set buildId (e.g. the image tag) to turn it on.
+    versioning:
+      buildId: ""
+      deploymentName: ""
+      behavior: auto-upgrade
+
+# Credentials. Leave secretKey/adminToken empty to generate them once (they are
+# kept across upgrades), or point existingSecret at a Secret you manage with keys
+# SHOAL_SECRET_KEY, SHOAL_ADMIN_TOKEN and, when the database is external,
+# SHOAL_DATABASE_URL.
+secrets:
+  existingSecret: ""
+  secretKey: ""
+  adminToken: ""
+
+# External database. Ignored when postgresql.enabled is true.
+database:
+  # e.g. postgresql+asyncpg://shoal:password@db.example.com:5432/shoal
+  url: ""
+
+# A single-instance Postgres for evaluation and small installs. Use a managed
+# or operator-run database in production and set database.url instead.
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    username: shoal
+    database: shoal
+    # Generated once when empty.
+    password: ""
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+
+# Extra environment for every Shoal pod (model provider keys, sandbox services, ...).
+extraEnv: []
+#  - name: ANTHROPIC_API_KEY
+#    valueFrom: {secretKeyRef: {name: llm-keys, key: anthropic}}
+extraEnvFrom: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # Annotations for workload identity (e.g. eks.amazonaws.com/role-arn, iam.gke.io/gcp-service-account).
+  # With IRSA here, set SHOAL_AWS_AMBIENT=true (extraEnv) so cloud identities with trust "ambient" can
+  # assume namespace roles through this deployment role (docs/cloud-identities.md).
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+api:
+  replicaCount: 2
+  # Also run a worker inside each API pod (small installs can then set worker.enabled=false).
+  embeddedWorker: false
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 75
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+worker:
+  enabled: true
+  replicaCount: 2
+  # Fire schedules and campaign ticks (leases keep this exactly-once across workers).
+  scheduler: true
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 2Gi}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 75
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Scratch space for 'local' sandboxes.
+  sandboxVolume:
+    sizeLimit: 10Gi
+  terminationGracePeriodSeconds: 60
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: shoal.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: shoal-tls
+  #    hosts: [shoal.example.com]
+
+# Let workers run sandboxes as pods ('kubernetes' sandbox backend).
+kubernetesSandboxes:
+  enabled: false
+  # Namespaces sandboxes run in (the profile's 'namespace'). Roles are created in each.
+  namespaces: [shoal-sandboxes]
+  createNamespaces: true
+  # Use a ClusterRole instead, e.g. for per-tenant namespaces like 'shoal-{tenant}'.
+  clusterWide: false
+
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}

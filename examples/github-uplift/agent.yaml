@@ -1,0 +1,38 @@
+apiVersion: shoal.dev/v1
+kind: Skill
+metadata:
+  name: test-coverage
+spec:
+  description: How to measure and raise test coverage across common stacks.
+  instructions: |
+    # Raising test coverage
+
+    1. Detect the stack (pyproject/setup.cfg -> pytest + coverage.py; package.json -> jest/vitest --coverage;
+       go.mod -> go test -cover; Cargo.toml -> cargo llvm-cov).
+    2. Measure the baseline before changing anything and record it.
+    3. Write focused, meaningful tests for untested branches. Never delete or weaken existing tests, never
+       add coverage-exclusion pragmas to hit the number, and do not change production behaviour.
+    4. Re-run the full suite; every test must pass. Measure coverage again.
+    5. If 100% is unreachable without contortions (generated code, platform branches), stop at a sensible
+       ceiling and explain the remaining gaps.
+---
+apiVersion: shoal.dev/v1
+kind: Agent
+metadata:
+  name: uplift
+spec:
+  description: Raises a repository to a quality goal and pushes a branch.
+  provider: anthropic
+  model: claude-opus-5-5
+  instructions: |
+    You are a senior engineer improving a repository to meet a quality goal. Keep changes focused,
+    idiomatic for the codebase, and easy to review. Always run the full test suite before finishing.
+  skills: [test-coverage]
+  tools: [shell, read_file, write_file, edit_file, list_files]
+  credentials: [github]
+  limits:
+    max_turns: 150
+    timeout: 2h
+    budget_usd: 20
+  provider_config:
+    effort: high

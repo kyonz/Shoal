@@ -1,0 +1,83 @@
+# Shoal with Postgres: the API server, one worker and the database.
+#
+#   cp deploy/.env.example deploy/.env    # then set real secrets
+#   docker compose -f deploy/docker-compose.yaml up -d --build
+#   shoal --server http://localhost:8080 --token "$SHOAL_ADMIN_TOKEN" tenants create acme
+#
+# Scale workers with: docker compose -f deploy/docker-compose.yaml up -d --scale worker=3
+#
+# Runs are driven by the database by default. To hand scheduling to a Temporal
+# cluster you already run, set SHOAL_ORCHESTRATOR=temporal and
+# SHOAL_TEMPORAL_ADDRESS (plus the namespace, task queue, API key or TLS
+# variables you need) in deploy/.env. To try it with a local dev server:
+#   docker compose -f deploy/docker-compose.yaml -f deploy/docker-compose.temporal.yaml up -d --build
+
+name: shoal
+
+x-shoal: &shoal
+  image: ${SHOAL_IMAGE:-shoal:local}
+  restart: unless-stopped
+  environment:
+    SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@postgres:5432/shoal
+    SHOAL_SECRET_KEY: ${SHOAL_SECRET_KEY:-dev-insecure-secret-key-change-me}
+    SHOAL_ADMIN_TOKEN: ${SHOAL_ADMIN_TOKEN:-dev-admin-token}
+    SHOAL_PUBLIC_URL: ${SHOAL_PUBLIC_URL:-http://localhost:8080}
+    SHOAL_CORS_ORIGINS: ${SHOAL_CORS_ORIGINS:-["http://localhost:8080","http://localhost:5173"]}
+    SHOAL_DEFAULT_SANDBOX_BACKEND: ${SHOAL_DEFAULT_SANDBOX_BACKEND:-local}
+    SHOAL_LOG_LEVEL: ${SHOAL_LOG_LEVEL:-INFO}
+    SHOAL_LOG_JSON: ${SHOAL_LOG_JSON:-false}
+    SHOAL_ORCHESTRATOR: ${SHOAL_ORCHESTRATOR:-builtin}
+    SHOAL_TEMPORAL_ADDRESS: ${SHOAL_TEMPORAL_ADDRESS:-localhost:7233}
+    SHOAL_TEMPORAL_NAMESPACE: ${SHOAL_TEMPORAL_NAMESPACE:-default}
+    SHOAL_TEMPORAL_TASK_QUEUE: ${SHOAL_TEMPORAL_TASK_QUEUE:-shoal}
+    SHOAL_TEMPORAL_TLS: ${SHOAL_TEMPORAL_TLS:-false}
+    SHOAL_TEMPORAL_API_KEY: ${SHOAL_TEMPORAL_API_KEY:-}
+    # Model providers and sandbox services read their own variables.
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    E2B_API_KEY: ${E2B_API_KEY:-}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shoal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shoal}
+      POSTGRES_DB: shoal
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shoal -d shoal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *shoal
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["serve", "--no-worker"]
+    ports:
+      - "${SHOAL_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *shoal
+    command: ["worker"]
+    volumes:
+      - sandboxes:/var/lib/shoal/sandboxes
+      # Uncomment to let the 'docker' sandbox backend start containers on this host.
+      # - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      disable: true
+    depends_on:
+      # The API creates the schema on start; workers wait for it.
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  sandboxes:

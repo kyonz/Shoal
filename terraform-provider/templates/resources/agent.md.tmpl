@@ -1,0 +1,43 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+These are the top-level fields of the Agent spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `description` | string | optional |  |
+| `provider` | string | optional |  Default: `anthropic`. |
+| `model` | string | optional |  Default: `claude-opus-5-5`. |
+| `runtime` | string | optional | Agent runtime plugin: tool-loop or cli. Default: `tool-loop`. |
+| `instructions` | string | optional | System prompt. Default: ``. |
+| `skills` | list of string | optional |  |
+| `tools` | list of string | optional | Built-in tools, integration actions ('github.create_pull_request', 'github.*'). |
+| `subagents` | list of string | optional | Agents this agent may delegate to. |
+| `credentials` | list of string | optional | Integrations whose short-lived credentials are injected into the sandbox env, e.g. 'github' or 'github:github-acme' (integration:connection). |
+| `sandbox` | string | optional |  |
+| `env` | map | optional | Sandbox env; values may use expressions. |
+| `limits` | object | optional |  |
+| `provider_config` | map | optional | Model settings (temperature, effort, ...). Endpoints and credentials belong on a Gateway. |
+| `runtime_config` | map | optional |  |
+| `guard` | object | optional | Optional decision-model screening of tool calls. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

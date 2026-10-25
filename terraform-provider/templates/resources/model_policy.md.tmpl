@@ -1,0 +1,34 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+These are the top-level fields of the ModelPolicy spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `description` | string | optional |  |
+| `allow_models` | list of string | optional | If set, only these models may run. |
+| `deny_models` | list of string | optional |  |
+| `difficulty_router` | object | optional | Optional score question; its level is matched by rules' match.difficulty. |
+| `decision_provider` | string | optional |  |
+| `rules` | list of object | **required** |  |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

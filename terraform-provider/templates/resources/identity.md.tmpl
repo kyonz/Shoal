@@ -1,0 +1,37 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+One person across systems, used to attribute runs to the human who drove them.
+
+These are the top-level fields of the Identity spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `display_name` | string | optional |  |
+| `email` | string | optional |  |
+| `github` | string | optional | GitHub login. |
+| `jira_account_id` | string | optional |  |
+| `slack_id` | string | optional |  |
+| `actors` | list of string | optional | Shoal actors that are this person, e.g. 'user:dana@acme.com'. |
+| `github_token_secret` | string | optional | Secret holding the user's linked GitHub OAuth token. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

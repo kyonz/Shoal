@@ -1,0 +1,34 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+These are the top-level fields of the Campaign spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `description` | string | optional |  |
+| `workflow` | string | **required** |  |
+| `workflow_version` | number | optional | Pin to this workflow version; omitted, each launch pins the version current at launch. |
+| `targets` | object | **required** |  |
+| `inputs` | map | optional | Workflow inputs (expressions over target). |
+| `policy` | object | optional |  |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

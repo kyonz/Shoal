@@ -1,0 +1,35 @@
+# A script step (Python, no model needed) followed by a human approval.
+#   shoal apply -f examples/shared/sandboxes.yaml -f examples/triage-report/
+#   shoal run triage-report        # then approve the "publish" step on the run page in the UI
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata:
+  name: triage-report
+  description: Summarise open issues with a script, then ask a human to publish the report.
+spec:
+  inputs:
+    issues: {type: array, default: [{id: 1, label: bug}, {id: 2, label: bug}, {id: 3, label: feature}]}
+  outputs:
+    summary: "{{ steps.summarise.output.summary }}"
+  steps:
+    - id: summarise
+      type: script
+      language: python
+      sandbox: default             # the local profile in examples/shared
+      inputs: {issues: "{{ inputs.issues }}"}
+      outputs:
+        summary: {type: string}
+        bugs: {type: integer}
+      code: |
+        import shoal_step
+        issues = shoal_step.inputs["issues"]
+        bugs = sum(1 for i in issues if i["label"] == "bug")
+        shoal_step.set_outputs({"bugs": bugs, "summary": f"{len(issues)} open issues, {bugs} bugs"})
+    - id: publish
+      type: approval
+      needs: [summarise]
+      message: "Publish the triage report: {{ steps.summarise.output.summary }}?"
+    - id: done
+      type: set
+      needs: [publish]
+      values: {published: true}

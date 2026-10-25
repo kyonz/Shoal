@@ -1,0 +1,41 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+These are the top-level fields of the SandboxProfile spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `description` | string | optional |  |
+| `backend` | string | optional |  Default: `local`. |
+| `image` | string | optional | Container image or template (backend specific). |
+| `cpu` | number | optional |  |
+| `memory_mb` | number | optional |  |
+| `disk_mb` | number | optional |  |
+| `env` | map | optional |  |
+| `workdir` | string | optional |  Default: `/workspace`. |
+| `ttl` | string | optional |  Default: `PT4H`. |
+| `network` | object | optional |  |
+| `scope` | one of `step`, `run` | optional | 'run' shares one sandbox (and workspace) across all steps of a run. Default: `run`. |
+| `suspend_on_wait` | bool | optional | Suspend run-scoped sandboxes during long waits. Default: `true`. |
+| `config` | map | optional | Backend-specific settings. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}
