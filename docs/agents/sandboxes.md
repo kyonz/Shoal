@@ -67,17 +67,19 @@ Liveness is tracked at the **run** level, not the pod level:
 - **The backstop.** Every pod has `activeDeadlineSeconds` set to the profile's `ttl` and `restartPolicy: Never`, so the
   kubelet kills a pod that outlives its ttl even if no worker ever comes back for it. Keep `ttl` comfortably above your
   longest run.
-- **Leftovers.** Pods ended by the deadline stay as `Failed` pod objects until Kubernetes' pod garbage collection removes
-  them. Their NetworkPolicies stay too. Every object is labelled `app.kubernetes.io/managed-by=shoal`, with
-  `shoal.dev/run`, `shoal.dev/tenant` and `shoal.dev/workflow`, so you can find and remove them:
+- **The reaper.** Every `SHOAL_SANDBOX_REAP_INTERVAL_SECONDS` (default 600, `0` turns it off) a worker sweeps the
+  namespaces of the tenant's Kubernetes profiles. It deletes pods that have ended (the deadline killed them, or they
+  failed), and pods more than five minutes old whose run has finished or no longer exists, such as those left by a worker
+  that crashed. NetworkPolicies whose pod is gone are deleted with them. It only touches pods labelled with one of this
+  deployment's tenants, so a namespace shared with another Shoal deployment is safe.
+- **By hand.** Every object is labelled `app.kubernetes.io/managed-by=shoal`, with `shoal.dev/run`, `shoal.dev/tenant`
+  and `shoal.dev/workflow`, so you can also find and remove them yourself:
 
   ```sh
   kubectl -n shoal-sandboxes get pods -l app.kubernetes.io/managed-by=shoal --field-selector=status.phase=Failed
   kubectl -n shoal-sandboxes delete pods -l app.kubernetes.io/managed-by=shoal --field-selector=status.phase=Failed
   kubectl -n shoal-sandboxes get networkpolicies -l app.kubernetes.io/managed-by=shoal
   ```
-
-  Shoal doesn't yet sweep these automatically.
 
 ## Profiles
 

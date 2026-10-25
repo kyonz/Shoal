@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import time
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +32,7 @@ from shoal.sandbox.wrap import parse_wrapped, wrapped_command, write_chunks
 
 DEFAULT_IMAGE = "ghcr.io/kyonz/shoal-sandbox:latest"
 SANDBOX_LABEL = "shoal.dev/sandbox"
+MANAGED_SELECTOR = "app.kubernetes.io/managed-by=shoal"
 
 
 def _quantity_cpu(cpu: float) -> str:
@@ -231,3 +234,61 @@ class KubernetesBackend(SandboxBackend):
         if pod.status.phase != "Running":
             return None
         return KubernetesSandbox(self, name, namespace, spec)
+
+    async def destroy(self, sandbox_id: str, spec: SandboxSpec) -> None:
+        """Delete the pod whatever its phase: a pod the ttl ended is Failed, and attach() would skip it."""
+        from kubernetes_asyncio import client
+
+        namespace, _, name = sandbox_id.partition("/")
+        async with client.ApiClient(await self.configuration()) as api:
+            await self._delete(api, name, namespace)
+
+    def reap_scope(self, config: dict[str, Any], tenant_id: str) -> str | None:
+        return self._namespace(SandboxSpec(config=config, labels={"shoal/tenant": tenant_id}))
+
+    async def reap(
+        self, scope: str, run_state: Callable[[str | None, str | None], Awaitable[str]], *, min_age_seconds: float
+    ) -> int:
+        """Delete Shoal's pods in namespace ``scope`` that have ended or whose run is over, and their NetworkPolicies.
+
+        Pods younger than ``min_age_seconds`` are left alone unless they have ended, so a sandbox that is being
+        created (and not yet recorded on its run) is never swept.
+        """
+        from kubernetes_asyncio import client
+
+        now = datetime.now(UTC)
+
+        def old(meta: Any) -> bool:
+            created = meta.creation_timestamp
+            return created is None or (now - created).total_seconds() >= min_age_seconds
+
+        removed = 0
+        async with client.ApiClient(await self.configuration()) as api:
+            pods = (await client.CoreV1Api(api).list_namespaced_pod(scope, label_selector=MANAGED_SELECTOR)).items
+            kept: set[str] = set()
+            for pod in pods:
+                labels = pod.metadata.labels or {}
+                sandbox = labels.get(SANDBOX_LABEL, pod.metadata.name)
+                state = await run_state(labels.get("shoal.dev/tenant"), labels.get("shoal.dev/run"))
+                ended = pod.status.phase in ("Failed", "Succeeded")
+                if state == "foreign" or (not ended and (state == "active" or not old(pod.metadata))):
+                    kept.add(sandbox)
+                    continue
+                await self._delete(api, pod.metadata.name, scope)
+                removed += 1
+            policies = await client.NetworkingV1Api(api).list_namespaced_network_policy(scope, label_selector=MANAGED_SELECTOR)
+            for policy in policies.items:
+                sandbox = (policy.metadata.labels or {}).get(SANDBOX_LABEL, policy.metadata.name)
+                if sandbox not in kept and old(policy.metadata):
+                    await self.delete_network_policy(api, policy.metadata.name, scope)
+        return removed
+
+    async def _delete(self, api: Any, name: str, namespace: str) -> None:
+        from kubernetes_asyncio import client
+
+        try:
+            await client.CoreV1Api(api).delete_namespaced_pod(name, namespace, grace_period_seconds=5)
+        except client.ApiException as exc:
+            if exc.status != 404:
+                raise
+        await self.delete_network_policy(api, name, namespace)

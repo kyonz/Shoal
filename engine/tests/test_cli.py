@@ -466,3 +466,15 @@ def test_instance_admin_manages_tenants(cli, tenant_key):
     assert blocked.exit_code == 1 and "suspended" in blocked.output
     assert cli("--token", ADMIN, "tenants", "resume", "acme").exit_code == 0
     assert cli("--token", tenant_key, "get", "workflows").exit_code == 0
+
+
+def test_connection_webhook_url(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    hooks = "apiVersion: shoal.dev/v1\nkind: Connection\nmetadata: {name: hooks}\nspec: {integration: webhook, config: {allow_unsigned: true}}\n"
+    assert cli(*auth, "apply", "-f", "-", input=hooks).exit_code == 0
+    shown = cli(*auth, "connections", "webhook-url", "hooks", "-o", "json")
+    assert shown.exit_code == 0, shown.output
+    url = json.loads(shown.stdout)["url"]
+    assert "/v1/hooks/" in url
+    assert url in cli(*auth, "connections", "webhook-url", "hooks").output.replace("\n", "")
+    assert cli(*auth, "connections", "webhook-url", "missing").exit_code != 0

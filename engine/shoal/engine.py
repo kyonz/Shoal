@@ -133,6 +133,7 @@ class Engine:
         self.worker_id = self.settings.worker_id or f"{socket.gethostname()}-{os.getpid()}"
         self._setup_done: set[int] = set()
         self._last_audit_prune: datetime | None = None
+        self._last_sandbox_reap: datetime | None = None
 
         self.directory = Directory(self.store)
         self.authz = Authorizer(self)
@@ -229,6 +230,15 @@ class Engine:
         await self.evals.tick_due()
         await self.orchestrators.tick()
         await self._prune_audit()
+        await self._reap_sandboxes()
+
+    async def _reap_sandboxes(self) -> None:
+        every = self.settings.sandbox_reap_interval_seconds
+        now = clock.now()
+        if not every or (self._last_sandbox_reap and now - self._last_sandbox_reap < timedelta(seconds=every)):
+            return
+        self._last_sandbox_reap = now
+        await self.sandboxes.reap_orphans()
 
     async def _prune_audit(self) -> None:
         """Apply audit and run event retention at most once an hour."""

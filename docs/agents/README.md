@@ -85,7 +85,8 @@ spec:
 ```
 
 The agent works until it calls `finish` with values for every declared output; outputs that don't match their types are
-sent back to it to fix. `summary` is reserved for the agent's own summary, so don't declare an output with that name. The
+sent back to it to fix. `summary` is reserved for the agent's own summary, so a workflow that declares an output with that name is refused when
+it's saved. The
 step's output is the declared outputs plus `summary`. See [Steps](../workflows/steps.md#agent).
 
 In the run viewer, an agent step shows each turn: the model's text, every tool call with its input and result, the model

@@ -158,6 +158,9 @@ class StepBase(Model):
     type: ClassVar[str]
 
 
+AGENT_RESERVED_OUTPUTS = frozenset({"summary"})
+
+
 class AgentStep(StepBase):
     """Run an agent inside a sandbox until it returns the declared outputs."""
 
@@ -169,6 +172,14 @@ class AgentStep(StepBase):
     skills: list[str] = Field(default_factory=list, description="Extra skills for this step.")
     tools: list[str] = Field(default_factory=list, description="Extra tools for this step.")
     connections: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _no_reserved_outputs(self) -> AgentStep:
+        # The agent's finish tool always takes `summary`; a declared output of the same name could never be set.
+        reserved = AGENT_RESERVED_OUTPUTS & set(self.outputs)
+        if reserved:
+            raise ValueError(f"reserved output names: {sorted(reserved)} (every agent step already returns a summary)")
+        return self
 
 
 class ActionStep(StepBase):
