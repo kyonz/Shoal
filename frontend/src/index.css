@@ -1,0 +1,180 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens. Components use the semantic names (bg, fg, muted, border,
+ * accent...) so light and dark themes only differ here.
+ */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-subtle: var(--subtle);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-ring: var(--ring);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-idle: var(--idle);
+  --color-idle-soft: var(--idle-soft);
+
+  --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -6px rgb(0 0 0 / 0.16);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.02);
+
+  --animate-fade-in: fade-in 140ms ease-out;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-pulse-ring: pulse-ring 1.6s ease-out infinite;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(4px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes pulse-ring {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--info) 45%, transparent); }
+    100% { box-shadow: 0 0 0 10px transparent; }
+  }
+}
+
+:root {
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --subtle: #f1f3f6;
+  --fg: #0f172a;
+  --muted: #5b6475;
+  --faint: #8a93a3;
+  --border: #e3e6eb;
+  --border-strong: #cfd4dc;
+  --accent: #0e7490;
+  --accent-fg: #ffffff;
+  --accent-soft: #e3f4f8;
+  --ring: #22a3c3;
+
+  --ok: #15803d;
+  --ok-soft: #e6f6ec;
+  --warn: #b45309;
+  --warn-soft: #fdf3e2;
+  --bad: #c2283b;
+  --bad-soft: #fdecee;
+  --info: #2563eb;
+  --info-soft: #e8f0fe;
+  --idle: #64748b;
+  --idle-soft: #eef1f5;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b0f15;
+  --panel: #10151d;
+  --raised: #151b25;
+  --subtle: #19202b;
+  --fg: #e7ebf1;
+  --muted: #9aa4b4;
+  --faint: #6b7586;
+  --border: #232b37;
+  --border-strong: #303a48;
+  --accent: #22b8d8;
+  --accent-fg: #04141a;
+  --accent-soft: #0f2a33;
+  --ring: #38c6e4;
+
+  --ok: #4ade80;
+  --ok-soft: #10261a;
+  --warn: #fbbf24;
+  --warn-soft: #2a2010;
+  --bad: #f87171;
+  --bad-soft: #2c1417;
+  --info: #60a5fa;
+  --info-soft: #111f36;
+  --idle: #94a3b8;
+  --idle-soft: #1a212c;
+  color-scheme: dark;
+}
+
+html, body, #root { height: 100%; }
+body {
+  @apply bg-bg text-fg font-sans antialiased;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  font-size: 14px;
+}
+::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
+*:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; border-radius: 4px; }
+
+/* Thin, theme-aware scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+
+/* React Flow theming */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-background-pattern-color: var(--border-strong);
+  --xy-edge-stroke: var(--border-strong);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-connectionline-stroke: var(--accent);
+  --xy-handle-background-color: var(--panel);
+  --xy-handle-border-color: var(--border-strong);
+  --xy-minimap-background-color: var(--panel);
+  --xy-minimap-mask-background-color: color-mix(in oklab, var(--bg) 70%, transparent);
+  --xy-minimap-node-background-color: var(--border-strong);
+  --xy-controls-button-background-color: var(--panel);
+  --xy-controls-button-background-color-hover: var(--subtle);
+  --xy-controls-button-color: var(--fg);
+  --xy-controls-button-border-color: var(--border);
+  --xy-selection-background-color: color-mix(in oklab, var(--accent) 10%, transparent);
+  --xy-selection-border: 1px dashed var(--accent);
+}
+.react-flow__controls { box-shadow: var(--shadow-card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.react-flow__minimap { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.react-flow__attribution { display: none; }
+.react-flow__edge.animated path { stroke: var(--info); }
+
+/* CodeMirror */
+.cm-editor { font-size: 12.5px; background: transparent !important; }
+.cm-editor.cm-focused { outline: none !important; }
+.cm-scroller { font-family: var(--font-mono) !important; }
+.cm-gutters { background: transparent !important; border-right: 1px solid var(--border) !important; color: var(--faint) !important; }
+.cm-activeLine, .cm-activeLineGutter { background: color-mix(in oklab, var(--accent) 6%, transparent) !important; }
+.cm-tooltip { background: var(--raised) !important; border: 1px solid var(--border) !important; border-radius: 8px; box-shadow: var(--shadow-pop); overflow: hidden; }
+.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--accent-soft) !important; color: var(--fg) !important; }
+.cm-completionDetail { color: var(--faint); font-style: normal !important; margin-left: 0.75em; }
+.cm-expr { background: color-mix(in oklab, var(--accent) 12%, transparent); border-radius: 3px; }
+
+/* Markdown (docs, readmes) */
+.prose-shoal { line-height: 1.7; color: var(--fg); max-width: 76ch; }
+.prose-shoal h1 { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 1rem; }
+.prose-shoal h2 { font-size: 1.35rem; font-weight: 650; letter-spacing: -0.01em; margin: 2.2rem 0 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.prose-shoal h3 { font-size: 1.08rem; font-weight: 650; margin: 1.6rem 0 0.5rem; }
+.prose-shoal p, .prose-shoal ul, .prose-shoal ol, .prose-shoal table, .prose-shoal pre, .prose-shoal blockquote { margin: 0 0 1rem; }
+.prose-shoal ul { list-style: disc; padding-left: 1.4rem; }
+.prose-shoal ol { list-style: decimal; padding-left: 1.4rem; }
+.prose-shoal li { margin: 0.25rem 0; }
+.prose-shoal a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent); }
+.prose-shoal code { font-family: var(--font-mono); font-size: 0.86em; background: var(--subtle); border: 1px solid var(--border); padding: 0.05rem 0.3rem; border-radius: 4px; }
+.prose-shoal pre { background: var(--subtle); border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1rem; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+.prose-shoal pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.prose-shoal table { border-collapse: collapse; width: 100%; font-size: 13px; display: block; overflow-x: auto; }
+.prose-shoal th, .prose-shoal td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+.prose-shoal th { background: var(--subtle); font-weight: 600; }
+.prose-shoal blockquote { border-left: 3px solid var(--accent); padding: 0.2rem 0 0.2rem 1rem; color: var(--muted); }
+.prose-shoal hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
