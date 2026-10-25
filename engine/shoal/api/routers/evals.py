@@ -80,7 +80,11 @@ class EvalRunDetail(EvalRunOut):
 
 class SinkIn(BaseModel):
     sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret, ...).")
+    config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. "
+        "Empty on an eval run export: the Eval's own sinks[] settings for this sink.",
+    )
 
 
 class ExportOut(BaseModel):
@@ -108,6 +112,19 @@ async def _eval_run(ctx: Ctx, eval_run_id: str, permission: str = "evals:read") 
     row = await ctx.engine.evals.get(ctx.tenant_id, eval_run_id)
     await ctx.require(permission, row.namespace)
     return row
+
+
+async def _export_config(ctx: Ctx, namespace: str, body: SinkIn, spec: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The sink settings for an export: the caller's, else the Eval's own ``sinks[]`` entry for that sink.
+
+    Settings that name secrets are resolved server side and sent to the sink's URL, which the caller
+    may also choose, so supplying them needs ``evals:write`` (the right to configure sinks on an Eval).
+    """
+    if not body.config:
+        return next((dict(ref.get("config") or {}) for ref in (spec or {}).get("sinks", []) if ref.get("sink") == body.sink), {})
+    if any(key.endswith("_secret") for key in body.config):
+        await ctx.require("evals:write", namespace)
+    return body.config
 
 
 async def _initiator(ctx: Ctx) -> dict[str, Any]:
@@ -189,7 +206,9 @@ async def compare_eval_runs(eval_run_id: str, ctx: CtxDep, baseline: str) -> dic
 @router.post("/eval-runs/{eval_run_id}/export", tags=["eval runs"], response_model=ExportOut)
 async def export_eval_run(eval_run_id: str, body: SinkIn, ctx: CtxDep) -> Any:
     row = await _eval_run(ctx, eval_run_id, "evals:run")
-    result = await ctx.engine.evals.export(ctx.tenant_id, row.id, body.sink, body.config)
+    config = await _export_config(ctx, row.namespace, body, row.spec)
+    with use_namespace(row.namespace):  # secrets resolve in the eval run's namespace
+        result = await ctx.engine.evals.export(ctx.tenant_id, row.id, body.sink, config)
     await ctx.audit("eval.exported", row.id, namespace=row.namespace, sink=body.sink, url=result.url)
     return ExportOut(sink=body.sink, url=result.url, ids=result.ids)
 
@@ -241,6 +260,8 @@ async def export_run_trace(run_id: str, body: SinkIn, ctx: CtxDep) -> Any:
     run = await ctx.engine.store.get_run(ctx.tenant_id, run_id)
     await ctx.require("runs:read", run.namespace)
     await ctx.require("evals:run", run.namespace)
-    result = await ctx.engine.evals.export_run(ctx.tenant_id, run.id, body.sink, body.config)
+    config = await _export_config(ctx, run.namespace, body)
+    with use_namespace(run.namespace):
+        result = await ctx.engine.evals.export_run(ctx.tenant_id, run.id, body.sink, config)
     await ctx.audit("run.exported", run.id, namespace=run.namespace, sink=body.sink, url=result.url)
     return ExportOut(sink=body.sink, url=result.url, ids=result.ids)
