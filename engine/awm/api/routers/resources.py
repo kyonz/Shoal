@@ -27,7 +27,7 @@ from awm.core.errors import InvalidRequest, NotFound
 from awm.core.ids import new_id
 from awm.core.models import KIND_BY_PLURAL, Connection, ResourceBase, Trigger, parse_resource
 from awm.core.scope import SHARED_NAMESPACE, TENANT_SCOPED_KINDS, use_namespace
-from awm.integrations.base import IntegrationEvent
+from awm.integrations.base import IntegrationEvent, describe_actions, describe_resources
 from awm.store import tables as t
 from awm.triggers import validate_cron
 
@@ -308,6 +308,21 @@ async def connection_webhook(namespace: str, name: str, ctx: CtxDep) -> dict[str
         conn = await _connection(ctx, namespace, name)
     integration = ctx.engine.integrations.get(conn.spec.integration)
     return {"url": url, "instructions": integration.webhook_setup_instructions(url)}
+
+
+@router.get("/namespaces/{namespace}/connections/{name}/actions", tags=["connections"],
+            summary="Actions and queryable resources this connection offers")
+async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    """The integration catalogue lists static actions; dynamic integrations (remote) only know theirs per connection."""
+    await ctx.namespace(namespace, "connections:read")
+    conn = await _connection(ctx, namespace, name)
+    integration = ctx.engine.integrations.get(conn.spec.integration)
+    actions, resources = integration.actions, integration.resources
+    if not actions and not resources:  # dynamic: ask the connection (needs its secrets)
+        with use_namespace(namespace):
+            connection = await ctx.engine.integrations.connection(ctx.tenant_id, name)
+            actions, resources = await integration.actions_for(connection), await integration.resources_for(connection)
+    return {"integration": conn.spec.integration, "actions": describe_actions(actions), "resources": describe_resources(resources)}
 
 
 @router.post("/namespaces/{namespace}/connections/{name}/actions/{action}", tags=["connections"])

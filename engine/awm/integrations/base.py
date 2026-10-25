@@ -67,6 +67,24 @@ class ResourceDef:
     key_field: str = "id"
 
 
+def describe_actions(actions: dict[str, ActionDef]) -> list[dict[str, Any]]:
+    """Catalogue form of a set of actions (also served per connection for dynamic integrations)."""
+    return [
+        {
+            "name": a.name,
+            "description": a.description,
+            "mutating": a.mutating,
+            "input_schema": a.tool_schema(),
+            "output_schema": a.output_model.model_json_schema() if a.output_model else None,
+        }
+        for a in actions.values()
+    ]
+
+
+def describe_resources(resources: dict[str, ResourceDef]) -> list[dict[str, Any]]:
+    return [{"name": r.name, "description": r.description, "filter_schema": r.filter_model.model_json_schema()} for r in resources.values()]
+
+
 @dataclass
 class EventDef:
     name: str
@@ -219,20 +237,8 @@ class Integration:
             "description": cls.description,
             "connection_schema": connection_schema,
             "secret_fields": cls.secret_fields(),
-            "actions": [
-                {
-                    "name": a.name,
-                    "description": a.description,
-                    "mutating": a.mutating,
-                    "input_schema": a.tool_schema(),
-                    "output_schema": a.output_model.model_json_schema() if a.output_model else None,
-                }
-                for a in cls.actions.values()
-            ],
-            "resources": [
-                {"name": r.name, "description": r.description, "filter_schema": r.filter_model.model_json_schema()}
-                for r in cls.resources.values()
-            ],
+            "actions": describe_actions(cls.actions),
+            "resources": describe_resources(cls.resources),
             "events": [{"name": e.name, "description": e.description, "example": e.example} for e in cls.events],
         }
 

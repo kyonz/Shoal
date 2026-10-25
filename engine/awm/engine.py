@@ -30,6 +30,7 @@ from awm.decisions.service import DecisionService
 from awm.evals.service import EvalService
 from awm.identity import IdentityService
 from awm.integrations.manager import IntegrationManager
+from awm.integrations.remote import register_remote_integration
 from awm.llm.router import ModelRouter
 from awm.plugins.registry import Registry
 from awm.runtime.events import EventBus
@@ -127,6 +128,14 @@ class Engine:
 
     async def start(self) -> None:
         await self.store.create_all()
+        for remote in self.settings.remote_integrations:
+            try:
+                await register_remote_integration(
+                    self.registry, remote.url, remote.token.get_secret_value() if remote.token else None,
+                    transport=self.http_transport,
+                )
+            except Exception:  # one unreachable service must not stop the engine
+                log.exception("could not register remote integration %s", remote.url)
 
     async def close(self) -> None:
         self._stopping.set()

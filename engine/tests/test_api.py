@@ -379,3 +379,16 @@ async def test_blueprint_adoption_lifecycle(admin, api):
     assert (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).status_code == 404
     assert (await admin.get(url)).status_code == 404
     assert any(e["action"] == "blueprint.adopted" for e in (await admin.get("/v1/audit")).json()["items"])
+
+
+async def test_connection_actions_are_listed_per_connection(admin):
+    conn = {"spec": {"integration": "github", "config": {}, "secrets": {"token": "gh"}}}
+    r = await admin.put("/v1/namespaces/default/connections/gh", json=conn)
+    assert r.status_code == 201, r.text
+    r = await admin.get("/v1/namespaces/default/connections/gh/actions")
+    body = r.json()
+    assert r.status_code == 200, r.text
+    assert body["integration"] == "github"
+    names = {a["name"] for a in body["actions"]}
+    catalogue = {a["name"] for a in (await admin.get("/v1/integrations/github")).json()["actions"]}
+    assert names == catalogue and names

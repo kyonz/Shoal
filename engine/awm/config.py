@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RemoteIntegration(BaseModel):
+    url: str
+    token: SecretStr | None = None
 
 
 class Settings(BaseSettings):
@@ -23,6 +28,11 @@ class Settings(BaseSettings):
     public_url: str = Field("http://localhost:8080", description="External base URL (webhook URLs, A2A cards).")
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     static_dir: str | None = Field(None, description="Serve the built frontend from this directory.")
+    remote_integrations: list[RemoteIntegration] = Field(
+        default_factory=list,
+        description="Operator-wide remote integrations (open integrations protocol) registered at start-up, "
+        'e.g. AWM_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
+    )
 
     worker_id: str | None = None
     worker_concurrency: int = Field(16, ge=1)

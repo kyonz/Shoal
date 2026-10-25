@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 
+from awm.config import RemoteIntegration
 from awm.integrations.base import IntegrationError
 from awm.integrations.github import GitHubIntegration
 from awm.integrations.jira import JiraIntegration
@@ -382,3 +383,15 @@ def test_template_project_tests_pass():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+async def test_operator_remote_integrations_register_at_start():
+    api = tickets_api()
+    transport = HostRouter({"svc.test": served(api), "tickets.example": api.transport})
+    async with engine_harness(http=transport) as world:
+        world.engine.settings.remote_integrations = [
+            RemoteIntegration(url="https://svc.test", token=SERVICE_TOKEN),
+            RemoteIntegration(url="https://down.test"),  # unreachable: logged, start carries on
+        ]
+        await world.engine.start()
+        assert "tickets" in {c["key"] for c in world.engine.integrations.catalog()}
