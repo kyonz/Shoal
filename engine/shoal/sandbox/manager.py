@@ -7,6 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from shoal.core.errors import MissingConfiguration
 from shoal.core.models import SandboxProfileSpec
 from shoal.sandbox.base import Sandbox, SandboxBackend, SandboxSpec
 
@@ -30,7 +31,7 @@ class SandboxManager:
             return name, resource.spec  # type: ignore[attr-defined]
         if name == "default":
             return name, SandboxProfileSpec(backend=self.engine.settings.default_sandbox_backend)
-        raise ValueError(f"sandbox profile '{name}' not found")
+        raise MissingConfiguration(f"sandbox profile '{name}' not found", kind="SandboxProfile", name=name)
 
     def backend(self, name: str) -> SandboxBackend:
         return self.engine.plugin("sandboxes", name)
@@ -54,6 +55,12 @@ class SandboxManager:
     async def acquire(self, run: Run, profile_name: str | None, *, env: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
         """Yield a sandbox for a step. Run-scoped sandboxes outlive the step."""
         name, profile = await self.profile(run.tenant_id, profile_name)
+        if profile.backend not in self.engine.registry.names("sandboxes"):
+            raise MissingConfiguration(
+                f"sandbox profile '{name}' uses backend '{profile.backend}', which is not installed or enabled on this server",
+                kind="SandboxProfile", name=name, field="backend",
+                exists=await self.engine.store.find_resource(run.tenant_id, "SandboxProfile", name) is not None,
+            )
         backend = self.backend(profile.backend)
         spec = self.spec_for(profile, run, env)
         if profile.scope == "step":

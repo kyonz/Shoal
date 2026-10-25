@@ -836,6 +836,21 @@ credential performed it*, and lets policy decide what the run may do.
 
 - REST + JSON under `/v1`, generated OpenAPI 3.1 spec, cursor pagination,
   `Idempotency-Key` header support on POSTs, problem+json errors.
+- Missing configuration is its own problem type, `missing_configuration`
+  (HTTP 409), so clients can guide people rather than show a failure. Its
+  `details` name what is missing (`missing: {kind, name, namespace, field}`)
+  and where to fix it (`fix: {href, label, permission, namespace}`: a web UI
+  path, and the permission that takes, so a client can offer the fix to people
+  who hold it and tell everyone else who to ask). It covers a missing or
+  unusable gateway (unknown, provider not installed, no API key, credentials
+  refused), a model policy that is missing or does not allow the model, a
+  missing agent, skill, connection, sandbox profile or cloud identity, and a
+  secret that is not set. A step that hits it fails without retrying, and the
+  step's and run's `error` carry the same fields. `credential_required` (428),
+  for a person's own account on a connection, carries a `fix` too.
+  `GET /v1/setup` lists what still needs setting up (model access, the
+  assistant, sandboxes) and whether each gateway works; `GET /v1/assistant`
+  reports `ready` and the `problem`.
 - Resources: `tenants`, `api-keys`, `agents`, `skills`, `workflows`
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),

@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
+from shoal.agents.providers.base import (
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ProviderAuthFailed,
+    ProviderUnavailable,
+)
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
@@ -82,6 +88,9 @@ class OpenAICompatibleProvider(ModelProvider):
     def setup(self, engine: Engine) -> None:
         self.transport = engine.http_transport
 
+    def missing_setup(self, config: dict[str, Any]) -> str | None:
+        return None if config.get("base_url") else "it has no base URL, which an OpenAI-compatible gateway needs"
+
     async def complete(self, request: ModelRequest) -> ModelResponse:
         cfg = request.config
         if not cfg.get("base_url"):
@@ -107,6 +116,8 @@ class OpenAICompatibleProvider(ModelProvider):
             raise ProviderUnavailable(str(exc)) from exc
         if response.status_code == 429 or response.status_code >= 500:
             raise ProviderUnavailable(f"{response.status_code}: {response.text[:500]}")
+        if response.status_code in (401, 403):
+            raise ProviderAuthFailed(f"{response.status_code}: {response.text[:500]}")
         response.raise_for_status()
         data = response.json()
         choice = data["choices"][0]

@@ -15,11 +15,12 @@ from shoal.cli.config import Target
 class APIError(Exception):
     """A failed call, carrying the server's problem document when there is one."""
 
-    def __init__(self, status: int, message: str, body: Any = None):
+    def __init__(self, status: int, message: str, body: Any = None, server: str | None = None):
         super().__init__(message)
         self.status = status
         self.message = message
         self.body = body
+        self.server = server  # where the web UI paths in a problem's ``fix`` live
 
 
 def make_http(base_url: str, headers: dict[str, str], timeout: float) -> httpx.Client:
@@ -84,7 +85,8 @@ def _error(response: httpx.Response) -> APIError:
         message = str(body.get("detail") or body.get("title"))
     else:
         message = response.text.strip()[:500] or response.reason_phrase
-    return APIError(response.status_code, message, body)
+    url = response.request.url
+    return APIError(response.status_code, message, body, server=f"{url.scheme}://{url.netloc.decode()}")
 
 
 def _parse_sse(lines: Iterator[str]) -> Iterator[tuple[str, dict[str, Any]]]:

@@ -2,8 +2,7 @@
  * Small, consistent building blocks. Everything uses the semantic colour
  * tokens from index.css so both themes stay in sync.
  */
-import { CloudOff, Loader2, Lock } from "lucide-react";
-import { FEDERATION_DISCONNECTED, federationCode, federationMessage } from "@/lib/federation";
+import { Loader2 } from "lucide-react";
 import {
   forwardRef,
   type ButtonHTMLAttributes,
@@ -271,22 +270,6 @@ export function EmptyState({ icon, title, description, action, className }: {
       {description && <p className="mt-1 max-w-sm text-[13px] text-muted">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
-  );
-}
-
-export function ErrorNotice({ error, className }: { error: unknown; className?: string }) {
-  if (!error) return null;
-  const fed = federationCode(error);
-  if (fed)
-    return (
-      <div className={cn("flex items-start gap-2 rounded-lg border border-warn/25 bg-warn-soft px-3 py-2 text-[13px] text-warn", className)}>
-        {fed === FEDERATION_DISCONNECTED ? <CloudOff className="mt-0.5 size-3.5 shrink-0" /> : <Lock className="mt-0.5 size-3.5 shrink-0" />}
-        <span>{federationMessage(fed)}</span>
-      </div>
-    );
-  const msg = error instanceof Error ? error.message : String(error);
-  return (
-    <div className={cn("rounded-lg border border-bad/25 bg-bad-soft px-3 py-2 text-[13px] text-bad", className)}>{msg}</div>
   );
 }
 

@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 import httpx
 
 from shoal.core import clock
-from shoal.core.errors import InvalidRequest, Unauthorized
+from shoal.core.errors import InvalidRequest, MissingConfiguration, Unauthorized
 from shoal.core.models import OAuthSpec
 from shoal.core.scope import use_namespace
 
@@ -86,7 +86,10 @@ class OAuthFlows:
         resource = await self.engine.store.find_resource(tenant_id, "Connection", connection, namespace=namespace)
         oauth = getattr(getattr(resource, "spec", None), "oauth", None)
         if oauth is None:
-            raise InvalidRequest(f"connection '{connection}' has no OAuth settings")
+            raise MissingConfiguration(
+                f"connection '{connection}' has no OAuth settings", kind="Connection", name=connection, namespace=namespace,
+                exists=resource is not None, field="oauth",
+            )
         return oauth
 
     async def _token(self, tenant_id: str, namespace: str, oauth: OAuthSpec, form: dict[str, str]) -> dict[str, Any]:
@@ -95,7 +98,10 @@ class OAuthFlows:
             with use_namespace(namespace):
                 secret = await self.engine.secrets.get(tenant_id, oauth.client_secret_secret)
             if secret is None:
-                raise InvalidRequest(f"secret '{oauth.client_secret_secret}' (OAuth client secret) is not set")
+                raise MissingConfiguration(
+                    f"secret '{oauth.client_secret_secret}' (OAuth client secret) is not set",
+                    kind="Secret", name=oauth.client_secret_secret, namespace=namespace,
+                )
             form["client_secret"] = secret
         kwargs: dict[str, Any] = {"timeout": 30.0}
         if self.engine.http_transport is not None:

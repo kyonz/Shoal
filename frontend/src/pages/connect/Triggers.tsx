@@ -7,6 +7,7 @@ import { usePutResource, useResources } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
+import { toastError } from "@/lib/setup";
 import { Badge, Button, Card, EmptyState, ErrorNotice, Page, PageHeader, StatusBadge, Switch, Table, Td, Th, Tr } from "@/components/ui";
 import { RowSkeleton } from "./shared";
 
@@ -49,7 +50,7 @@ export default function Triggers() {
       });
       toast.success(`${t.metadata.name} ${enabled ? "enabled" : "disabled"}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not update trigger");
+      toastError(e, "Could not update trigger");
     }
   };
 

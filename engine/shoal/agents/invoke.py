@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from shoal.agents.runtime import AgentInvocation, AgentResult
-from shoal.core.errors import StepError
+from shoal.core.errors import MissingConfiguration, StepError
 from shoal.core.expressions import referenced_secrets
 from shoal.core.models import AgentSpec, ParamSpec, SkillSpec
 
@@ -19,7 +19,7 @@ async def load_agent(ctx: StepContext, name: str | None) -> tuple[str, AgentSpec
         return "default", AgentSpec()
     resource = await ctx.engine.store.find_resource(ctx.tenant_id, "Agent", name)
     if resource is None:
-        raise StepError(f"agent '{name}' not found")
+        raise MissingConfiguration(f"agent '{name}' not found", kind="Agent", name=name)
     return name, resource.spec  # type: ignore[attr-defined]
 
 
@@ -28,7 +28,7 @@ async def load_skills(ctx: StepContext, names: list[str]) -> dict[str, SkillSpec
     for name in dict.fromkeys(names):
         resource = await ctx.engine.store.find_resource(ctx.tenant_id, "Skill", name)
         if resource is None:
-            raise StepError(f"skill '{name}' not found")
+            raise MissingConfiguration(f"skill '{name}' not found", kind="Skill", name=name)
         skills[name] = resource.spec  # type: ignore[attr-defined]
     return skills
 
@@ -39,7 +39,10 @@ async def resolve_env(ctx: StepContext, agent: AgentSpec, agent_name: str | None
     secrets = await ctx.engine.secrets.resolve(ctx.tenant_id, names)
     missing = names - set(secrets)
     if missing:
-        raise StepError(f"secrets not set: {', '.join(sorted(missing))}")
+        first = sorted(missing)[0]
+        raise MissingConfiguration(
+            f"secrets not set: {', '.join(sorted(missing))}", kind="Secret", name=first, details={"secrets": sorted(missing)}
+        )
     env: dict[str, str] = {}
     for entry in agent.credentials:
         integration_key, _, connection = entry.partition(":")

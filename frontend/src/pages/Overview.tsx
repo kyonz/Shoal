@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { relTime, usd } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
-import { Badge, Button, Card, CardHeader, EmptyState, Page, PageHeader, Segmented, Skeleton, Stat, StatusIcon } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, EmptyState, Page, PageHeader, Segmented, SetupChecklist, Skeleton, Stat, StatusIcon } from "@/components/ui";
 
 interface Stats {
   since: string;
@@ -68,6 +68,7 @@ export default function Overview() {
         }
       />
 
+      <SetupChecklist ns={ns} className="mb-4" />
       {noWorkflows && <GettingStarted ns={ns} />}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

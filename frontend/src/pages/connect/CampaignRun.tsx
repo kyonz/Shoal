@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { between, dateTime, relTime, usd } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
+import { toastError } from "@/lib/setup";
 import { Button, Card, CardHeader, EmptyState, ErrorNotice, JsonBlock, Page, PageHeader, Skeleton, Stat, StatusBadge, Table, Td, Th, Tr, useConfirm } from "@/components/ui";
 import { TARGET_SEGMENTS, TargetBar, type CampaignRun as CampaignRunT } from "./Campaigns";
 import { Crumb } from "./shared";
@@ -44,7 +45,7 @@ export default function CampaignRun() {
       void qc.invalidateQueries({ queryKey: ["campaign-runs", ns] });
       toast.success({ pause: "Paused", resume: "Resumed", cancel: "Cancelled", retry: "Retrying failed targets" }[operation] ?? "Done");
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed"),
+    onError: (e) => toastError(e, "Failed"),
   });
 
   if (run.isLoading)

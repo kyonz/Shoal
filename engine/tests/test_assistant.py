@@ -197,7 +197,11 @@ async def test_policy_and_disable(api, engine):
     await api.put("/v1/model-policies/default", json={"spec": {
         "allow_models": ["claude-haiku-*"], "rules": [{"name": "all", "candidates": [{"model": "claude-haiku-5-5"}]}]}})
     r = await api.post("/v1/assistant/chat", json={"message": "hi"})
-    assert r.status_code == 403
+    assert r.status_code == 409 and r.json()["code"] == "missing_configuration"
+    assert r.json()["details"]["fix"] == {"href": "/admin/model-policies/default", "label": "Edit the model policy",
+                                          "permission": "model-policies:manage", "namespace": None}
+    info = (await api.get("/v1/assistant")).json()
+    assert info["ready"] is False and info["problem"]["missing"] == {"kind": "ModelPolicy", "name": "default", "field": "allow_models"}
     engine.settings.assistant_enabled = False
     r = await api.post("/v1/assistant/chat", json={"message": "hi"})
     assert r.status_code == 503 and r.json()["code"] == "assistant_unavailable"

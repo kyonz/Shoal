@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound
+from shoal.core.errors import CredentialRequired, InvalidRequest, MissingConfiguration, NotFound, fix_for
 from shoal.core.models import Connection
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
@@ -29,7 +29,10 @@ class IntegrationManager:
     async def connection(
         self, tenant_id: str, name: str, *, initiator: dict[str, Any] | None = None, run_id: str | None = None
     ) -> ConnectionContext:
-        row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
+        try:
+            row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
+        except NotFound:
+            raise MissingConfiguration(f"connection '{name}' not found", kind="Connection", name=name) from None
         resource = Connection.model_validate(row.document)
         spec = resource.spec
         integration = self.get(spec.integration)
@@ -45,7 +48,10 @@ class IntegrationManager:
                     continue
                 value = await self.engine.secrets.get(tenant_id, secret_name)
                 if value is None:
-                    raise InvalidRequest(f"connection '{name}': secret '{secret_name}' for field '{field}' is not set")
+                    raise MissingConfiguration(
+                        f"connection '{name}': secret '{secret_name}' for field '{field}' is not set",
+                        kind="Secret", name=secret_name, namespace=row.namespace, details={"connection": name},
+                    )
                 values[field] = value
         acting_as = None
         if personal is not None:
@@ -97,7 +103,11 @@ class IntegrationManager:
         if len(matches) == 1:
             return matches[0]
         if not matches:
-            raise InvalidRequest(f"no '{integration}' connection configured")
+            raise MissingConfiguration(
+                f"no '{integration}' connection configured", kind="Connection",
+                fix={**fix_for("Connection"), "href": f"/ns/{current_namespace()}/connections/new?integration={integration}"},
+                details={"integration": integration},
+            )
         raise InvalidRequest(
             f"several '{integration}' connections exist ({', '.join(matches)}); set 'connection' or "
             f"workflow 'connections.{integration}'"

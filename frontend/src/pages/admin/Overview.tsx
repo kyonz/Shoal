@@ -6,7 +6,8 @@ import { client, unwrap } from "@/api/client";
 import { useNamespaces } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { relTime } from "@/lib/format";
-import { Badge, Card, CardHeader, Page, PageHeader, Skeleton } from "@/components/ui";
+import { lastNamespace } from "@/lib/ns";
+import { Badge, Card, CardHeader, Page, PageHeader, SetupChecklist, Skeleton } from "@/components/ui";
 import { adminKeys, useGroups, useRoles, useUsers } from "./shared";
 
 export default function AdminOverview() {
@@ -45,6 +46,7 @@ export default function AdminOverview() {
         description={`Manage who can do what in ${me?.tenant?.name ?? "this tenant"}.`}
         icon={<ShieldCheck className="size-4" />}
       />
+      <SetupChecklist ns={lastNamespace()} className="mb-4" />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {can("users:read") && (
           <Tile

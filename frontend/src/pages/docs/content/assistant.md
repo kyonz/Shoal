@@ -7,6 +7,10 @@ The assistant is a chat panel on every page. Open it with the **Assistant** butt
 - connections, triggers (webhooks, integration events, schedules) and campaigns;
 - evals, runs, approvals, rollbacks, and questions such as "why did my last run fail?".
 
+## Before you start: a model gateway
+
+The assistant runs on a model through an LLM gateway: by default the server's `anthropic` provider (set `ANTHROPIC_API_KEY` on the server) or a Gateway in **Admin console → Gateways** named by `SHOAL_ASSISTANT_GATEWAY`. Until that works, the panel does not take messages. It says what is missing instead: tenant admins get a button to the gateway setup, and everyone else is told to ask an admin. The same goes for a tenant model policy that does not allow the assistant's model (`SHOAL_ASSISTANT_MODEL`). The panel picks up the fix by itself within a few seconds.
+
 ## Approving changes
 
 The assistant reads freely, but every change waits for you. It shows a card with a one-line summary and, for resources, the plan from a dry run (created, updated or unchanged, per document) and the YAML. Choose **Apply** or **Approve** to go ahead, or **Decline**. If you send a new message instead, the waiting changes are declined.

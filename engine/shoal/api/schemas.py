@@ -36,6 +36,30 @@ class Problem(BaseModel):
     details: dict[str, Any] | list[Any] | None = None
 
 
+class SetupFix(BaseModel):
+    href: str = Field(description="Where in the web UI to fix it.")
+    label: str
+    permission: str | None = Field(None, description="The permission fixing it takes; null when the caller fixes it themselves.")
+    namespace: str | None = None
+
+
+class SetupProblem(BaseModel):
+    """A ``missing_configuration`` problem: what is missing and where to set it up.
+
+    Error responses carry the same ``missing`` and ``fix`` under ``details``.
+    """
+
+    code: str = "missing_configuration"
+    detail: str
+    missing: dict[str, str] = Field(default_factory=dict, description="kind, name, namespace, field")
+    fix: SetupFix | None = None
+
+    @classmethod
+    def of(cls, exc: Any) -> SetupProblem:
+        """From a ``MissingConfiguration``."""
+        return cls(detail=exc.message, missing=exc.details["missing"], fix=exc.details["fix"])
+
+
 T = TypeVar("T")
 
 

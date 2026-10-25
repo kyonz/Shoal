@@ -9,8 +9,9 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from shoal.api.deps import CtxDep
+from shoal.api.schemas import SetupProblem
 from shoal.assistant.chat import Assistant
-from shoal.core.errors import Forbidden, InvalidRequest, ShoalError
+from shoal.core.errors import InvalidRequest, MissingConfiguration, ShoalError
 from shoal.core.requestctx import current_request
 from shoal.llm.router import DEFAULT_POLICY, ModelClient, ModelRouter
 
@@ -70,12 +71,44 @@ class AssistantInfo(BaseModel):
     enabled: bool
     gateway: str
     model: str
+    ready: bool = Field(True, description="Whether the gateway and model are set up, so the assistant can answer.")
+    problem: SetupProblem | None = Field(None, description="Why it is not ready, and where to fix it.")
 
 
-@router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled, and its model")
+async def _target(ctx: CtxDep) -> Any:
+    """The assistant's model target, or MissingConfiguration naming what to set up."""
+    settings = ctx.engine.settings
+    tenant = ctx.tenant_id
+    if not ModelRouter.permitted(settings.assistant_model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
+        raise MissingConfiguration(
+            f"the assistant's model '{settings.assistant_model}' is not permitted by the tenant's model policy",
+            kind="ModelPolicy", name=DEFAULT_POLICY, exists=True, field="allow_models",
+        )
+    try:
+        return await ctx.engine.models.gateway_target(
+            tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
+        )
+    except MissingConfiguration:
+        raise
+    except ShoalError as exc:
+        raise AssistantUnavailable(f"assistant gateway: {exc.message}") from exc
+
+
+@router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled and set up, and its model")
 async def assistant_info(ctx: CtxDep) -> AssistantInfo:
     s = ctx.engine.settings
-    return AssistantInfo(enabled=s.assistant_enabled, gateway=s.assistant_gateway, model=s.assistant_model)
+    info = AssistantInfo(enabled=s.assistant_enabled, gateway=s.assistant_gateway, model=s.assistant_model)
+    if not s.assistant_enabled:
+        return info
+    try:
+        await _target(ctx)
+    except MissingConfiguration as exc:
+        info.ready = False
+        info.problem = SetupProblem.of(exc)
+    except ShoalError as exc:
+        info.ready = False
+        info.problem = SetupProblem(code=exc.code, detail=exc.message)
+    return info
 
 
 @router.post("/chat", response_model=ChatOut, summary="Send a message or approval decisions to the assistant")
@@ -86,15 +119,7 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
     namespace = await ctx.namespace(body.namespace, "workflows:read")
     if not (body.message or body.decisions or body.messages):
         raise InvalidRequest("send a message")
-    tenant = ctx.tenant_id
-    if not ModelRouter.permitted(settings.assistant_model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
-        raise Forbidden(f"model '{settings.assistant_model}' is not permitted by the tenant's model policy")
-    try:
-        target = await ctx.engine.models.gateway_target(
-            tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
-        )
-    except ShoalError as exc:
-        raise AssistantUnavailable(f"assistant gateway: {exc.message}") from exc
+    target = await _target(ctx)
 
     headers = {k: v for k, v in request.headers.items() if k.lower() in FORWARDED_HEADERS}
     headers["x-shoal-client"] = "assistant"

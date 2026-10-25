@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
-from shoal.core.errors import StepError
+from shoal.core.errors import MissingConfiguration, StepError
 from shoal.core.models import DecisionQuestion
 from shoal.decisions.base import DecisionRequest, DecisionResult
 
@@ -35,7 +35,9 @@ class DecisionService:
         if secret_name:
             value = await self.engine.secrets.get(tenant_id, secret_name)
             if value is None:
-                raise StepError(f"secret '{secret_name}' (decision provider api key) is not set")
+                raise MissingConfiguration(
+                    f"secret '{secret_name}' (decision provider api key) is not set", kind="Secret", name=secret_name
+                )
             resolved["api_key"] = value
             if redactor is not None:
                 redactor.add(value)

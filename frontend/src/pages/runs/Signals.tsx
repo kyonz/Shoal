@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Radio, Send } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiError, client, unwrap, type RunDetail, type Schemas } from "@/api/client";
+import { client, unwrap, type RunDetail, type Schemas } from "@/api/client";
 import { keys } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { relTime, dateTime } from "@/lib/format";
+import { toastError } from "@/lib/setup";
 import { Badge, Button, EmptyState, Field, Input, JsonBlock, SectionTitle, Textarea } from "@/components/ui";
 import type { StepDoc } from "@/features/workflow/types";
 
@@ -51,7 +52,7 @@ function useSend(run: RunDetail, onSent?: () => void) {
       void qc.invalidateQueries({ queryKey: keys.run(run.id) });
       onSent?.();
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+    onError: (e) => toastError(e),
   });
 }
 

@@ -15,6 +15,7 @@ import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, federationMessage, useFe
 import shoalIcon from "@/assets/brand/shoal-icon.svg";
 import shoalLogo from "@/assets/brand/shoal-logo.svg";
 import shoalLogoDark from "@/assets/brand/shoal-logo-dark.svg";
+import { useSetupToasts } from "@/lib/setup";
 
 export function ShoalMark({ className }: { className?: string }) {
   return <img src={shoalIcon} alt="" aria-hidden className={cn("w-auto", className)} draggable={false} />;
@@ -57,6 +58,7 @@ export function AppShell() {
   const { can } = useAuth();
   const [savedCollapsed, setCollapsed] = useCollapsed();
   const palette = useCommandPalette();
+  useSetupToasts();
 
   useEffect(() => {
     if (location.pathname.startsWith("/ns/")) rememberNamespace(ns);
