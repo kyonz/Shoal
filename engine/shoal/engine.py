@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from shoal.agents.claude_code_login import ClaudeLogins
 from shoal.auth.directory import Directory
 from shoal.auth.oauth import OAuthFlows
 from shoal.auth.oidc import OIDCService
@@ -82,6 +83,10 @@ def _builtin_steps(registry: Registry) -> None:
     from shoal.decisions.llm import LLMDecisionProvider
 
     registry.register("providers", "openai-compatible", OpenAICompatibleProvider, replace=False)
+    from shoal.agents.claude_code import ClaudeCodeGatewayProvider, ClaudeCodeRuntime
+
+    registry.register("providers", "claude-code", ClaudeCodeGatewayProvider, replace=False)
+    registry.register("agent_runtimes", "claude-code", ClaudeCodeRuntime, replace=False)
     registry.register("decision_providers", "llm", LLMDecisionProvider, replace=False)
     registry.register("decision_providers", "jev", JevProvider, replace=False)
     from shoal.evals.sinks.braintrust import BraintrustSink
@@ -149,6 +154,7 @@ class Engine:
         self.signals = Signals(self)
         self.user_credentials = UserCredentials(self)
         self.oauth = OAuthFlows(self)
+        self.claude_logins = ClaudeLogins(self.settings.claude_code_cli)
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)
         self.evals = EvalService(self)
@@ -184,6 +190,7 @@ class Engine:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         await self.orchestrator.close()
+        self.claude_logins.close()
         await self.store.close()
 
     # ------------------------------------------------------------------ hooks

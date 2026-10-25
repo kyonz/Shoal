@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { nsPath } from "@/lib/ns";
 import { Badge, Card, EmptyState, ErrorNotice, Page, PageHeader, Skeleton, Table, Td, Th, Tr } from "@/components/ui";
 import { IntegrationMark } from "@/pages/connect/shared";
+import { ClaudeSubscriptions } from "./ClaudeSubscriptions";
 import {
   CredentialActions,
   CredentialStatus,
@@ -68,6 +69,7 @@ export default function Credentials() {
     }
     // Credentials for connections I can no longer see still show, so they can be removed.
     for (const c of mine.data ?? []) {
+      if (c.kind === "claude-subscription") continue; // listed under Claude subscription
       const k = `${c.namespace}/${c.connection}`;
       byKey.set(k, { ...(byKey.get(k) ?? { ns: c.namespace, name: c.connection }), cred: c });
     }
@@ -112,6 +114,7 @@ export default function Credentials() {
         </Notice>
       )}
       {error ? <ErrorNotice error={error} className="mb-4" /> : null}
+      <ClaudeSubscriptions focus={focus} />
       <Card>
         {loading || mine.isLoading ? (
           <div className="space-y-2 p-4">

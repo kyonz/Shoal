@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     assistant_effort: str = Field("medium", description="Reasoning effort for the assistant's model calls.")
     assistant_max_turns: int = Field(16, ge=1, le=100, description="Model calls per user message before it stops.")
 
+    claude_code_cli: str = Field(
+        "claude", description="Claude Code CLI the API server runs for browser sign-in to a Claude subscription (claude setup-token)."
+    )
+
     audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
 
     log_level: str = "INFO"

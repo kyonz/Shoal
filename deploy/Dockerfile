@@ -49,6 +49,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir /var/lib/shoal shoal \
     && install -d -o shoal -g shoal /var/lib/shoal/sandboxes
+# Optional: the Claude Code CLI, for signing in to Claude subscriptions from the UI and for
+# claude-code agents in local sandboxes (docs/claude-code.md). Build with --build-arg CLAUDE_CODE=1.
+ARG CLAUDE_CODE=0
+RUN if [ "$CLAUDE_CODE" = 1 ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+      curl -fsSL https://claude.ai/install.sh | bash && cp -L /root/.local/bin/claude /usr/local/bin/claude && rm -rf /root/.local; \
+    fi
 COPY --from=build /app/.venv /app/.venv
 COPY --from=ui /out /app/ui
 ENV PATH="/app/.venv/bin:$PATH" \

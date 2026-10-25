@@ -257,6 +257,7 @@ class, an entry point and a contract test), so new ones install without engine c
 
 ### Integrations, campaigns and blueprints
 - **GitHub, Jira, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
+- **Claude Code agents:** run Claude Code headless (`claude -p`) in a sandbox, with its events streamed into the run, on an API key or on each person's own Claude subscription, linked by signing in from the UI ([guide](docs/claude-code.md)).
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
@@ -301,6 +302,7 @@ metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
 | [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
+| [Claude Code agents](docs/claude-code.md) | Running Claude Code headless on an API key or each person's own Claude plan |
 | [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
 | [Temporal](docs/temporal.md) | Driving runs with a Temporal cluster you already operate |
