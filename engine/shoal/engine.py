@@ -30,6 +30,7 @@ from shoal.campaigns.service import CampaignService
 from shoal.cloud import CloudIdentities
 from shoal.config import Settings, get_settings
 from shoal.core import clock
+from shoal.core.errors import PluginError
 from shoal.decisions.service import DecisionService
 from shoal.evals.service import EvalService
 from shoal.federation import FederationHub, FederationMember
@@ -37,9 +38,10 @@ from shoal.identity import IdentityService
 from shoal.integrations.manager import IntegrationManager
 from shoal.integrations.remote import register_remote_integration
 from shoal.llm.router import ModelRouter
-from shoal.plugins.registry import Registry
+from shoal.plugins.registry import Registry, factory
 from shoal.runtime.events import EventBus
 from shoal.runtime.executor import Executor
+from shoal.runtime.orchestrator import Orchestrator
 from shoal.runtime.signals import Signals
 from shoal.sandbox.manager import SandboxManager
 from shoal.secrets.providers import SecretManager
@@ -95,6 +97,19 @@ def _builtin_steps(registry: Registry) -> None:
 
     registry.register("skill_sources", "git", GitSkillSource, replace=False)
     registry.register("skill_sources", "registry", RegistrySkillSource, replace=False)
+    from shoal.runtime.orchestrator import BuiltinOrchestrator
+
+    registry.register("orchestrators", "builtin", BuiltinOrchestrator, replace=False)
+    registry.register("orchestrators", "temporal", _temporal_orchestrator, replace=False)
+
+
+@factory
+def _temporal_orchestrator() -> Any:
+    try:
+        from shoal.runtime.temporal.orchestrator import TemporalOrchestrator
+    except ImportError as exc:
+        raise PluginError("the temporal orchestrator needs the temporal extra: pip install 'shoal[temporal]'") from exc
+    return TemporalOrchestrator()
 
 
 class Engine:
@@ -137,6 +152,8 @@ class Engine:
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)
         self.evals = EvalService(self)
+        self.orchestrator: Orchestrator = self.plugin("orchestrators", self.settings.orchestrator)
+        self.store.wake_hooks.append(self.orchestrator.wake)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._stopping = asyncio.Event()
 
@@ -151,6 +168,7 @@ class Engine:
 
     async def start(self) -> None:
         await self.store.create_all()
+        await self.orchestrator.start()
         for remote in self.settings.remote_integrations:
             try:
                 await register_remote_integration(
@@ -165,6 +183,7 @@ class Engine:
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        await self.orchestrator.close()
         await self.store.close()
 
     # ------------------------------------------------------------------ hooks
@@ -179,7 +198,7 @@ class Engine:
     # ------------------------------------------------------------------ work loops
 
     async def process_due(self, limit: int | None = None) -> int:
-        """Claim and advance due runs once. Returns the number processed."""
+        """Claim and advance due built-in runs once. Returns the number processed."""
         lease = timedelta(seconds=self.settings.lease_seconds)
         run_ids = await self.store.claim_runs(
             self.worker_id, limit=limit or self.settings.worker_concurrency, lease=lease
@@ -191,6 +210,7 @@ class Engine:
         await self.triggers.tick_schedules()
         await self.campaigns.tick_due()
         await self.evals.tick_due()
+        await self.orchestrator.tick()
         await self._prune_audit()
 
     async def _prune_audit(self) -> None:
@@ -207,15 +227,26 @@ class Engine:
         """Process everything that is due right now (tests, CLI ``--wait``)."""
         for _ in range(max_iterations):
             await self.scheduler_tick()
-            if not await self.process_due():
+            if not await self._process_all_due():
                 await self.scheduler_tick()
-                if not await self.process_due():
+                if not await self._process_all_due():
                     return
         raise RuntimeError("run_until_idle did not settle")
 
+    async def _process_all_due(self) -> int:
+        return await self.process_due() + await self.orchestrator.drain()
+
     async def run_worker(self, *, scheduler: bool = True) -> None:
-        """Long-running worker loop: claims runs and runs the scheduler."""
-        log.info("worker %s started", self.worker_id)
+        """Long-running worker loop: claims built-in runs, serves the orchestrator and runs the scheduler."""
+        log.info("worker %s started (orchestrator: %s)", self.worker_id, self.orchestrator.name)
+        serving = asyncio.create_task(self.orchestrator.serve())
+        try:
+            await self._claim_loop(scheduler=scheduler)
+        finally:
+            serving.cancel()
+            await asyncio.gather(serving, return_exceptions=True)
+
+    async def _claim_loop(self, *, scheduler: bool) -> None:
         semaphore = asyncio.Semaphore(self.settings.worker_concurrency)
         lease = timedelta(seconds=self.settings.lease_seconds)
         last_tick = 0.0

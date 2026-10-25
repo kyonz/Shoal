@@ -234,7 +234,7 @@ on the visual canvas. All three produce the same versioned resources.
 - **Step types:** `agent`, `action`, `script`, `wait`, `approval`, `decide`, `grade`, `set` and `workflow` (sub-workflows, with `for_each` fan-out). Every step takes `if`, `retry`, `timeout`, `on_error`, and `needs` for parallel branches.
 - **Script steps** run deterministic work as code in Python, Node or shell, with typed inputs and validated outputs. Use them for glue that doesn't need a model: it's faster, cheaper and repeatable.
 - **Signals** send data into a running workflow from the API, the CLI (`shoal signal`) or a signed callback URL, so external systems can reply to a run that is waiting on them.
-- **Durable executor** on Postgres: runs survive restarts and wait for days with no extra infrastructure. Database migrations run automatically.
+- **Durable executor** on Postgres: runs survive restarts and wait for days with no extra infrastructure. Database migrations run automatically. If you already operate Temporal, Shoal can use it to drive runs instead ([guide](docs/temporal.md)).
 - **Versioning** with change notes, diffs, rollback and pinned versions, and a live run viewer that streams every event.
 
 ### Agents
@@ -293,9 +293,6 @@ and explains failed runs. It acts with your permissions, and you approve every c
 One container image for the API, workers and CLI; docker compose and a Helm chart; Prometheus
 metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 
-### In progress
-A Temporal orchestrator backend.
-
 ## Documentation
 
 | Read | For |
@@ -306,6 +303,7 @@ A Temporal orchestrator backend.
 | [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
 | [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
+| [Temporal](docs/temporal.md) | Driving runs with a Temporal cluster you already operate |
 | [Terraform provider](terraform-provider/docs/index.md) | Managing Shoal as code |
 | [Web UI](frontend/README.md) | Developing the frontend |
 | [Brand](docs/brand.md) | Logo, colours and how to use them |

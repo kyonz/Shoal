@@ -18,3 +18,26 @@ data:
   SHOAL_ASSISTANT_MODEL: {{ .Values.config.assistant.model | quote }}
   SHOAL_ASSISTANT_EFFORT: {{ .Values.config.assistant.effort | quote }}
   SHOAL_ASSISTANT_MAX_TURNS: {{ .Values.config.assistant.maxTurns | quote }}
+  SHOAL_ORCHESTRATOR: {{ .Values.orchestrator.type | quote }}
+  {{- if eq .Values.orchestrator.type "temporal" }}
+  {{- with .Values.orchestrator.temporal }}
+  SHOAL_TEMPORAL_ADDRESS: {{ required "orchestrator.temporal.address is required when orchestrator.type is temporal" .address | quote }}
+  SHOAL_TEMPORAL_NAMESPACE: {{ .namespace | quote }}
+  SHOAL_TEMPORAL_TASK_QUEUE: {{ .taskQueue | quote }}
+  SHOAL_TEMPORAL_TLS: {{ .tls | quote }}
+  SHOAL_TEMPORAL_PASS_TIMEOUT_SECONDS: {{ .passTimeoutSeconds | quote }}
+  SHOAL_TEMPORAL_RECONCILE_AFTER_SECONDS: {{ .reconcileAfterSeconds | quote }}
+  {{- if .mtlsSecret }}
+  SHOAL_TEMPORAL_TLS_CERT_PATH: /etc/shoal/temporal-tls/tls.crt
+  SHOAL_TEMPORAL_TLS_KEY_PATH: /etc/shoal/temporal-tls/tls.key
+  {{- if .mtlsCa }}
+  SHOAL_TEMPORAL_TLS_CA_PATH: /etc/shoal/temporal-tls/ca.crt
+  {{- end }}
+  {{- end }}
+  {{- if .versioning.buildId }}
+  SHOAL_TEMPORAL_BUILD_ID: {{ .versioning.buildId | quote }}
+  SHOAL_TEMPORAL_DEPLOYMENT_NAME: {{ .versioning.deploymentName | default .taskQueue | quote }}
+  SHOAL_TEMPORAL_VERSIONING_BEHAVIOR: {{ .versioning.behavior | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}

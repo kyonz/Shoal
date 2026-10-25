@@ -37,7 +37,8 @@ postgres = ["asyncpg>=0.29"]
 kubernetes = ["kubernetes-asyncio>=30.1"]
 e2b = ["e2b>=1.0"]
 docker = ["docker>=7.1"]
-all = ["shoal[postgres,kubernetes,e2b,docker]"]
+temporal = ["temporalio>=1.20"]
+all = ["shoal[postgres,kubernetes,e2b,docker,temporal]"]
 
 [project.scripts]
 shoal = "shoal.cli.main:app"
@@ -78,6 +79,10 @@ registry = "shoal.skills.registry:RegistrySkillSource"
 tool-loop = "shoal.agents.tool_loop:ToolLoopRuntime"
 cli = "shoal.agents.cli_runtime:CliRuntime"
 a2a = "shoal.agents.a2a_runtime:A2ARuntime"
+
+[project.entry-points."shoal.orchestrators"]
+builtin = "shoal.runtime.orchestrator:BuiltinOrchestrator"
+temporal = "shoal.runtime.temporal.orchestrator:TemporalOrchestrator"
 
 [project.entry-points."shoal.credentials"]
 aws = "shoal.cloud.aws:AwsProvider"

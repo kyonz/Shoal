@@ -5,6 +5,12 @@
 #   shoal --server http://localhost:8080 --token "$SHOAL_ADMIN_TOKEN" tenants create acme
 #
 # Scale workers with: docker compose -f deploy/docker-compose.yaml up -d --scale worker=3
+#
+# Runs are driven by the database by default. To hand scheduling to a Temporal
+# cluster you already run, set SHOAL_ORCHESTRATOR=temporal and
+# SHOAL_TEMPORAL_ADDRESS (plus the namespace, task queue, API key or TLS
+# variables you need) in deploy/.env. To try it with a local dev server:
+#   docker compose -f deploy/docker-compose.yaml -f deploy/docker-compose.temporal.yaml up -d --build
 
 name: shoal
 
@@ -20,6 +26,12 @@ x-shoal: &shoal
     SHOAL_DEFAULT_SANDBOX_BACKEND: ${SHOAL_DEFAULT_SANDBOX_BACKEND:-local}
     SHOAL_LOG_LEVEL: ${SHOAL_LOG_LEVEL:-INFO}
     SHOAL_LOG_JSON: ${SHOAL_LOG_JSON:-false}
+    SHOAL_ORCHESTRATOR: ${SHOAL_ORCHESTRATOR:-builtin}
+    SHOAL_TEMPORAL_ADDRESS: ${SHOAL_TEMPORAL_ADDRESS:-localhost:7233}
+    SHOAL_TEMPORAL_NAMESPACE: ${SHOAL_TEMPORAL_NAMESPACE:-default}
+    SHOAL_TEMPORAL_TASK_QUEUE: ${SHOAL_TEMPORAL_TASK_QUEUE:-shoal}
+    SHOAL_TEMPORAL_TLS: ${SHOAL_TEMPORAL_TLS:-false}
+    SHOAL_TEMPORAL_API_KEY: ${SHOAL_TEMPORAL_API_KEY:-}
     # Model providers and sandbox services read their own variables.
     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     E2B_API_KEY: ${E2B_API_KEY:-}

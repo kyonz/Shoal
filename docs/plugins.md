@@ -28,6 +28,7 @@ resource that selects the plugin (a SandboxProfile's `config`, a Gateway's `conf
 | `shoal.decision_providers` | `DecisionProvider` | Answers typed questions (choice, score, boolean) | `check_decision_provider` | |
 | `shoal.agent_runtimes` | `AgentRuntime` | Runs an agent: tool loop, CLI agent, remote agent | | Any A2A agent via `a2a` |
 | `shoal.credentials` | `CredentialProvider` | Issues short-lived cloud credentials for a CloudIdentity | | |
+| `shoal.orchestrators` | `Orchestrator` | Drives runs: the built-in Postgres executor, or Temporal | | |
 
 `check_entry_point(group, name)` checks that an installed package exposes the plugin in the right
 group and that it subclasses the right base.
@@ -97,3 +98,12 @@ text, a `version` and, where there is one, the exact `ref`. An unknown skill rai
 `SkillSourceError` with status 404. Check it with `check_skill_source`; `git` and `registry` are
 the reference implementations, and `shoal.sdk.skill_server` serves any source over
 `shoal.skill-source/v1` so it can run as its own service. See [skills.md](skills.md).
+
+## Orchestrators (`shoal.orchestrators`)
+
+An orchestrator decides when runs advance; the executor still runs each step. `submit` is called
+for every new run and `wake` whenever something a run waits on changes; neither may raise, because
+`tick` (called by the scheduler every few seconds) repairs anything they missed. `serve` does the
+worker-side work and `drain` advances everything that is due (used by tests and `--wait`). Pick
+one with `SHOAL_ORCHESTRATOR`. The built-in one and Temporal are the reference implementations; see
+[temporal.md](temporal.md).

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -70,6 +71,26 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(16, ge=1)
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
+    orchestrator: str = Field(
+        "builtin", description="What drives runs: builtin (the database) or temporal (needs the temporal extra)."
+    )
+    temporal_address: str = Field("localhost:7233", description="Temporal frontend host:port.")
+    temporal_namespace: str = "default"
+    temporal_task_queue: str = "shoal"
+    temporal_api_key: SecretStr | None = Field(None, description="API key (Temporal Cloud); implies TLS.")
+    temporal_tls: bool = False
+    temporal_tls_cert_path: str | None = Field(None, description="Client certificate for mTLS.")
+    temporal_tls_key_path: str | None = None
+    temporal_tls_ca_path: str | None = Field(None, description="CA bundle for the server certificate.")
+    temporal_pass_timeout_seconds: int = Field(
+        24 * 3600, ge=60, description="Longest pass over a run (one activity); bounds the longest single step."
+    )
+    temporal_reconcile_after_seconds: int = Field(
+        60, ge=5, description="Signal a run's workflow again when the run has been due this long without a pass."
+    )
+    temporal_build_id: str | None = Field(None, description="Turns on Temporal worker versioning with this build id.")
+    temporal_deployment_name: str | None = Field(None, description="Worker deployment name (default: the task queue).")
+    temporal_versioning_behavior: Literal["auto-upgrade", "pinned"] = "auto-upgrade"
     default_sandbox_backend: str = "local"
     default_decision_provider: str = Field("llm", description="Decision provider for decide/grade steps: llm or jev.")
 

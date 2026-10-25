@@ -61,6 +61,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_DATABASE_URL}}
 - name: SHOAL_WORKER_ID
   valueFrom: {fieldRef: {fieldPath: metadata.name}}
+{{- with .Values.orchestrator.temporal.apiKeySecret }}
+{{- if and (eq $.Values.orchestrator.type "temporal") .name }}
+- name: SHOAL_TEMPORAL_API_KEY
+  valueFrom: {secretKeyRef: {name: {{ .name }}, key: {{ .key }}}}
+{{- end }}
+{{- end }}
 {{- with .Values.extraEnv }}
 {{ toYaml . }}
 {{- end }}
@@ -81,6 +87,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 - name: sandboxes
   emptyDir:
     sizeLimit: {{ .Values.worker.sandboxVolume.sizeLimit }}
+{{- if and (eq .Values.orchestrator.type "temporal") .Values.orchestrator.temporal.mtlsSecret }}
+- name: temporal-tls
+  secret:
+    secretName: {{ .Values.orchestrator.temporal.mtlsSecret }}
+{{- end }}
 {{- end }}
 
 {{- define "shoal.volumeMounts" -}}
@@ -88,4 +99,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   mountPath: /tmp
 - name: sandboxes
   mountPath: /var/lib/shoal/sandboxes
+{{- if and (eq .Values.orchestrator.type "temporal") .Values.orchestrator.temporal.mtlsSecret }}
+- name: temporal-tls
+  mountPath: /etc/shoal/temporal-tls
+  readOnly: true
+{{- end }}
 {{- end }}

@@ -111,6 +111,7 @@ class Executor:
             campaign_target_id=campaign_target_id,
             parent_run_id=parent_run_id,
             parent_step_id=parent_step_id,
+            orchestrator=self.engine.orchestrator.name,
             next_wake_at=now,
             created_at=now,
             updated_at=now,
@@ -122,6 +123,7 @@ class Executor:
             "run.created",
             {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by, "initiator": initiator},
         )
+        await self.engine.orchestrator.submit(run)
         return run
 
     # ------------------------------------------------------------------ advance

@@ -4,7 +4,7 @@
 #   scripts/check.sh                 # all sections
 #   scripts/check.sh engine helm     # only some: engine frontend terraform helm image
 #
-# Needs uv; go, helm, kubeconform, node and docker are used when
+# Needs uv; go, helm, kubeconform, node, docker and the temporal CLI are used when
 # installed and their sections are skipped (with a warning) when not.
 set -euo pipefail
 
@@ -34,6 +34,21 @@ engine() {
   if [ -n "${SHOAL_TEST_DATABASE_URL:-}" ]; then  # e.g. postgresql+asyncpg://postgres@127.0.0.1:5432/shoal_test
     echo "again against Postgres"
     uv run pytest -q
+  fi
+  local temporal_address="${SHOAL_TEST_TEMPORAL_ADDRESS:-}" temporal_pid=""
+  if [ -z "$temporal_address" ] && have temporal; then  # a throwaway dev server
+    local port="${SHOAL_CHECK_TEMPORAL_PORT:-17233}"
+    temporal server start-dev --headless --port "$port" --log-level error >/dev/null 2>&1 &
+    temporal_pid=$!
+    temporal_address="localhost:$port"
+    for _ in $(seq 1 30); do temporal operator cluster health --address "$temporal_address" >/dev/null 2>&1 && break; sleep 1; done
+  fi
+  if [ -n "$temporal_address" ]; then
+    echo "again with runs driven by Temporal ($temporal_address)"
+    SHOAL_TEST_TEMPORAL_ADDRESS="$temporal_address" uv run pytest -q || { [ -z "$temporal_pid" ] || kill "$temporal_pid"; return 1; }
+    [ -z "$temporal_pid" ] || kill "$temporal_pid"
+  else
+    echo "temporal CLI not installed: skipping the Temporal run of the suite"
   fi
   uv run shoal --help >/dev/null
 }
@@ -67,6 +82,10 @@ helm_chart() {
     --set postgresql.enabled=false,database.url=postgresql+asyncpg://u:p@db/shoal \
     --set ingress.enabled=true,api.autoscaling.enabled=true,worker.autoscaling.enabled=true \
     --set kubernetesSandboxes.enabled=true,metrics.serviceMonitor.enabled=true,api.embeddedWorker=true \
+    | kubeconform -strict -summary -skip ServiceMonitor
+  helm template shoal "$chart" --set orchestrator.type=temporal,orchestrator.temporal.address=temporal:7233 \
+    --set orchestrator.temporal.apiKeySecret.name=temporal-key,orchestrator.temporal.mtlsSecret=temporal-tls \
+    --set orchestrator.temporal.versioning.buildId=v1 \
     | kubeconform -strict -summary -skip ServiceMonitor
   helm template shoal "$chart" --set secrets.existingSecret=shoal-creds,worker.enabled=false \
     --set kubernetesSandboxes.enabled=true,kubernetesSandboxes.clusterWide=true \

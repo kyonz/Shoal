@@ -36,6 +36,7 @@ from shoal.cloud import CloudSession, CredentialProvider, IssueRequest
 from shoal.decisions.base import Answer, DecisionProvider, DecisionRequest, DecisionResult
 from shoal.evals.sinks.base import EvalExport, EvalSink, ExportResult, ScoredCase, Trace, TraceSpan
 from shoal.integrations.base import Integration
+from shoal.runtime.orchestrator import Orchestrator
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec
 from shoal.secrets.providers import SecretProvider
 from shoal.skills.base import SkillBundle, SkillPage, SkillSource, SkillSourceContext, SkillSummary
@@ -64,6 +65,7 @@ PLUGIN_GROUPS: dict[str, PluginGroup] = {
         PluginGroup("agent_runtimes", AgentRuntime, "Run an agent: a tool loop, a CLI agent, or a remote agent.",
                     "any A2A agent via the `a2a` runtime"),
         PluginGroup("credentials", CredentialProvider, "Issue short-lived cloud credentials for a CloudIdentity."),
+        PluginGroup("orchestrators", Orchestrator, "Drive runs: the built-in Postgres executor, or Temporal."),
         PluginGroup("skill_sources", SkillSource, "Marketplaces skills are imported from: list, search and fetch SKILL.md bundles.",
                     "the `registry` source's shoal.skill-source/v1 protocol, which `shoal.sdk.skill_server` serves for any source"),
     )
@@ -85,6 +87,7 @@ __all__ = [
     "ExecResult",
     "ExportResult",
     "Integration",
+    "Orchestrator",
     "IssueRequest",
     "ModelProvider",
     "ModelRequest",

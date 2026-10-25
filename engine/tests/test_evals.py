@@ -406,7 +406,8 @@ async def test_eval_api_with_langfuse(engine, admin):
     r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs", json={"labels": {"ci": "true"}})
     assert r.status_code == 201, r.text
     eval_run_id = r.json()["id"]
-    assert r.json()["eval_version"] == 2 and r.json()["status"] == "running"
+    # (a background worker, as with Temporal, may already have finished the cases)
+    assert r.json()["eval_version"] == 2 and r.json()["status"] in ("running", "completed")
     await engine.run_until_idle()
 
     detail = (await admin.get(f"/v1/eval-runs/{eval_run_id}")).json()

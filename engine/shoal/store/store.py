@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets as pysecrets
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
@@ -49,6 +49,8 @@ class Store:
         self.engine: AsyncEngine = create_async_engine(url, **kwargs)
         self.is_sqlite = url.startswith("sqlite")
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        # Called with the run id after every wake_run (the engine wires in its orchestrator).
+        self.wake_hooks: list[Callable[[str], Awaitable[None]]] = []
 
     async def create_all(self) -> None:
         """Bring the schema up to date (Alembic migrations)."""
@@ -508,13 +510,16 @@ class Store:
                 )
                 .values(next_wake_at=at)
             )
+        for hook in self.wake_hooks:
+            await hook(run_id)
 
     async def claim_runs(self, worker_id: str, *, limit: int, lease: timedelta) -> list[str]:
-        """Claim runs that are due. Optimistic per-row claim works on SQLite and Postgres."""
+        """Claim built-in runs that are due. Optimistic per-row claim works on SQLite and Postgres."""
         now = utcnow()
         q = (
             select(t.Run.id)
             .where(
+                t.Run.orchestrator == "builtin",
                 t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
                 t.Run.next_wake_at.is_not(None),
                 t.Run.next_wake_at <= now,
@@ -542,6 +547,38 @@ class Store:
                 if result.rowcount:
                     claimed.append(run_id)
         return claimed
+
+    async def due_runs(
+        self, orchestrator: str, before: datetime, *, include_leased: bool = False, limit: int = 200
+    ) -> Sequence[t.Run]:
+        """Unfinished runs of an orchestrator that are due by ``before`` (leased or not).
+
+        ``include_leased`` adds every run whose lease is held, finished or not: one still being advanced.
+        """
+        due = and_(
+            t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+            t.Run.next_wake_at.is_not(None),
+            t.Run.next_wake_at <= before,
+        )
+        if include_leased:
+            due = or_(due, t.Run.lease_expires_at > utcnow())
+        q = select(t.Run).where(t.Run.orchestrator == orchestrator, due).order_by(t.Run.id).limit(limit)
+        async with self.session() as s:
+            return (await s.execute(q)).scalars().all()
+
+    async def lease_run(self, run_id: str, worker_id: str, lease: timedelta) -> bool:
+        """Take the lease on one run (free, expired or already ours); for orchestrators that schedule runs themselves."""
+        now = utcnow()
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.Run)
+                .where(
+                    t.Run.id == run_id,
+                    or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now, t.Run.lease_owner == worker_id),
+                )
+                .values(lease_owner=worker_id, lease_expires_at=now + lease)
+            )
+            return bool(result.rowcount)
 
     async def extend_lease(self, run_id: str, worker_id: str, lease: timedelta) -> bool:
         async with self.session() as s:

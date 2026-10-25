@@ -30,6 +30,35 @@ config:
     effort: medium
     maxTurns: 16
 
+# What drives runs. "builtin" needs nothing but the database. "temporal" hands
+# scheduling (durable timers, wake-ups, retrying passes whose worker died) to a
+# Temporal cluster you already run; Shoal's database stays the source of truth
+# for resources, runs, steps, events and approvals. See docs/temporal.md.
+orchestrator:
+  type: builtin
+  temporal:
+    # Frontend host:port, e.g. temporal-frontend.temporal.svc:7233 or <ns>.<account>.tmprl.cloud:7233
+    address: ""
+    namespace: default
+    # Give each Shoal installation that shares a Temporal namespace its own task queue.
+    taskQueue: shoal
+    tls: false
+    # API key (Temporal Cloud) from a Secret you manage; implies TLS.
+    apiKeySecret:
+      name: ""
+      key: api-key
+    # mTLS: a Secret with tls.crt and tls.key, mounted into every pod; set mtlsCa
+    # when it also holds the server's CA as ca.crt.
+    mtlsSecret: ""
+    mtlsCa: false
+    passTimeoutSeconds: 86400
+    reconcileAfterSeconds: 60
+    # Temporal worker versioning: set buildId (e.g. the image tag) to turn it on.
+    versioning:
+      buildId: ""
+      deploymentName: ""
+      behavior: auto-upgrade
+
 # Credentials. Leave secretKey/adminToken empty to generate them once (they are
 # kept across upgrades), or point existingSecret at a Secret you manage with keys
 # SHOAL_SECRET_KEY, SHOAL_ADMIN_TOKEN and, when the database is external,

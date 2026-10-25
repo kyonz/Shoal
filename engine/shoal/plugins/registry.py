@@ -29,6 +29,7 @@ GROUPS = (
     "decision_providers",
     "eval_sinks",
     "skill_sources",
+    "orchestrators",
 )
 
 
