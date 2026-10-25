@@ -289,7 +289,8 @@ class Engine:
                 claimed = []
                 if free:
                     claimed = await self.store.claim_runs(
-                        self.worker_id, limit=free, lease=lease, tenant_limits=self.quotas.concurrency_limits
+                        self.worker_id, limit=free, lease=lease, tenant_limits=self.quotas.concurrency_limits,
+                        lanes=self.settings.worker_lanes,
                     )
                 for run_id in claimed:
                     await semaphore.acquire()

@@ -21,7 +21,7 @@ name: shoal
 x-shoal: &shoal
   image: ${SHOAL_IMAGE:-shoal:local}
   restart: unless-stopped
-  environment:
+  environment: &shoal-env
     SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@pgbouncer:5432/shoal
     SHOAL_DATABASE_DIRECT_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@postgres:5432/shoal
     SHOAL_DB_PGBOUNCER: "true"
@@ -97,6 +97,9 @@ services:
   worker:
     <<: *shoal
     command: ["worker"]
+    environment:
+      <<: *shoal-env
+      SHOAL_WORKER_LANES: ${SHOAL_WORKER_LANES:-["standard","agent"]}
     volumes:
       - sandboxes:/var/lib/shoal/sandboxes
       # Uncomment to let the 'docker' sandbox backend start containers on this host.
@@ -105,6 +108,24 @@ services:
       disable: true
     depends_on:
       # The API creates the schema on start; workers wait for it.
+      api:
+        condition: service_healthy
+
+  # A separate pool for runs that call models, so short workflows never queue behind
+  # agents:  SHOAL_WORKER_LANES='["standard"]' docker compose --profile agents up -d
+  agent-worker:
+    <<: *shoal
+    command: ["worker", "--no-scheduler"]
+    profiles: ["agents"]
+    environment:
+      <<: *shoal-env
+      SHOAL_WORKER_LANES: '["agent"]'
+      SHOAL_WORKER_CONCURRENCY: ${SHOAL_AGENT_WORKER_CONCURRENCY:-200}
+    volumes:
+      - sandboxes:/var/lib/shoal/sandboxes
+    healthcheck:
+      disable: true
+    depends_on:
       api:
         condition: service_healthy
 

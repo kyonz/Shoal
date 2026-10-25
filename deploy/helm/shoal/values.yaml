@@ -188,6 +188,16 @@ worker:
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
+  # A separate pool for runs that call models (agent, decide and grade steps), so short
+  # workflows never queue behind long agent runs. Agent steps mostly wait on the model,
+  # so these workers run many at once.
+  agentPool:
+    enabled: false
+    replicaCount: 2
+    concurrency: 200
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {memory: 2Gi}
   # Scratch space for 'local' sandboxes.
   sandboxVolume:
     sizeLimit: 10Gi

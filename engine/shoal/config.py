@@ -26,6 +26,9 @@ class Settings(BaseSettings):
         description="Direct database URL (bypassing a pooler such as PgBouncer) for migrations and LISTEN/NOTIFY; "
         "defaults to database_url.",
     )
+    database_read_url: str | None = Field(
+        None, description="Read replica for run lists, dashboards and audit queries (they may lag the primary slightly)."
+    )
     db_pool_size: int = Field(
         20, ge=1, description="Connections each process keeps open. Size it to worker_concurrency plus a few on workers."
     )
@@ -82,7 +85,15 @@ class Settings(BaseSettings):
     aws_audience: str = Field("sts.amazonaws.com", description="Audience of web identity tokens presented to AWS STS.")
 
     worker_id: str | None = None
-    worker_concurrency: int = Field(16, ge=1)
+    worker_concurrency: int = Field(
+        16, ge=1, description="Runs a worker advances at once. Agent steps mostly wait on models, so agent-lane "
+        "workers can run far more (e.g. 200) than CPU-bound ones."
+    )
+    worker_lanes: list[str] = Field(
+        default_factory=lambda: ["standard", "agent"],
+        description="Which runs this worker takes: 'agent' (workflows that call models) and/or 'standard' (the rest). "
+        "Separate pools keep short workflows from queueing behind long agent runs.",
+    )
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
     orchestrator: str = Field(

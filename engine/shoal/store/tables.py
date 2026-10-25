@@ -262,6 +262,10 @@ class Run(Base):
     parent_run_id: Mapped[str | None] = mapped_column(String(40), index=True)
     parent_step_id: Mapped[str | None] = mapped_column(String(64))
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    lane: Mapped[str] = mapped_column(
+        String(20), default="standard", server_default="standard",
+        doc="Which workers take this run: 'agent' when the workflow calls models, else 'standard'.",
+    )
     idempotency_key: Mapped[str | None] = mapped_column(
         String(200), doc="Client key from the Idempotency-Key header: a retried start returns this run."
     )

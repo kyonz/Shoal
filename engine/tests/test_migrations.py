@@ -23,6 +23,7 @@ async def test_existing_database_without_migrations_is_adopted(engine):
         await conn.exec_driver_sql("DROP TABLE webhook_inbox")
         await conn.exec_driver_sql("DROP INDEX ix_runs_tenant_status")
         await conn.exec_driver_sql("DROP INDEX ix_runs_lease")
+        await conn.exec_driver_sql("ALTER TABLE runs DROP COLUMN lane")
         await conn.exec_driver_sql("DROP INDEX ix_runs_idempotency")  # added by 0006
         await conn.exec_driver_sql("ALTER TABLE runs DROP COLUMN idempotency_key")
         await conn.exec_driver_sql("DROP INDEX ix_run_events_created")

@@ -303,6 +303,7 @@ metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 | [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
 | [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
+| [Scaling](docs/scaling.md) | Connection pooling, worker lanes, gateway limits and tenant quotas for busy deployments |
 | [Temporal](docs/temporal.md) | Driving runs with a Temporal cluster you already operate |
 | [Terraform provider](terraform-provider/docs/index.md) | Managing Shoal as code |
 | [Web UI](frontend/README.md) | Developing the frontend |

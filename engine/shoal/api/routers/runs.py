@@ -97,7 +97,7 @@ async def list_runs(
     await ctx.namespace(namespace, "runs:read")
     rows = await ctx.engine.store.list_runs(
         ctx.tenant_id, namespace=namespace, workflow=workflow, status=status, campaign_id=campaign_id,
-        trigger=trigger, limit=limit + 1, before=cursor,
+        trigger=trigger, limit=limit + 1, before=cursor, replica=True,
     )
     items = list(rows[:limit])
     return Page(items=[RunOut.model_validate(r) for r in items], next_cursor=items[-1].id if len(rows) > limit else None)

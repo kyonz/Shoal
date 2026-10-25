@@ -319,6 +319,16 @@ The scheduler loop (in every worker, coordinated by leases) fires timers, polls
 poll-based triggers and wait conditions, ticks campaigns, and recovers expired
 leases.
 
+- Workers claim due runs with `FOR UPDATE SKIP LOCKED`, taking turns across
+  tenants and respecting each tenant's `max_concurrent_runs`. Runs whose
+  workflow calls models (`agent`, `decide`, `grade`) go to the **agent lane**,
+  so a worker pool for long, I/O-bound agent runs can be scaled apart from the
+  pool that runs short steps.
+- A pass writes its step results, events, waits and the lease release in as few
+  transactions as it can, and every event insert sends a Postgres `NOTIFY` so
+  live views wake at once instead of polling. See
+  [Running Shoal at high throughput](scaling.md).
+
 ---
 
 ## 7. Agents, skills and tools
@@ -786,7 +796,11 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
   KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
   are injected at the last moment and redacted from events and logs.
-- **Quotas**: per-tenant concurrency, sandbox minutes and token budgets.
+- **Quotas**: per-tenant request rate (429 with `Retry-After`), runs waiting
+  to start, and runs in progress, with server-wide defaults that the system
+  admin overrides per tenant (`PUT /v1/tenants/{slug}/quotas`). Gateways carry
+  their own concurrency, request and token limits, shared by every worker.
+  See [Running Shoal at high throughput](scaling.md).
 - **Audit log**: every mutating API call and every agent tool call is recorded.
 
 ---
@@ -835,7 +849,9 @@ credential performed it*, and lets policy decide what the run may do.
 ## 12. API
 
 - REST + JSON under `/v1`, generated OpenAPI 3.1 spec, cursor pagination,
-  `Idempotency-Key` header support on POSTs, problem+json errors.
+  problem+json errors. Starting a run accepts an `Idempotency-Key` header: a
+  retry with the same key returns the run the first request started. Over a
+  quota the API answers `429` with `Retry-After`.
 - Resources: `tenants`, `api-keys`, `agents`, `skills`, `workflows`
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),

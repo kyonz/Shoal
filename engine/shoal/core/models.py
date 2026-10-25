@@ -358,6 +358,20 @@ class WorkflowDefaults(Model):
     sandbox: str | None = None
 
 
+MODEL_STEP_TYPES = frozenset({"agent", "decide", "grade"})
+
+
+def calls_models(node: Any) -> bool:
+    """Whether a workflow document (or any part of one) has a step that calls a model."""
+    if isinstance(node, dict):
+        if node.get("type") in MODEL_STEP_TYPES and "id" in node:
+            return True
+        return any(calls_models(v) for v in node.values())
+    if isinstance(node, list):
+        return any(calls_models(v) for v in node)
+    return False
+
+
 class WorkflowSpec(Model):
     description: str | None = None
     inputs: dict[str, ParamSpec] = Field(default_factory=dict)

@@ -54,6 +54,7 @@ class Store:
         pool_recycle: int = 1800,
         pgbouncer: bool = False,
         direct_url: str | None = None,
+        read_url: str | None = None,
     ):
         kwargs: dict[str, Any] = {"echo": echo}
         if url.startswith("sqlite"):
@@ -74,8 +75,11 @@ class Store:
         self.url = url
         self.direct_url = direct_url or url
         self.engine: AsyncEngine = create_async_engine(url, **kwargs)
+        # Dashboards, lists and audit reads can go to a replica; anything that decides what to do next reads the primary.
+        self.read_engine: AsyncEngine = create_async_engine(read_url, **kwargs) if read_url else self.engine
         self.is_sqlite = url.startswith("sqlite")
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        self._read_sessions = async_sessionmaker(self.read_engine, expire_on_commit=False)
         # Called with the run id after every wake_run (the engine wires in its orchestrator).
         self.wake_hooks: list[Callable[[str], Awaitable[None]]] = []
         # Bumped whenever keys, users, groups, roles or bindings change, so request caches can drop old answers.
@@ -117,10 +121,18 @@ class Store:
 
     async def close(self) -> None:
         await self.engine.dispose()
+        if self.read_engine is not self.engine:
+            await self.read_engine.dispose()
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self._sessions() as session, session.begin():
+            yield session
+
+    @asynccontextmanager
+    async def read_session(self) -> AsyncIterator[AsyncSession]:
+        """A read-only session on the replica when one is configured (may lag the primary slightly)."""
+        async with self._read_sessions() as session, session.begin():
             yield session
 
     # ------------------------------------------------------------------ tenants
@@ -508,6 +520,7 @@ class Store:
         namespace: str | None = None,
         limit: int = 50,
         before: str | None = None,
+        replica: bool = False,
     ) -> Sequence[t.Run]:
         q = select(t.Run).where(t.Run.tenant_id == tenant_id)
         if namespace:
@@ -525,7 +538,7 @@ class Store:
         if before:
             q = q.where(t.Run.id < before)
         q = q.order_by(t.Run.id.desc()).limit(limit)
-        async with self.session() as s:
+        async with (self.read_session() if replica else self.session()) as s:
             return (await s.execute(q)).scalars().all()
 
     async def count_runs(self, tenant_id: str, *, statuses: list[str] | None = None, **filters: Any) -> int:
@@ -541,12 +554,12 @@ class Store:
         q = select(t.Run.status, func.count()).where(t.Run.tenant_id == tenant_id, t.Run.created_at >= since)
         if namespace:
             q = q.where(t.Run.namespace == namespace)
-        async with self.session() as s:
+        async with self.read_session() as s:
             return {status: int(n) for status, n in (await s.execute(q.group_by(t.Run.status))).all()}
 
     async def run_status_counts(self, tenant_id: str) -> dict[str, int]:
         q = select(t.Run.status, func.count()).where(t.Run.tenant_id == tenant_id).group_by(t.Run.status)
-        async with self.session() as s:
+        async with self.read_session() as s:
             return {status: int(n) for status, n in (await s.execute(q)).all()}
 
     async def run_usage(self, tenant_id: str, since: datetime, *, namespace: str | None = None) -> list[dict[str, Any]]:
@@ -557,7 +570,7 @@ class Store:
         if namespace:
             q = q.where(t.Run.namespace == namespace)
         out: dict[tuple[str, str], dict[str, Any]] = {}
-        async with self.session() as s:
+        async with self.read_session() as s:
             for workflow, ns, status, usage in (await s.execute(q)).all():
                 row = out.setdefault((ns, workflow), {"namespace": ns, "workflow": workflow, "runs": 0, "succeeded": 0, "failed": 0, "cost_usd": 0.0})
                 row["runs"] += 1
@@ -594,6 +607,7 @@ class Store:
         limit: int,
         lease: timedelta,
         tenant_limits: Callable[[set[str]], Awaitable[dict[str, int]]] | None = None,
+        lanes: Sequence[str] | None = None,
     ) -> list[str]:
         """Claim built-in runs that are due, taking turns across tenants.
 
@@ -607,6 +621,7 @@ class Store:
             t.Run.next_wake_at.is_not(None),
             t.Run.next_wake_at <= now,
             or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
+            *([t.Run.lane.in_(list(lanes))] if lanes else []),
         )
 
         def candidates(*where: Any) -> Any:
@@ -725,6 +740,56 @@ class Store:
         step.updated_at = utcnow()
         async with self.session() as s:
             await s.merge(step)
+
+    async def checkpoint(
+        self,
+        run_id: str,
+        tenant_id: str,
+        *,
+        steps: Sequence[t.StepRun] = (),
+        run_values: dict[str, Any] | None = None,
+        events: Sequence[tuple[str, dict[str, Any], str | None]] = (),
+        clear_waits: str | bool | None = None,
+        set_waits: tuple[str, list[str]] | None = None,
+        release_lease: str | None = None,
+    ) -> None:
+        """Persist one step of progress in a single transaction.
+
+        Saves ``steps``, updates the run with ``run_values``, appends ``events`` (type, data, step id), clears
+        wait keys (a step id, or ``True`` for the whole run), replaces one step's wait keys (``set_waits``) and
+        releases ``release_lease``'s lease on the run.
+        """
+        now = utcnow()
+        async with self.session() as s:
+            for step in steps:
+                step.updated_at = now
+                await s.merge(step)
+            values = dict(run_values or {})
+            if release_lease is not None:
+                await s.execute(
+                    update(t.Run).where(t.Run.id == run_id, t.Run.lease_owner == release_lease)
+                    .values(lease_owner=None, lease_expires_at=None)
+                )
+            if values:
+                await s.execute(update(t.Run).where(t.Run.id == run_id).values(**values, updated_at=now))
+            if clear_waits:
+                q = delete(t.WaitSubscription).where(t.WaitSubscription.run_id == run_id)
+                if isinstance(clear_waits, str):
+                    q = q.where(t.WaitSubscription.step_id == clear_waits)
+                await s.execute(q)
+            if set_waits is not None:
+                step_id, keys = set_waits
+                await s.execute(
+                    delete(t.WaitSubscription).where(t.WaitSubscription.run_id == run_id, t.WaitSubscription.step_id == step_id)
+                )
+                s.add_all(
+                    [t.WaitSubscription(tenant_id=tenant_id, key=k, run_id=run_id, step_id=step_id) for k in sorted(set(keys))]
+                )
+            if events:
+                s.add_all(
+                    [t.RunEvent(tenant_id=tenant_id, run_id=run_id, step_id=sid, type=kind, data=data) for kind, data, sid in events]
+                )
+                await self.notify_events(s, run_id)
 
     # ------------------------------------------------------------------ events
 
@@ -1163,7 +1228,7 @@ class Store:
         return q.order_by(t.AuditEntry.id.desc())
 
     async def list_audit(self, tenant_id: str, limit: int = 100, **filters: Any) -> Sequence[t.AuditEntry]:
-        async with self.session() as s:
+        async with self.read_session() as s:
             return (await s.execute(self._audit_query(tenant_id, **filters).limit(limit))).scalars().all()
 
     async def prune_run_events(self, older_than: datetime, *, batch: int = 10_000) -> int:
@@ -1207,4 +1272,5 @@ def store_from_settings(settings: Any) -> Store:
         pool_recycle=settings.db_pool_recycle_seconds,
         pgbouncer=settings.db_pgbouncer,
         direct_url=settings.database_direct_url,
+        read_url=settings.database_read_url,
     )

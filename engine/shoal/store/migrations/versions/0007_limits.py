@@ -1,4 +1,8 @@
-"""shared limiter leases and indexes for tenant quotas
+"""shared limits, queued webhooks and worker lanes
+
+Adds the limiter lease and webhook inbox tables, runs.lane (existing runs go to
+the standard lane), indexes for tenant quotas and, on Postgres, a fillfactor
+that leaves room for HOT updates of runs and steps.
 
 Revision ID: 0007
 Revises: 0006
@@ -50,8 +54,12 @@ def upgrade() -> None:
         batch_op.create_index('ix_webhook_inbox_due', ['status', 'next_attempt_at'], unique=False)
         batch_op.create_index(batch_op.f('ix_webhook_inbox_tenant_id'), ['tenant_id'], unique=False)
     with op.batch_alter_table('runs', schema=None) as batch_op:
+        batch_op.add_column(sa.Column('lane', sa.String(length=20), server_default='standard', nullable=False))
         batch_op.create_index('ix_runs_tenant_status', ['tenant_id', 'status'], unique=False)
         batch_op.create_index('ix_runs_lease', ['lease_expires_at'], unique=False)
+    if op.get_bind().dialect.name == 'postgresql':
+        op.execute('ALTER TABLE runs SET (fillfactor = 80)')
+        op.execute('ALTER TABLE step_runs SET (fillfactor = 80)')
 
 
 def downgrade() -> None:
@@ -59,9 +67,13 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_webhook_inbox_tenant_id'))
         batch_op.drop_index('ix_webhook_inbox_due')
     op.drop_table('webhook_inbox')
+    if op.get_bind().dialect.name == 'postgresql':
+        op.execute('ALTER TABLE runs RESET (fillfactor)')
+        op.execute('ALTER TABLE step_runs RESET (fillfactor)')
     with op.batch_alter_table('runs', schema=None) as batch_op:
         batch_op.drop_index('ix_runs_lease')
         batch_op.drop_index('ix_runs_tenant_status')
+        batch_op.drop_column('lane')
     with op.batch_alter_table('limiter_leases', schema=None) as batch_op:
         batch_op.drop_index('ix_limiter_key_expires')
     op.drop_table('limiter_leases')

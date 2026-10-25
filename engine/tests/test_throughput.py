@@ -310,3 +310,53 @@ async def test_streams_wake_on_postgres_notifications_from_other_processes(engin
     finally:
         await other.close()
         await engine.events.stop_listening()
+
+
+# --------------------------------------------------------------------------- scale-out
+
+
+async def test_runs_that_call_models_go_to_the_agent_lane(engine, tenant):
+    from shoal.core.models import parse_resource
+
+    def workflow(name, steps):
+        return parse_resource({"apiVersion": "shoal.dev/v1", "kind": "Workflow", "metadata": {"name": name}, "spec": {"steps": steps}})
+
+    await engine.store.apply_resource(tenant.id, workflow("plain", [{"id": "a", "type": "set", "values": {"x": 1}}]))
+    await engine.store.apply_resource(tenant.id, workflow("nested", [
+        {"id": "a", "type": "set", "values": {"x": 1}},
+        {"id": "think", "type": "agent", "agent": "x", "prompt": "hi"},
+    ]))
+    plain = await engine.executor.start_run(tenant.id, "plain")
+    nested = await engine.executor.start_run(tenant.id, "nested")
+    assert (plain.lane, nested.lane) == ("standard", "agent")
+
+    lease = timedelta(minutes=1)
+    assert await engine.store.claim_runs("w", limit=10, lease=lease, lanes=["standard"]) == [plain.id]
+    assert await engine.store.claim_runs("w", limit=10, lease=lease, lanes=["agent"]) == [nested.id]
+
+
+async def test_a_pass_over_a_simple_run_uses_few_transactions(engine, tenant):
+    from sqlalchemy import event
+
+    from shoal.core.models import parse_resource
+
+    await engine.store.apply_resource(tenant.id, parse_resource(
+        {"apiVersion": "shoal.dev/v1", "kind": "Workflow", "metadata": {"name": "two"},
+         "spec": {"steps": [{"id": "a", "type": "set", "values": {"x": 1}},
+                            {"id": "b", "type": "set", "values": {"y": "{{ steps.a.output.x }}"}}]}}))
+    run = await engine.executor.start_run(tenant.id, "two")
+    commits = 0
+
+    def count(_conn):
+        nonlocal commits
+        commits += 1
+
+    event.listen(engine.store.engine.sync_engine, "commit", count)
+    try:
+        await engine.process_due()
+    finally:
+        event.remove(engine.store.engine.sync_engine, "commit", count)
+    assert (await engine.store.get_run(tenant.id, run.id)).status == "succeeded"
+    # claim, read run + steps, run.started, 2 x (started + succeeded), refreshes, finish (with the lease release)
+    assert commits <= 14, commits
+    assert (await engine.store.get_run(tenant.id, run.id)).lease_owner is None

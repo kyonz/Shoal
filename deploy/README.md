@@ -23,6 +23,11 @@ shoal --server http://localhost:8080 --token "$SHOAL_ADMIN_TOKEN" tenants create
 docker compose -f deploy/docker-compose.yaml up -d --scale worker=3
 ```
 
+Shoal connects through a PgBouncer service in transaction mode, so adding API servers and workers
+adds connections to PgBouncer rather than Postgres backends. To run agent workflows on their own
+worker pool, set `SHOAL_WORKER_LANES='["standard"]'` in `deploy/.env` and start the `agents`
+profile (`--profile agents`). See [Running Shoal at high throughput](../docs/scaling.md).
+
 To let the `docker` sandbox backend start containers, uncomment the Docker socket mount on the
 worker (this gives the worker root-equivalent access to the host).
 
@@ -47,6 +52,11 @@ What the chart deploys:
   across upgrades (or bring your own with `secrets.existingSecret`);
 - a single-instance Postgres StatefulSet for evaluation (`postgresql.enabled`, on by default). For
   production set `postgresql.enabled=false` and `database.url` to a managed database;
+- a PgBouncer Deployment in front of the bundled Postgres (`pgbouncer.enabled`, on by default). With a
+  managed database, point `database.url` at your own pooler, `database.directUrl` at Postgres, and
+  set `database.pgbouncer=true` for a transaction-mode pooler;
+- with `worker.agentPool.enabled`, a second worker Deployment that runs only agent workflows, with its
+  own `replicaCount`, `concurrency` and `resources`;
 - with `kubernetesSandboxes.enabled`, namespaces plus a Role and RoleBinding so workers can run
   sandboxes as pods (or a ClusterRole with `clusterWide=true` for per-tenant namespaces);
 - an optional Prometheus `ServiceMonitor` for `/metrics`.
