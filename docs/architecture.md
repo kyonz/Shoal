@@ -905,8 +905,13 @@ one control plane, and a federated deployment can also sit next to the hub.
 - **Hub-local vs forwarded.** The hub serves its own directory, sign-in, API
   keys, OIDC, SCIM, webhooks and the federation endpoints. Everything else
   under `/v1` for a federated tenant is forwarded, including `/v1/me/permissions`,
-  so the UI shows what the member allows. Live SSE event streams are not
-  forwarded yet; clients poll the run instead.
+  so the UI shows what the member allows.
+- **Live run events.** The tunnel carries request/response pairs, not streams,
+  so the hub serves `GET /v1/runs/{id}/events` as SSE itself: it long-polls the
+  member's event list (`?after=<last id>&wait=15`) through the tunnel and relays
+  each event, then `end` when the run finishes. The connector serves forwarded
+  requests concurrently and answers each as soon as it is done, so a waiting
+  poll never delays other calls.
 - **Not in scope:** moving a tenant between hosted and federated while
   running (export and re-import instead), and cross-tenant workflows.
 

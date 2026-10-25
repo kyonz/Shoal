@@ -101,7 +101,7 @@ function StreamPill({ state, terminal }: { state: StreamState; terminal: boolean
   if (terminal || state === "ended") return null;
   const look = {
     live: { tip: "Receiving live updates", label: "Live", cls: "border-ok/25 bg-ok-soft text-ok" },
-    polling: { tip: "Live events aren't forwarded for this tenant yet, so the run refreshes every few seconds", label: "Refreshing", cls: "border-info/25 bg-info-soft text-info" },
+    polling: { tip: "Live events aren't available from this server, so the run refreshes every few seconds", label: "Refreshing", cls: "border-info/25 bg-info-soft text-info" },
     connecting: { tip: "Connecting to the live stream…", label: "Connecting", cls: "border-border bg-subtle text-muted" },
     reconnecting: { tip: "Reconnecting to the live stream…", label: "Reconnecting", cls: "border-warn/25 bg-warn-soft text-warn" },
   }[state];

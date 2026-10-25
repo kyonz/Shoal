@@ -4866,6 +4866,7 @@ export interface components {
             wait: number;
             /**
              * Limit
+             * @description 0 only delivers responses.
              * @default 20
              */
             limit: number;
@@ -7652,6 +7653,8 @@ export interface operations {
             query?: {
                 after?: number;
                 step_id?: string | null;
+                /** @description Seconds to wait for new events when there are none yet (long poll). */
+                wait?: number;
             };
             header?: never;
             path: {

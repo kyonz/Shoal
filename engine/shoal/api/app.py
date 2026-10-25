@@ -6,18 +6,24 @@ stable ``code``; SCIM endpoints use the SCIM error format instead.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import logging
+import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
+from sse_starlette.sse import EventSourceResponse
 
 from shoal import __version__
 from shoal.api.deps import authenticate
@@ -39,6 +45,7 @@ from shoal.api.routers import (
 from shoal.config import Settings
 from shoal.core.errors import ShoalError
 from shoal.core.ids import new_id
+from shoal.core.models import RunStatus
 from shoal.core.requestctx import RequestInfo, current_request, reset_request, set_request
 from shoal.engine import Engine
 from shoal.federation.protocol import ASSERTION_HEADER
@@ -175,6 +182,8 @@ def install_federation(app: FastAPI) -> None:
         if link_id is None:
             request.state.principal = principal
             return await call_next(request)
+        if request.method == "GET" and RUN_EVENTS_PATH.match(path) and "text/event-stream" in request.headers.get("accept", ""):
+            return await _relay_run_events(request, engine, link_id, principal)
         info = current_request()
         try:
             answer = await engine.federation.forward(
@@ -192,6 +201,65 @@ def install_federation(app: FastAPI) -> None:
             content=base64.b64decode(answer.get("body") or ""), status_code=answer["status"],
             headers={k: v for k, v in (answer.get("headers") or {}).items() if k.lower() != "content-length"},
         )
+
+
+RUN_EVENTS_PATH = re.compile(r"^/v1/runs/[^/]+/events$")
+RELAY_WAIT = 15  # seconds each long poll waits on the member; well inside the hub's forward timeout
+
+
+async def _relay_run_events(request: Request, engine: Any, link_id: str, principal: Any) -> Response:
+    """A live run event stream for a federated tenant, served by the hub.
+
+    The tunnel carries request/response pairs, not streams, so the hub long-polls the
+    member's event list (``?after=<last id>&wait=``) and turns what comes back into SSE.
+    """
+    path = request.url.path
+    params = {k: v for k, v in request.query_params.items() if k not in ("after", "wait")}
+    last = int(request.headers.get("last-event-id") or request.query_params.get("after") or 0)
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in ("accept", "last-event-id")}
+    headers["accept"] = "application/json"
+
+    async def call(target: str, query: dict[str, Any]) -> tuple[int, Any]:
+        answer = await engine.federation.forward(
+            link_id, principal, method="GET", path=target, query=urlencode(query), headers=headers, body=b"",
+            request_id=new_id("req"),
+        )
+        return answer["status"], json.loads(base64.b64decode(answer.get("body") or "") or "null")
+
+    try:  # the first call decides the status, so a missing run or a refusal is a plain error, not a stream
+        status, first = await call(path, {**params, "after": last})
+    except ShoalError as exc:
+        return problem(request, exc.status_code, exc.code, exc.message, details=exc.details)
+    if status >= 400:
+        return JSONResponse(first, status_code=status, media_type="application/problem+json")
+
+    async def stream() -> AsyncIterator[dict[str, Any]]:
+        nonlocal last
+        events, ending, run = first, False, {}
+        try:
+            while True:
+                for event in events:
+                    last = event["id"]
+                    yield {"id": str(event["id"]), "event": event["type"], "data": json.dumps(event)}
+                if ending:
+                    yield {"event": "end", "data": json.dumps({"status": run["status"]})}
+                    return
+                if not events:
+                    _, run = await call(path.removesuffix("/events"), {})
+                    ending = RunStatus(run["status"]).terminal  # one more fetch picks up events written meanwhile
+                if await request.is_disconnected():
+                    return
+                started = time.monotonic()
+                status, events = await call(path, {**params, "after": last, "wait": 0 if ending else RELAY_WAIT})
+                if not events and not ending and time.monotonic() - started < 1:
+                    await asyncio.sleep(2)  # an older member ignores `wait`; don't spin on it
+                if status >= 400:
+                    yield {"event": "error", "data": json.dumps(events)}
+                    return
+        except ShoalError as exc:
+            yield {"event": "error", "data": json.dumps({"code": exc.code, "detail": exc.message})}
+
+    return EventSourceResponse(stream(), ping=15)
 
 
 def _mount_frontend(app: FastAPI, static_dir: str) -> None:

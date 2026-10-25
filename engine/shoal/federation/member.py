@@ -181,46 +181,79 @@ class FederationMember:
         task.add_done_callback(self.engine._tasks.discard)  # noqa: SLF001
 
     async def _run(self, membership_id: str) -> None:
+        """Poll for requests and serve each one concurrently, answering as soon as it is done.
+
+        Answers go back on their own short tunnel call, so a slow request (a long-polled event
+        list, say) never holds up the others or the next poll.
+        """
         backoff = 1.0
-        pending: list[dict[str, Any]] = []
-        while True:
+        unsent: list[dict[str, Any]] = []
+        inflight: set[asyncio.Task[None]] = set()
+
+        async def serve(row: t.FederationMembership, req: dict[str, Any]) -> None:
+            answer = await self.handle(row, req)
             try:
-                pending = await self.poll_once(membership_id, pending, wait=20)
-                backoff = 1.0
-            except asyncio.CancelledError:
-                raise
-            except NotFound:
-                return  # left the hub
-            except Exception as exc:
-                log.warning("federation connector: %s; retrying in %.0fs", exc, backoff)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+                await self._tunnel(row, [answer], wait=0, limit=0)
+            except Exception:  # sent with the next poll instead
+                unsent.append(answer)
+
+        try:
+            while True:
+                try:
+                    responses, unsent[:] = list(unsent), []
+                    row, body = await self._poll(membership_id, responses, wait=20)
+                    backoff = 1.0
+                except asyncio.CancelledError:
+                    raise
+                except NotFound:
+                    return  # left the hub
+                except Exception as exc:
+                    unsent[:0] = responses
+                    log.warning("federation connector: %s; retrying in %.0fs", exc, backoff)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                    continue
+                for req in body.get("requests", []):
+                    task = asyncio.create_task(serve(row, req))
+                    inflight.add(task)
+                    task.add_done_callback(inflight.discard)
+        finally:
+            for task in inflight:
+                task.cancel()
 
     async def poll_once(self, membership_id: str, responses: list[dict[str, Any]], *, wait: float = 0) -> list[dict[str, Any]]:
         """Send answers, receive requests, handle them. Returns the answers for the next poll."""
+        row, body = await self._poll(membership_id, responses, wait=wait)
+        return list(await asyncio.gather(*(self.handle(row, req) for req in body.get("requests", []))))
+
+    async def _poll(self, membership_id: str, responses: list[dict[str, Any]], *, wait: float,
+                    limit: int = 20) -> tuple[t.FederationMembership, dict[str, Any]]:
         async with self.store.session() as s:
             row = await s.get(t.FederationMembership, membership_id)
         if row is None:
             raise NotFound("membership removed")
-        secret = self.engine.secrets.cipher.decrypt(row.secret_ciphertext)
-        async with self._http(base_url=row.hub_url, timeout=wait + 15) as client:
-            r = await client.post(
-                "/v1/federation/tunnel",
-                headers={"Authorization": f"Bearer {p.credential(row.link_id, secret)}"},
-                json={"responses": responses, "wait": wait, "limit": 20, "report": await self._report(row)},
-            )
-        if r.status_code in (401, 403):
-            raise Unauthorized(f"the hub rejected this member's link credential ({r.status_code})")
-        r.raise_for_status()
-        body = r.json()
+        body = await self._tunnel(row, responses, wait=wait, limit=limit)
         async with self.store.session() as s:
             current = await s.get(t.FederationMembership, membership_id)
             if current is not None:
                 current.hub_mode = body.get("requested_mode")
                 current.last_connected_at = clock.now()
-        if row.hub_mode != body.get("requested_mode"):
-            row.hub_mode = body.get("requested_mode")
-        return list(await asyncio.gather(*(self.handle(row, req) for req in body.get("requests", []))))
+        row.hub_mode = body.get("requested_mode")
+        return row, body
+
+    async def _tunnel(self, row: t.FederationMembership, responses: list[dict[str, Any]], *, wait: float,
+                      limit: int) -> dict[str, Any]:
+        secret = self.engine.secrets.cipher.decrypt(row.secret_ciphertext)
+        async with self._http(base_url=row.hub_url, timeout=wait + 15) as client:
+            r = await client.post(
+                "/v1/federation/tunnel",
+                headers={"Authorization": f"Bearer {p.credential(row.link_id, secret)}"},
+                json={"responses": responses, "wait": wait, "limit": limit, "report": await self._report(row)},
+            )
+        if r.status_code in (401, 403):
+            raise Unauthorized(f"the hub rejected this member's link credential ({r.status_code})")
+        r.raise_for_status()
+        return r.json()
 
     async def _report(self, row: t.FederationMembership) -> dict[str, Any]:
         return {
@@ -238,8 +271,8 @@ class FederationMember:
         match = NAMESPACE_PATH.match(path)
         if row.namespaces and match and match.group(1) not in row.namespaces:
             return answer | _problem(404, "not_found", f"namespace '{match.group(1)}' is not exposed to the hub")
-        if path.endswith("/events") and "text/event-stream" in req.get("headers", {}).get("accept", ""):
-            return answer | _problem(501, "not_implemented", "live event streams are not forwarded through the hub yet; poll the run")
+        if "text/event-stream" in req.get("headers", {}).get("accept", ""):  # the hub streams by long-polling instead
+            return answer | _problem(406, "not_acceptable", "the hub relays live streams by polling; ask for JSON")
         if self.app is None:
             return answer | _problem(503, "unavailable", "the member API is not running")
         headers = dict(req.get("headers") or {})

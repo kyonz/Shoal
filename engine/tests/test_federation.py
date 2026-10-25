@@ -188,6 +188,52 @@ async def test_background_connector_serves_hub_calls(world):
         await asyncio.wait(list(member.federation_member._tasks.values()), timeout=5)
 
 
+async def test_hub_streams_live_run_events(world):
+    """The hub relays a member run's events as SSE, and a long-polled stream never blocks other calls."""
+    import json
+    import time
+
+    hub, member, hub_app, member_app, client = world
+    hub_api = client(hub_app, await _tenant(hub_app, client, "acme"))
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    await member_api.put("/v1/federation/membership", json={
+        "hub_url": "http://hub.test", "token": token, "max_mode": "read_write",
+        "grants": [{"role": "viewer", "subject_kind": "hub_user", "subject_id": "sa:admin"}],
+    })
+    await member_api.put("/v1/namespaces/default/workflows/gate", json={"spec": {"steps": [
+        {"id": "hold", "type": "wait", "signal": {"name": "go"}},
+        {"id": "done", "type": "set", "values": {"ok": True}}]}})
+    run = (await member_api.post("/v1/namespaces/default/workflows/gate/runs", json={"inputs": {}})).json()
+    await member.run_until_idle()
+
+    member.federation_member.start(member_app)
+    try:
+        stream = asyncio.create_task(hub_api.get(f"/v1/runs/{run['id']}/events", headers={"accept": "text/event-stream"}))
+        await asyncio.sleep(0.5)  # the hub is now long-polling the member for new events
+        started = time.monotonic()
+        r = await asyncio.wait_for(hub_api.get("/v1/namespaces/default/workflows/gate"), timeout=10)
+        assert r.status_code == 200 and time.monotonic() - started < 5
+
+        assert (await member_api.post(f"/v1/runs/{run['id']}/signals/go", json={"payload": {}})).status_code < 300
+        await member.run_until_idle()
+        r = await asyncio.wait_for(stream, timeout=20)
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        kinds = [line.removeprefix("event: ").strip() for line in r.text.splitlines() if line.startswith("event: ")]
+        assert kinds[-1] == "end" and "run.succeeded" in kinds, kinds
+        ids = [int(line.removeprefix("id: ")) for line in r.text.splitlines() if line.startswith("id: ")]
+        assert ids == sorted(set(ids)), "each event once, in order"
+        end = [line for line in r.text.splitlines() if line.startswith("data: ")][-1]
+        assert json.loads(end.removeprefix("data: ")) == {"status": "succeeded"}
+
+        missing = await asyncio.wait_for(hub_api.get("/v1/runs/run_nope/events", headers={"accept": "text/event-stream"}), timeout=10)
+        assert missing.status_code == 404
+    finally:
+        for task in list(member.federation_member._tasks.values()):
+            task.cancel()
+        await asyncio.wait(list(member.federation_member._tasks.values()), timeout=5)
+
+
 async def test_revoked_tenant_can_be_federated_again(world):
     _, _, hub_app, _, client = world
     await _tenant(hub_app, client, "acme")

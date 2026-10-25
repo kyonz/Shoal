@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
@@ -102,11 +103,19 @@ async def get_run(run_id: str, ctx: CtxDep) -> Any:
 
 
 @router.get("/runs/{run_id}/events", tags=["runs"], summary="Run events; streams as SSE with Accept: text/event-stream")
-async def run_events(run_id: str, request: Request, ctx: CtxDep, after: int = 0, step_id: str | None = None) -> Any:
+async def run_events(
+    run_id: str, request: Request, ctx: CtxDep, after: int = 0, step_id: str | None = None,
+    wait: float = Query(0, ge=0, le=25, description="Seconds to wait for new events when there are none yet (long poll)."),
+) -> Any:
     run = await _run(ctx, run_id)
     store, bus = ctx.engine.store, ctx.engine.events
     if "text/event-stream" not in request.headers.get("accept", ""):
         events = await store.list_events(ctx.tenant_id, run.id, after=after, step_id=step_id)
+        deadline = time.monotonic() + wait
+        while not events and not RunStatus(run.status).terminal and (remaining := deadline - time.monotonic()) > 0:
+            await bus.wait(run.id, timeout=min(remaining, 2.0))  # only wakes for this process's events, so re-check
+            events = await store.list_events(ctx.tenant_id, run.id, after=after, step_id=step_id)
+            run = await store.get_run(ctx.tenant_id, run.id)
         return [EventOut.model_validate(e) for e in events]
     last = int(request.headers.get("last-event-id") or after)
 

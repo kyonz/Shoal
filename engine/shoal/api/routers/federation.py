@@ -69,7 +69,7 @@ class EnrollIn(BaseModel):
 class TunnelIn(BaseModel):
     responses: list[dict[str, Any]] = Field(default_factory=list)
     wait: float = Field(20, ge=0, le=25)
-    limit: int = Field(20, ge=1, le=100)
+    limit: int = Field(20, ge=0, le=100, description="0 only delivers responses.")
     report: dict[str, Any] = Field(default_factory=dict)
 
 
