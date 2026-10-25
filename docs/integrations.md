@@ -83,8 +83,10 @@ Rules worth knowing:
 - **Always use `ctx.http()`** for outbound calls. It applies the engine's
   timeouts and lets tests swap in a mock transport.
 - **Raise `IntegrationError(retryable=True)`** for transient failures (or use
-  `raise_for_status`, which does this for 408/429/5xx). The executor retries
-  those under the step's retry policy.
+  `raise_for_status`, which does this for 408/425/429/5xx). Network errors from
+  `ctx.http()` (DNS, refused connections, timeouts) become retryable
+  `IntegrationError`s for you. The executor retries those under the step's
+  retry policy.
 - **Mark read-only actions `mutating=False`.** Mutating actions are audited
   when called through the API.
 - **Reject unsigned webhooks** when no secret is configured, rather than

@@ -190,6 +190,31 @@ async def test_built_in_webhooks_reject_unsigned_deliveries_without_a_secret():
     assert await IntegrationHarness(WebhookIntegration, config={"allow_unsigned": True}).verify_webhook({}, body)
 
 
+def test_contract_flags_webhooks_that_are_never_verified():
+    class Unverified(TicketsIntegration):
+        key = "unverified"
+        verify_webhook = Integration.verify_webhook
+
+    assert any("verify_webhook is not" in p for p in check_integration(Unverified))
+
+
+async def test_unreachable_services_are_retryable_errors():
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    harness = IntegrationHarness(TicketsIntegration, config={"api_token": "t"}, http=down)
+    with pytest.raises(IntegrationError, match="unreachable") as err:
+        await harness.call("open_ticket", {"title": "Bug"})
+    assert err.value.retryable
+
+    app = create_app(TicketsIntegration, token=SERVICE_TOKEN, http_transport=httpx.MockTransport(down))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as client:
+        r = await client.post(
+            "/resources/ticket/query", json={"connection": {"api_token": "t"}}, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
+        )
+    assert r.status_code == 502 and r.json()["error"]["retryable"] is True
+
+
 async def test_harness_webhook_verification():
     harness = IntegrationHarness(TicketsIntegration, config={"api_token": "t", "webhook_secret": "s3"})
     headers, body = signed_webhook("s3", {"action": "closed", "id": "T-4"})

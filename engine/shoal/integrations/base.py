@@ -221,7 +221,10 @@ class Integration:
         if definition is None:
             raise IntegrationError(f"{self.key} has no action '{name}'")
         payload = definition.input_model.model_validate(params)
-        result = await getattr(self, definition.method)(ctx, payload)
+        try:
+            result = await getattr(self, definition.method)(ctx, payload)
+        except httpx.HTTPError as exc:
+            raise _network_error(self, exc) from exc
         if isinstance(result, BaseModel):
             return result.model_dump(mode="json")
         return result if isinstance(result, dict) else {"result": result}
@@ -233,7 +236,10 @@ class Integration:
         if definition is None:
             raise IntegrationError(f"{self.key} has no resource '{name}'")
         parsed = definition.filter_model.model_validate(filter)
-        return await getattr(self, definition.method)(ctx, parsed, cursor, limit)
+        try:
+            return await getattr(self, definition.method)(ctx, parsed, cursor, limit)
+        except httpx.HTTPError as exc:
+            raise _network_error(self, exc) from exc
 
     @classmethod
     def catalog(cls) -> dict[str, Any]:
@@ -250,10 +256,19 @@ class Integration:
         }
 
 
+def _network_error(integration: Integration, exc: httpx.HTTPError) -> IntegrationError:
+    """A failure to reach the service (DNS, refused, timeout) is transient: retry it like a 5xx."""
+    try:
+        where = f" ({exc.request.method} {exc.request.url.host})"
+    except RuntimeError:  # no request attached
+        where = ""
+    return IntegrationError(f"{integration.title} is unreachable{where}: {type(exc).__name__}: {exc}", retryable=True)
+
+
 def raise_for_status(response: httpx.Response, service: str) -> None:
     if response.is_success:
         return
-    retryable = response.status_code in (408, 409, 425, 429) or response.status_code >= 500
+    retryable = response.status_code in (408, 425, 429) or response.status_code >= 500
     detail = response.text[:500]
     raise IntegrationError(
         f"{service} API {response.request.method} {response.request.url.path} failed: "
