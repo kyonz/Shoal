@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 import httpx
 import yaml
@@ -106,9 +107,13 @@ def _add_usage(total: dict[str, float], usage: dict[str, float]) -> dict[str, fl
 
 
 def _check_path(path: str) -> str:
-    if not isinstance(path, str) or not path.startswith("/v1/") or ".." in path:
+    if not isinstance(path, str):
         raise ValueError("path must be an API path starting with /v1/")
-    if path.startswith(BLOCKED_PREFIXES):
+    # Check the path as the router will see it: it decodes %-escapes, so /v1/%61ssistant is /v1/assistant.
+    decoded = unquote(path)
+    if not decoded.startswith("/v1/") or ".." in decoded or "//" in decoded or "%" in decoded:
+        raise ValueError("path must be an API path starting with /v1/")
+    if decoded.startswith(BLOCKED_PREFIXES):
         raise ValueError(f"{path} is not available to the assistant")
     return path
 
