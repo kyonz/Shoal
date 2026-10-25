@@ -11,6 +11,9 @@ Any provider can be bridged by implementing (see docs/sandbox-protocol.md):
     DELETE /sandboxes/{id}
 
 Profile ``config``: ``url``, ``token_secret`` (bearer token secret name).
+
+The create body carries the profile's ``network`` policy. A provider must enforce it, or
+fail the create when it cannot: Shoal treats remote providers as enforcing every policy.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec
 
@@ -80,9 +84,18 @@ class RemoteSandbox(Sandbox):
             response.raise_for_status()
 
 
+class RemoteConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(description="Base URL of the provider's Remote Sandbox Protocol API.")
+    token_secret: str | None = Field(None, description="Secret holding the bearer token.")
+
+
 class RemoteBackend(SandboxBackend):
     name = "remote"
     description = "Any provider implementing the Shoal Remote Sandbox Protocol over HTTP."
+    network_controls = frozenset({"deny", "allow_hosts"})  # the provider gets spec.network and must enforce it
+    config_schema = RemoteConfig
 
     def setup(self, engine: Engine) -> None:
         self.engine = engine

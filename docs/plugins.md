@@ -29,6 +29,7 @@ resource that selects the plugin (a SandboxProfile's `config`, a Gateway's `conf
 | `shoal.agent_runtimes` | `AgentRuntime` | Runs an agent: tool loop, CLI agent, remote agent | | Any A2A agent via `a2a` |
 | `shoal.credentials` | `CredentialProvider` | Issues short-lived cloud credentials for a CloudIdentity | | |
 | `shoal.orchestrators` | `Orchestrator` | Drives runs: the built-in Postgres executor, or Temporal | | |
+| `shoal.skill_sources` | `SkillSource` | Marketplaces that skills are imported from | `check_skill_source` | `shoal.skill-source/v1`, served for any source by `shoal.sdk.skill_server` |
 
 `check_entry_point(group, name)` checks that an installed package exposes the plugin in the right
 group and that it subclasses the right base.

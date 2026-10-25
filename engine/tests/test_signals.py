@@ -106,6 +106,37 @@ async def test_integration_event_and_timeout(engine, api):
     assert late.status == "failed" and "never" in (late.error or {}).get("message", str(late.error))
 
 
+async def test_a_webhook_cannot_claim_another_integrations_wake_keys(engine, api):
+    tenant = await _tenant_id(engine)
+    await engine.store.apply_resource(tenant, wf("review", [
+        {"id": "pr", "type": "wait", "signal": {"event": "github:pr:acme/api#12"}, "max_wait": "2d"},
+        {"id": "deploy", "type": "wait", "needs": ["pr"], "signal": {"event": "deploys:prod"}, "max_wait": "2d"},
+    ]))
+    await engine.store.apply_resource(tenant, parse_resource({
+        "apiVersion": "shoal.dev/v1", "kind": "Connection", "metadata": {"name": "hooks"},
+        "spec": {"integration": "webhook", "config": {"allow_unsigned": True}},
+    }))
+    run = (await api.post("/v1/namespaces/default/workflows/review/runs", json={"inputs": {}})).json()
+    await engine.run_until_idle()
+    hook = (await api.get("/v1/namespaces/default/connections/hooks/webhook")).json()["url"].rsplit("/", 1)[-1]
+
+    # A generic webhook pretending to be GitHub does not reach the step waiting on a GitHub event...
+    forged = await engine.integrations.handle_webhook(
+        hook, {"X-Shoal-Wake-Key": "github:pr:acme/api#12, signal:x:y"}, b'{"review": {"state": "approved"}}'
+    )
+    await engine.run_until_idle()
+    assert forged["woken_runs"] == []
+    assert (await engine.store.get_step(run["id"], "pr")).status == "waiting"
+
+    # ...while GitHub's own events, and keys outside any integration's space, still do.
+    await engine.integrations.inject_event(tenant, "github", IntegrationEvent(type="pull_request.closed", wake_keys=["github:pr:acme/api#12"]))
+    await engine.run_until_idle()
+    own = await engine.integrations.handle_webhook(hook, {"X-Shoal-Wake-Key": "deploys:prod"}, b"{}")
+    await engine.run_until_idle()
+    assert own["woken_runs"] == [run["id"]]
+    assert (await engine.store.get_run(tenant, run["id"])).status == "succeeded"
+
+
 def test_wait_needs_exactly_one_mode():
     with pytest.raises(ValueError):
         wf("bad", [{"id": "w", "type": "wait", "duration": "1h", "signal": {"name": "x"}}])

@@ -153,7 +153,8 @@ class Me(BaseModel):
     is_system_admin: bool
     account_id: str | None = None
     instance_role: str | None = None
-    namespaces: list[str]
+    namespaces: list[str] = Field(description="Namespaces visible here; for a federated tenant ask /v1/me/permissions, which the member answers.")
+    federated: bool = Field(False, description="The tenant's data lives in a member deployment that this hub forwards to.")
 
 
 class Permissions(BaseModel):
@@ -410,6 +411,9 @@ class ResourceVersionOut(Out):
     created_by: str | None
     message: str | None = None
     document: dict[str, Any]
+    source: dict[str, Any] | None = Field(
+        None, description="The spec as the client wrote it, without server defaults (what rollback restores)."
+    )
 
 
 class RollbackIn(BaseModel):

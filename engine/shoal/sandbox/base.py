@@ -102,6 +102,18 @@ class SandboxBackend(abc.ABC):
     name: str
     description: str = ""
     config_schema: type[BaseModel] | None = None
+    # Which parts of a profile's network policy the backend enforces: "deny" (no egress) and
+    # "allow_hosts" (egress only to listed hosts). A profile asking for more is refused, never
+    # run with a weaker policy than it states.
+    network_controls: frozenset[str] = frozenset()
+
+    def network_gap(self, network: NetworkPolicy) -> str | None:
+        """Why this backend cannot enforce ``network``, or None when it can."""
+        if network.allow_hosts and "allow_hosts" not in self.network_controls:
+            return f"sandbox backend '{self.name}' cannot restrict egress to network.allow_hosts"
+        if network.egress == "deny" and not network.allow_hosts and "deny" not in self.network_controls:
+            return f"sandbox backend '{self.name}' cannot enforce network.egress: deny"
+        return None
 
     @abc.abstractmethod
     async def create(self, spec: SandboxSpec) -> Sandbox: ...

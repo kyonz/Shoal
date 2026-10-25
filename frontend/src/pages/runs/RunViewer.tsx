@@ -206,53 +206,60 @@ function RunHeader({ run, state, now }: { run: RunDetail; state: StreamState; no
 // --------------------------------------------------------------------------- approvals
 
 function ApprovalBanner({ run }: { run: RunDetail }) {
+  // A decided step stays "waiting" until the run's next pass; don't offer the decision again.
+  const pending = run.steps.filter((s) => s.type === "approval" && s.status === "waiting" && !(s.state as { decision?: unknown }).decision);
+  if (!pending.length) return null;
+  return (
+    <div className="shrink-0 space-y-3 border-b border-warn/30 bg-warn-soft px-4 py-3">
+      {pending.map((s) => (
+        <ApprovalRequest key={s.step_id} run={run} step={s} />
+      ))}
+    </div>
+  );
+}
+
+function ApprovalRequest({ run, step: s }: { run: RunDetail; step: Step }) {
   const { can } = useAuth();
   const qc = useQueryClient();
   const [comment, setComment] = useState("");
-  const pending = run.steps.filter((s) => s.type === "approval" && s.status === "waiting");
   const decide = useMutation({
-    mutationFn: ({ step, approved }: { step: string; approved: boolean }) =>
-      unwrap(client.POST("/v1/runs/{run_id}/steps/{step_id}/approval", { params: { path: { run_id: run.id, step_id: step } }, body: { approved, comment: comment || null } })),
-    onSuccess: (_, v) => {
-      toast.success(v.approved ? "Approved" : "Rejected");
+    mutationFn: (approved: boolean) =>
+      unwrap(client.POST("/v1/runs/{run_id}/steps/{step_id}/approval", { params: { path: { run_id: run.id, step_id: s.step_id } }, body: { approved, comment: comment || null } })),
+    onSuccess: (_, approved) => {
+      toast.success(approved ? "Approved" : "Rejected");
       setComment("");
       void qc.invalidateQueries({ queryKey: keys.run(run.id) });
     },
     onError: (e) => toast.error((e as Error).message),
   });
-  if (!pending.length) return null;
+  const def = (run.workflow.steps as StepDoc[] | undefined)?.find((x) => x.id === s.step_id);
+  const message = (s.state as { message?: string }).message ?? (def?.message as string) ?? "Approval required";
+  const approvers = (def?.approvers as string[] | undefined) ?? [];
   return (
-    <div className="shrink-0 border-b border-warn/30 bg-warn-soft px-4 py-3">
-      {pending.map((s) => {
-        const def = (run.workflow.steps as StepDoc[] | undefined)?.find((x) => x.id === s.step_id);
-        const message = (s.state as { message?: string }).message ?? (def?.message as string) ?? "Approval required";
-        return (
-          <div key={s.step_id} className="flex flex-wrap items-center gap-3">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-warn text-white">
-              <Hand className="size-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-semibold text-fg">
-                Waiting for approval <span className="font-mono font-normal text-muted">· {s.step_id}</span>
-              </div>
-              <div className="text-[13px] text-muted">{message}</div>
-            </div>
-            {can("runs:approve", run.namespace) ? (
-              <>
-                <Textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Comment (optional)" className="min-h-8 w-64 py-1.5" rows={1} />
-                <Button variant="secondary" icon={<X className="size-3.5" />} loading={decide.isPending && decide.variables?.approved === false} onClick={() => decide.mutate({ step: s.step_id, approved: false })}>
-                  Reject
-                </Button>
-                <Button variant="primary" icon={<Check className="size-3.5" />} loading={decide.isPending && decide.variables?.approved === true} onClick={() => decide.mutate({ step: s.step_id, approved: true })}>
-                  Approve
-                </Button>
-              </>
-            ) : (
-              <span className="text-xs text-muted">You don't have permission to approve runs here.</span>
-            )}
-          </div>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="flex size-8 items-center justify-center rounded-lg bg-warn text-white">
+        <Hand className="size-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-semibold text-fg">
+          Waiting for approval <span className="font-mono font-normal text-muted">· {s.step_id}</span>
+        </div>
+        <div className="text-[13px] text-muted">{message}</div>
+        {approvers.length > 0 && <div className="mt-0.5 text-xs text-faint">Approvers: {approvers.join(", ")}</div>}
+      </div>
+      {can("runs:approve", run.namespace) ? (
+        <>
+          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Comment (optional)" className="min-h-8 w-64 py-1.5" rows={1} />
+          <Button variant="secondary" icon={<X className="size-3.5" />} loading={decide.isPending && decide.variables === false} disabled={decide.isPending} onClick={() => decide.mutate(false)}>
+            Reject
+          </Button>
+          <Button variant="primary" icon={<Check className="size-3.5" />} loading={decide.isPending && decide.variables === true} disabled={decide.isPending} onClick={() => decide.mutate(true)}>
+            Approve
+          </Button>
+        </>
+      ) : (
+        <span className="text-xs text-muted">You don't have permission to approve runs here.</span>
+      )}
     </div>
   );
 }
@@ -385,7 +392,12 @@ function Overview({ run, onSelect, now }: { run: RunDetail; onSelect: (id: strin
   const span = Math.max(1, end - start);
   return (
     <div className="space-y-5">
-      {run.error && (
+      {run.error && run.status === "cancelled" && (
+        <div className="rounded-lg border border-border bg-subtle p-3 text-[13px] text-muted">
+          <div className="font-semibold text-fg">Run cancelled</div>
+        </div>
+      )}
+      {run.error && run.status !== "cancelled" && (
         <div className="rounded-lg border border-bad/25 bg-bad-soft p-3 text-[13px] text-bad">
           <div className="font-semibold">Run failed</div>
           <div className="mt-0.5 break-words">{String((run.error as { message?: string }).message ?? JSON.stringify(run.error))}</div>
@@ -506,6 +518,7 @@ function StepDetail({ step, def, events, now }: { step: Step | undefined; def: S
           <Clock className="size-3.5" /> Waiting durably; the run wakes {relTime(step.wake_at)} or when a matching event arrives.
         </div>
       )}
+      {def.type === "workflow" && step && <ChildRuns step={step} />}
       {step?.error && (
         <div>
           <SectionTitle>Error</SectionTitle>
@@ -542,6 +555,46 @@ function StepDetail({ step, def, events, now }: { step: Step | undefined; def: S
       <div>
         <SectionTitle>Definition</SectionTitle>
         <JsonBlock value={def} maxHeight="260px" />
+      </div>
+    </div>
+  );
+}
+
+/** The child runs a sub-workflow step started, linked, with their outcome once the step has finished. */
+function ChildRuns({ step }: { step: Step }) {
+  const ns = useNs();
+  const state = step.state as { children?: (string | null)[]; items?: unknown[] };
+  const results = ((step.output as { results?: { run_id: string; status: string }[] } | null)?.results ??
+    (step.error as { results?: { run_id: string; status: string }[] } | null)?.results ??
+    []) as { run_id: string; status: string }[];
+  const outcome = new Map(results.map((r) => [r.run_id, r.status]));
+  const single = (step.output as { run_id?: string } | null)?.run_id ?? (step.error as { run_id?: string } | null)?.run_id;
+  const children = state.children ?? (single ? [single] : []);
+  if (!children.length) return null;
+  const started = children.filter(Boolean).length;
+  return (
+    <div>
+      <SectionTitle>
+        Child runs{" "}
+        <span className="font-normal text-faint">
+          {started} of {children.length} started
+        </span>
+      </SectionTitle>
+      <div className="space-y-1">
+        {children.map((id, index) =>
+          id ? (
+            <Link key={id} to={nsPath(ns, "runs", id)} className="flex items-center gap-2 rounded-md px-1 py-1 text-[12.5px] hover:bg-subtle">
+              <span className="w-8 text-right text-faint tabular-nums">#{index}</span>
+              <span className="flex-1 truncate font-mono text-accent">{id}</span>
+              {outcome.get(id) ? <StatusBadge status={outcome.get(id)!} /> : <Badge>started</Badge>}
+            </Link>
+          ) : (
+            <div key={`pending-${index}`} className="flex items-center gap-2 px-1 py-1 text-[12.5px] text-faint">
+              <span className="w-8 text-right tabular-nums">#{index}</span>
+              <span className="flex-1">waiting for a free slot</span>
+            </div>
+          ),
+        )}
       </div>
     </div>
   );

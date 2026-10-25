@@ -23,7 +23,7 @@ from sqlalchemy import or_, select, update
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest, NotFound
 from shoal.core.ids import new_id
-from shoal.core.models import Eval, EvalCase, EvalPlatform, EvalSpec, EvalVariant, RunStatus, WorkflowSpec
+from shoal.core.models import Eval, EvalCase, EvalPlatform, endpoint_fields, EvalSpec, EvalVariant, RunStatus, WorkflowSpec
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.evals.compare import compare, evaluate_gate, summarize
 from shoal.evals.graders import grade_case
@@ -77,6 +77,8 @@ class EvalService:
         spec = EvalPlatform.model_validate(row.document).spec
         if sink and sink != spec.sink:
             raise InvalidRequest(f"eval platform '{platform}' uses the {spec.sink} sink, not {sink}")
+        if endpoints := endpoint_fields(config):  # the platform's credentials go only where the platform says
+            raise InvalidRequest(f"{', '.join(endpoints)}: an eval platform's endpoints are set on the platform only")
         with use_namespace(SHARED_NAMESPACE):
             base = await self.sink_config(tenant_id, spec.config)
         return spec.sink, {**base, **await self.sink_config(tenant_id, config)}
@@ -220,7 +222,9 @@ class EvalService:
         )
 
     async def _variant(self, tenant_id: str, spec: EvalSpec, variant: EvalVariant, version: int | None) -> dict[str, Any]:
-        """Pin the variant to concrete versions of the workflow and every agent and sub-workflow it uses."""
+        """Pin the variant's workflow version and record the current versions of the agents and
+        sub-workflows it uses. Only the workflow version is pinned: agents and sub-workflows resolve
+        to their current version when each case starts, so ``versions`` documents what was live."""
         row = await self.store.get_resource_row(tenant_id, "Workflow", spec.workflow)
         document = row.document
         if version is not None and version != row.version:
@@ -285,6 +289,8 @@ class EvalService:
             return other.id
         async with self.store.session() as s:
             found = (await s.execute(q.order_by(t.EvalRun.created_at.desc()).limit(1))).scalar_one_or_none()
+        if found is None and baseline == "previous":
+            return None  # the first run of an eval has nothing to compare with
         if found is None:
             raise NotFound(f"no completed run of eval '{eval_run.eval_name}' matches baseline '{baseline}'")
         return found
@@ -418,6 +424,9 @@ class EvalService:
             )
             return bool(result.rowcount)
 
+    async def _renew(self, eval_run_id: str) -> None:
+        await self._update(eval_run_id, lease_expires_at=clock.now() + LEASE)
+
     async def _update(self, eval_run_id: str, **values: Any) -> None:
         async with self.store.session() as s:
             await s.execute(update(t.EvalRun).where(t.EvalRun.id == eval_run_id).values(**values))
@@ -456,6 +465,7 @@ class EvalService:
                 run = await self.store.get_run(row.tenant_id, result.run_id)
                 if RunStatus(run.status).terminal:
                     await self._grade(row, spec, result, run)
+                    await self._renew(row.id)  # judges can be slow: keep the lease while grading
         running = sum(1 for r in results if r.status == "running")
         if row.mode == "cases":
             capacity = spec.concurrency - running
@@ -464,6 +474,7 @@ class EvalService:
                     break
                 if result.status == "pending" and not result.run_id:
                     await self._start_case(row, result, variants[result.variant])
+                    await self._renew(row.id)
                     capacity -= 1
         if any(r.status in ACTIVE for r in results):
             await self._update(row.id, summary=summarize(results), next_tick_at=clock.now() + TICK_INTERVAL)

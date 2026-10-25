@@ -3,7 +3,7 @@ and connection / trigger operations."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from fastapi import APIRouter, Query, Request, Response
@@ -28,11 +28,21 @@ from shoal.api.schemas import (
 from shoal.core.diff import diff
 from shoal.core.errors import InvalidRequest, NotFound
 from shoal.core.ids import new_id
-from shoal.core.models import KIND_BY_PLURAL, Connection, ResourceBase, Trigger, parse_resource
+from shoal.core.models import (
+    KIND_BY_PLURAL,
+    Connection,
+    ResourceBase,
+    SandboxProfile,
+    Trigger,
+    parse_resource,
+)
 from shoal.core.scope import SHARED_NAMESPACE, TENANT_SCOPED_KINDS, use_namespace
 from shoal.integrations.base import IntegrationEvent, describe_actions, describe_resources
 from shoal.store import tables as t
 from shoal.triggers import validate_cron
+
+if TYPE_CHECKING:
+    from shoal.engine import Engine
 
 router = APIRouter(prefix="/v1")
 
@@ -111,12 +121,27 @@ def validate_semantics(resource: ResourceBase) -> None:
             raise InvalidRequest(f"invalid schedule: {exc}") from exc
 
 
+def validate_plugin_config(engine: Engine, resource: ResourceBase) -> None:
+    """Checks against the installed plugins: a sandbox profile's config must fit its backend's schema."""
+    if isinstance(resource, SandboxProfile) and resource.spec.backend in engine.registry.names("sandboxes"):
+        schema = getattr(engine.plugin("sandboxes", resource.spec.backend), "config_schema", None)
+        if schema is not None:
+            try:
+                schema.model_validate(resource.spec.config)
+            except ValidationError as exc:
+                errors = [{**e, "loc": f"spec.config.{e['loc']}" if e["loc"] else "spec.config"} for e in _errors(exc)]
+                summary = "; ".join(f"{e['loc']}: {e['msg']}" for e in errors)
+                raise InvalidRequest(f"invalid config for sandbox backend '{resource.spec.backend}': {summary}",
+                                     details={"errors": errors}) from exc
+
+
 MessageQuery = Query(None, max_length=2000, description="Change note stored with the new version.")
 
 
 async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response,
                message: str | None = None) -> ResourceOut:
     resource = build_resource(kind, name, body)
+    validate_plugin_config(ctx.engine, resource)
     row, outcome = await ctx.engine.store.apply_resource(
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec), message=message
     )
@@ -205,10 +230,8 @@ def _tenant_routes(plural: str, kind: str) -> None:
     @router.put(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"put_{plural}")
     async def put_one(name: str, body: ResourceIn, ctx: CtxDep, response: Response, message: str | None = MessageQuery) -> Any:
         await ctx.require(verbs["write"])
-        if kind == "Blueprint" and (body.spec or {}).get("status") == "featured":
-            current = await ctx.engine.store.find_resource(ctx.tenant_id, kind, name)
-            if current is None or current.spec.status != "featured":  # type: ignore[attr-defined]
-                await ctx.require("blueprints:feature")
+        if kind == "Blueprint":
+            await _require_feature(ctx, name, body.spec)
         return await _put(ctx, kind, name, SHARED_NAMESPACE, body, response, message)
 
     @router.get(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"get_{plural}")
@@ -243,6 +266,15 @@ for _plural, _kind_name in TENANT_SCOPED.items():
     _tenant_routes(_plural, _kind_name)
 
 
+async def _require_feature(ctx: Ctx, name: str, spec: dict[str, Any] | None) -> None:
+    """Featuring a blueprint (on any write path) needs blueprints:feature; keeping it featured does not."""
+    if (spec or {}).get("status") != "featured":
+        return
+    current = await ctx.engine.store.find_resource(ctx.tenant_id, "Blueprint", name)
+    if current is None or current.spec.status != "featured":  # type: ignore[attr-defined]
+        await ctx.require("blueprints:feature")
+
+
 # --------------------------------------------------------------------------- versions
 
 
@@ -265,6 +297,8 @@ async def _rollback(ctx: Ctx, kind: str, name: str, namespace: str, body: Rollba
     store = ctx.engine.store
     row = await store.get_resource_row(ctx.tenant_id, kind, name, namespace=namespace, fallback=False)
     target = await store.get_resource_version_row(ctx.tenant_id, kind, name, body.version, namespace=namespace)
+    if kind == "Blueprint" and not body.dry_run:
+        await _require_feature(ctx, name, target.document.get("spec"))
     if body.dry_run:
         current = await store.get_resource_version_row(ctx.tenant_id, kind, name, row.version, namespace=namespace)
         return VersionDiffOut(kind=kind, name=name, from_version=row.version, to_version=body.version,
@@ -309,6 +343,7 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
         try:
             resource = parse_resource({**doc, "spec": strip_nulls(doc.get("spec"))})
             validate_semantics(resource)
+            validate_plugin_config(ctx.engine, resource)
         except (ValidationError, ValueError, InvalidRequest) as exc:
             message = "; ".join(f"{e['loc']}: {e['msg']}" for e in _errors(exc)) if isinstance(exc, ValidationError) else str(exc)
             results.append(ApplyResult(kind=kind, name=name, namespace=ns, outcome="invalid", error=message))
@@ -316,6 +351,8 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
         plural = resource.plural
         if kind in TENANT_SCOPED_KINDS:
             await ctx.require(TENANT_VERBS[plural]["write"])
+            if kind == "Blueprint":
+                await _require_feature(ctx, resource.metadata.name, doc.get("spec"))
         else:
             await ctx.namespace(ns, f"{plural}:write")
         parsed.append((resource, ns, strip_nulls(doc.get("spec") or {})))

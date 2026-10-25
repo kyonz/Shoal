@@ -203,6 +203,17 @@ export function AssistantPanel() {
         {error && <Notice tone="error">{error}</Notice>}
       </div>
 
+      {messages.length > 0 && namespace !== ns && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-subtle px-3 py-2 text-[12px] text-muted">
+          <span className="min-w-0 flex-1">
+            This chat works in <span className="font-mono text-fg">{namespace}</span>; you are now in <span className="font-mono text-fg">{ns}</span>.
+          </span>
+          <Button size="sm" variant="ghost" onClick={reset} disabled={chat.isPending}>
+            New chat in {ns}
+          </Button>
+        </div>
+      )}
+
       <form
         className="shrink-0 border-t border-border p-3"
         onSubmit={(e) => {

@@ -81,6 +81,17 @@ resource "shoal_identity" "ada" {
   spec = { display_name = "Ada Lovelace", email = "ada@acme.example", github = "ada", actors = ["user:ada@acme.example"] }
 }
 
+resource "shoal_cloud_identity" "aws" {
+  depends_on = [shoal_namespace.team]
+  namespace  = "team-acc"
+  name       = "aws-deploy"
+  spec = {
+    provider = "aws"
+    aws      = { role_arn = "arn:aws:iam::123456789012:role/shoal-deploy", region = "eu-west-1", duration = "1h" }
+    allow    = { workflows = ["deploy-*"] }
+  }
+}
+
 resource "shoal_skill_source" "public" {
   name = "public-skills"
   spec = {
@@ -109,6 +120,7 @@ func TestAccDeclarativeResources(t *testing.T) {
 					resource.TestMatchResourceAttr("shoal_connection.github", "status.webhook_url", regexp.MustCompile(`/v1/hooks/`)),
 					resource.TestCheckResourceAttr("shoal_identity.ada", "namespace", "shared"),
 					resource.TestCheckResourceAttr("shoal_skill_source.public", "namespace", "shared"),
+					resource.TestCheckResourceAttr("shoal_cloud_identity.aws", "id", "team-acc/aws-deploy"),
 					resource.TestCheckResourceAttrSet("shoal_secret.token", "updated_at"),
 				),
 			},
@@ -130,6 +142,12 @@ func TestAccDeclarativeResources(t *testing.T) {
 				ResourceName:      "shoal_identity.ada",
 				ImportState:       true,
 				ImportStateId:     "ada",
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "shoal_cloud_identity.aws",
+				ImportState:       true,
+				ImportStateId:     "team-acc/aws-deploy",
 				ImportStateVerify: true,
 			},
 			{

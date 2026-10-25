@@ -47,8 +47,8 @@ history against the current workflow code.
 
 ## Setting it up
 
-1. Install the extra: `pip install 'shoal[temporal]'`. The container image already
-   includes it.
+1. Install the extra: `pip install './engine[temporal]'` (or `uv sync --extra temporal` in
+   `engine/`). The container image already includes it.
 2. Point every Shoal process (API servers and workers) at your cluster. API servers
    need it too, because they start and wake runs.
 

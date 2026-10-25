@@ -1878,7 +1878,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Connect my account with OAuth */
+        /**
+         * Connect my account with OAuth
+         * @description Open the URL in a browser that is signed in to Shoal as you (or the one that made this call).
+         */
         post: operations["start_oauth_v1_me_credentials__namespace___connection__oauth_post"];
         delete?: never;
         options?: never;
@@ -3720,7 +3723,7 @@ export interface components {
             resources: components["schemas"]["AppliedResource"][];
             /**
              * Removed
-             * @description Resources the new version no longer has.
+             * @description Resources the new version no longer has (deleted, or to be on a dry run).
              */
             removed?: components["schemas"]["ResourceRef"][];
             /**
@@ -4123,7 +4126,7 @@ export interface components {
             platform?: string | null;
             /**
              * Config
-             * @description Sink settings; secrets by name (api_key_secret, ...).
+             * @description Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. Empty on an eval run export: the Eval's own sinks[] settings for this sink or platform.
              */
             config?: {
                 [key: string]: unknown;
@@ -4749,8 +4752,17 @@ export interface components {
             account_id?: string | null;
             /** Instance Role */
             instance_role?: string | null;
-            /** Namespaces */
+            /**
+             * Namespaces
+             * @description Namespaces visible here; for a federated tenant ask /v1/me/permissions, which the member answers.
+             */
             namespaces: string[];
+            /**
+             * Federated
+             * @description The tenant's data lives in a member deployment that this hub forwards to.
+             * @default false
+             */
+            federated: boolean;
         };
         /** MemberOut */
         MemberOut: {
@@ -4797,6 +4809,11 @@ export interface components {
             visibility: "full" | "metadata";
             /** Last Connected At */
             last_connected_at: string | null;
+            /**
+             * Connector Error
+             * @description Why the tenant connector's last poll of the hub failed, if it did.
+             */
+            connector_error?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -5155,6 +5172,13 @@ export interface components {
             document: {
                 [key: string]: unknown;
             };
+            /**
+             * Source
+             * @description The spec as the client wrote it, without server defaults (what rollback restores).
+             */
+            source?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RoleBindingIn */
         RoleBindingIn: {
@@ -5460,7 +5484,7 @@ export interface components {
             platform?: string | null;
             /**
              * Config
-             * @description Sink settings; secrets by name (api_key_secret, ...).
+             * @description Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. Empty on an eval run export: the Eval's own sinks[] settings for this sink or platform.
              */
             config?: {
                 [key: string]: unknown;

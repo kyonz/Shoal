@@ -1,7 +1,7 @@
 # The `shoal` CLI
 
-`shoal` is the command-line client for Shoal. It ships with the engine (`pip install shoal` or
-`uv tool install ./engine`). Client commands talk to a server over the public API; `serve` and `worker` run one.
+`shoal` is the command-line client for Shoal. It ships with the engine: from a checkout, `uv tool install ./engine`
+or `pipx install ./engine` (it is not on PyPI yet). Client commands talk to a server over the public API; `serve` and `worker` run one.
 
 ## Connecting
 
@@ -55,8 +55,14 @@ shoal run hello --inputs-file inputs.yaml --wait   # exit 0 only if the run succ
 shoal logs run_01... -f
 shoal get run run_01...
 shoal cancel run_01...
+shoal approve run_01...                     # the run's waiting approval step (or name it: run_01... publish)
+shoal approve run_01... publish --reject -m "not yet"
 shoal signal run_01... build.done -d '{"ok": true}'   # resume a wait step with data
 ```
+
+`run --wait` and `--follow` print the `shoal approve` command when the run stops at an approval.
+A rejection does not fail the run: the step's output has `approved: false`, so gate the steps after
+it with `if: "{{ steps.<id>.output.approved }}"`.
 
 ## Secrets
 

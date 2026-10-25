@@ -12,7 +12,7 @@ import { useAuth } from "@/lib/auth";
 import { nsPath, useNs, useSwitchNamespace } from "@/lib/ns";
 import { relTime } from "@/lib/format";
 import { Kbd, StatusIcon } from "@/components/ui";
-import { NAV } from "./nav";
+import { ADMIN_NAV, NAV } from "./nav";
 
 export function useCommandPalette() {
   const [open, setOpen] = useState(false);
@@ -112,6 +112,17 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   .filter((i) => !i.permission || can(i.permission, i.namespaced ? ns : undefined))
                   .map((i) => (
                     <Command.Item key={i.label} className={item} keywords={i.keywords?.split(" ")} onSelect={() => go(i.namespaced ? nsPath(ns, i.to) : i.to)}>
+                      <i.icon />
+                      <span className="flex-1">{i.label}</span>
+                      <ArrowRight className="opacity-40" />
+                    </Command.Item>
+                  ))}
+              </Command.Group>
+              <Command.Group heading="Admin console" className={group}>
+                {ADMIN_NAV.filter((i) => i.to !== "/admin" && !NAV.some((g) => g.items.some((n) => n.to === i.to)))
+                  .filter((i) => !i.permission || can(i.permission))
+                  .map((i) => (
+                    <Command.Item key={i.to} className={item} keywords={["admin", ...(i.keywords?.split(" ") ?? [])]} onSelect={() => go(i.to)}>
                       <i.icon />
                       <span className="flex-1">{i.label}</span>
                       <ArrowRight className="opacity-40" />

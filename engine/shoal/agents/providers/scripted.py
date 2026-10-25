@@ -44,6 +44,7 @@ def _last_tool_result(messages: list[dict[str, Any]]) -> Any:
 
 class ScriptedProvider(ModelProvider):
     name = "scripted"
+    description = "Replays a fixed script of turns, for tests, demos and offline development."
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         cfg = request.config

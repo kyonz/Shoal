@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shoal.integrations.egress import DEFAULT_BLOCKED_NETWORKS
+
 
 class RemoteIntegration(BaseModel):
     url: str
@@ -36,6 +38,11 @@ class Settings(BaseSettings):
         default_factory=lambda: ["db", "env"],
         description="Secret backends (shoal.secrets plugins) in lookup order; the first writable one stores new secrets.",
     )
+    secret_env_shared: bool = Field(
+        True,
+        description="Let the env secret provider fall back to SHOAL_SECRET_<NAME>, which every tenant can read; "
+        "turn off on instances shared by several organisations (SHOAL_SECRET_<TENANT>__<NAME> always works).",
+    )
     secret_key: SecretStr = Field(
         SecretStr("dev-insecure-secret-key-change-me"),
         description="Key used to encrypt stored secrets and sign run identity tokens.",
@@ -60,6 +67,11 @@ class Settings(BaseSettings):
         default_factory=list,
         description="Operator-wide remote integrations (open integrations protocol) registered at start-up, "
         'e.g. SHOAL_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
+    )
+    integration_blocked_networks: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_BLOCKED_NETWORKS),
+        description="CIDRs integrations may never call (connection URLs are tenant-set). Defaults to the link-local and "
+        "cloud metadata ranges; add private ranges, e.g. 10.0.0.0/8, to keep tenants off this deployment's network.",
     )
     skill_source_cache_dir: str | None = Field(
         None, description="Where git skill sources keep their checkouts (default: a directory under the system temp dir)."

@@ -360,6 +360,8 @@ async def test_eval_platforms_keep_credentials_in_one_place(engine, admin):
     assert (await admin.put("/v1/namespaces/default/evals/triage-eval", json={"spec": eval_spec})).status_code == 201
     bad = {**eval_spec, "sinks": [{"platform": "braintrust-prod", "sink": "langfuse"}, {}]}
     assert (await admin.put("/v1/namespaces/default/evals/bad", json={"spec": bad})).status_code == 422
+    redirect = {**eval_spec, "sinks": [{"platform": "braintrust-prod", "config": {"api_url": "https://elsewhere.test"}}]}
+    assert (await admin.put("/v1/namespaces/default/evals/bad", json={"spec": redirect})).status_code == 422
     r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs")
     assert r.status_code == 201, r.text
     await engine.run_until_idle()
@@ -375,6 +377,9 @@ async def test_eval_platforms_keep_credentials_in_one_place(engine, admin):
     r = await admin.post(f"/v1/runs/{detail['results'][0]['run_id']}/export", json={"platform": "braintrust-prod"})
     assert r.status_code == 200 and bt.logs
     assert (await admin.post(f"/v1/eval-runs/{detail['id']}/export", json={"config": {}})).status_code == 422
+    r = await admin.post(f"/v1/runs/{detail['results'][0]['run_id']}/export",
+                         json={"platform": "braintrust-prod", "config": {"api_url": "https://elsewhere.test"}})
+    assert r.status_code == 422 and "set on the platform only" in r.json()["detail"]
     r = await admin.post(f"/v1/eval-runs/{detail['id']}/export", json={"platform": "braintrust-prod", "sink": "langfuse"})
     assert r.status_code == 422 and "braintrust sink" in r.json()["detail"]
 
@@ -519,3 +524,48 @@ async def test_eval_api_permissions(engine, admin):
     assert (await admin.post("/v1/namespaces/default/evals/nope/runs")).status_code == 404
     r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs", json={"baseline": "version:9"})
     assert r.status_code == 404 and "baseline" in r.json()["detail"]
+
+
+async def test_first_run_with_previous_baseline_has_none(engine, admin):
+    assert (await admin.put("/v1/namespaces/default/workflows/triage", json={"spec": V1})).status_code == 201
+    eval_spec = {**EVAL, "gate": {"baseline": "previous", "max_regression": 0.1}}
+    assert (await admin.put("/v1/namespaces/default/evals/triage-eval", json={"spec": eval_spec})).status_code == 201
+    r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs", json={"baseline": "previous"})
+    assert r.status_code == 201, r.text
+    first = r.json()["id"]
+    assert r.json()["baseline_id"] is None
+    await engine.run_until_idle()
+    detail = (await admin.get(f"/v1/eval-runs/{first}")).json()
+    assert detail["status"] == "completed" and detail["gate"]["passed"] is True
+    r = await admin.post("/v1/namespaces/default/evals/triage-eval/runs")  # the spec's gate.baseline
+    assert r.status_code == 201 and r.json()["baseline_id"] == first
+
+
+async def test_eval_export_secrets_need_evals_write_and_resolve_in_the_run_namespace(engine, admin):
+    lf = FakeLangfuse()
+    engine.http_transport = httpx.MockTransport(lf.handle)
+    assert (await admin.put("/v1/namespaces/team-a", json={})).status_code == 201
+    assert (await admin.put("/v1/namespaces/team-a/secrets/lf-secret", json={"value": "sk-team"})).status_code in (200, 201)
+    lf_config = {"public_key": "pk-lf", "secret_key_secret": "lf-secret", "project_id": "p1"}
+    assert (await admin.put("/v1/namespaces/team-a/workflows/triage", json={"spec": V1})).status_code == 201
+    eval_spec = {**EVAL, "sinks": [{"sink": "langfuse", "config": lf_config}]}
+    assert (await admin.put("/v1/namespaces/team-a/evals/triage-eval", json={"spec": eval_spec})).status_code == 201
+    eval_run_id = (await admin.post("/v1/namespaces/team-a/evals/triage-eval/runs")).json()["id"]
+    await engine.run_until_idle()
+    run_id = (await admin.get(f"/v1/eval-runs/{eval_run_id}/results")).json()[0]["run_id"]
+
+    sa = await admin.put("/v1/service-accounts/ops", json={})
+    await admin.post("/v1/role-bindings", json={"role": "operator", "subject_kind": "user", "subject_id": sa.json()["id"], "namespace": "team-a"})
+    token = (await admin.post("/v1/api-keys", json={"name": "k", "service_account": "ops"})).json()["token"]
+    ops = {"Authorization": f"Bearer {token}"}
+    leak = {"sink": "langfuse", "config": {**lf_config, "host": "https://attacker.example"}}
+    assert (await admin.post(f"/v1/eval-runs/{eval_run_id}/export", json=leak, headers=ops)).status_code == 403
+    assert (await admin.post(f"/v1/runs/{run_id}/export", json=leak, headers=ops)).status_code == 403
+
+    # without settings, an eval run export uses the Eval's own sink settings
+    lf.auth.clear()
+    r = await admin.post(f"/v1/eval-runs/{eval_run_id}/export", json={"sink": "langfuse"}, headers=ops)
+    assert r.status_code == 200, r.text
+    assert lf.auth == {"Basic " + base64.b64encode(b"pk-lf:sk-team").decode()}  # team-a's secret, not default's
+    r = await admin.post(f"/v1/runs/{run_id}/export", json={"sink": "langfuse", "config": lf_config})
+    assert r.status_code == 200, r.text

@@ -12,7 +12,7 @@ import { Button, EmptyState, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSe
 import { AssistantLauncher, AssistantPanel } from "@/features/assistant/AssistantPanel";
 import { CommandPalette, useCommandPalette } from "./CommandPalette";
 import { NAV } from "./nav";
-import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, federationMessage, useFederatedLink, useFederationState } from "@/lib/federation";
+import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, FEDERATION_REVOKED, federationMessage, useFederatedLink, useFederationState } from "@/lib/federation";
 import shoalIcon from "@/assets/brand/shoal-icon.svg";
 import shoalLogo from "@/assets/brand/shoal-logo.svg";
 import shoalLogoDark from "@/assets/brand/shoal-logo-dark.svg";
@@ -213,12 +213,13 @@ function NavItemLink({ to, label, icon: Icon, collapsed, first }: { to: string; 
 function NamespaceSwitcher() {
   const ns = useNs();
   const { data } = useNamespaces();
-  const { me, can } = useAuth();
+  const { me, perms, can } = useAuth();
   const switchTo = useSwitchNamespace();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const visible = new Set(me?.namespaces ?? []);
+  // For a federated tenant the member decides: /v1/me/permissions is answered by it, /v1/me by the hub.
+  const visible = new Set([...(me?.namespaces ?? []), ...Object.keys(perms?.namespaces ?? {})]);
   const list = (data ?? []).filter((n) => me?.is_system_admin || visible.has(n.name) || can("namespaces:create"));
   const filtered = list.filter((n) => !q || n.name.includes(q.toLowerCase()) || n.display_name.toLowerCase().includes(q.toLowerCase()));
   const current = list.find((n) => n.name === ns);
@@ -344,8 +345,17 @@ function UserMenu() {
 function FederationBanner() {
   const qc = useQueryClient();
   const { me } = useAuth();
-  const { disconnected, forbidden, readOnly, dismissedReadOnly, dismissReadOnly } = useFederationState();
+  const { disconnected, revoked, forbidden, readOnly, dismissedReadOnly, dismissReadOnly } = useFederationState();
   const link = useFederatedLink(!!me?.is_system_admin, me?.tenant?.slug);
+  if (revoked)
+    return (
+      <div role="status" className="flex items-center gap-2.5 border-b border-warn/25 bg-warn-soft px-4 py-2 text-[13px] text-warn">
+        <CloudOff className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">Link revoked.</b> {federationMessage(FEDERATION_REVOKED)}
+        </span>
+      </div>
+    );
   if (disconnected)
     return (
       <div role="status" className="flex items-center gap-2.5 border-b border-warn/25 bg-warn-soft px-4 py-2 text-[13px] text-warn">
