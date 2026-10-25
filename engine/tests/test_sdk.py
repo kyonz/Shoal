@@ -181,6 +181,15 @@ async def test_mock_http_fails_loudly_on_unmocked_calls():
     assert route.last.path == "/files/a/b/c.txt"
 
 
+async def test_built_in_webhooks_reject_unsigned_deliveries_without_a_secret():
+    body = b'{"action": "opened", "pull_request": {"number": 1}}'
+    github = IntegrationHarness(GitHubIntegration, config={"token": "t"})
+    assert not await github.verify_webhook({"X-GitHub-Event": "pull_request"}, body)
+    generic = IntegrationHarness(WebhookIntegration)
+    assert not await generic.verify_webhook({}, body)
+    assert await IntegrationHarness(WebhookIntegration, config={"allow_unsigned": True}).verify_webhook({}, body)
+
+
 async def test_harness_webhook_verification():
     harness = IntegrationHarness(TicketsIntegration, config={"api_token": "t", "webhook_secret": "s3"})
     headers, body = signed_webhook("s3", {"action": "closed", "id": "T-4"})

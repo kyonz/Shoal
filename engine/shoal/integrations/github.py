@@ -703,7 +703,7 @@ class GitHubIntegration(Integration):
     async def verify_webhook(self, ctx: ConnectionContext, headers: dict[str, str], body: bytes) -> bool:
         secret = ctx.config.webhook_secret
         if secret is None:
-            return True
+            return False  # unsigned deliveries could fire triggers as anyone; set webhook_secret to receive webhooks
         signature = headers.get("x-hub-signature-256", "")
         expected = "sha256=" + hmac.new(secret.get_secret_value().encode(), body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature, expected)
@@ -744,6 +744,6 @@ class GitHubIntegration(Integration):
     def webhook_setup_instructions(self, url: str) -> str:
         return (
             f"In the repository or organization settings, add a webhook with payload URL {url}, content type "
-            "application/json, the connection's webhook secret, and events: Pull requests, Pull request reviews, "
+            "application/json, the connection's webhook secret (required: unsigned deliveries are rejected), and events: Pull requests, Pull request reviews, "
             "Issue comments, Check suites (plus anything your triggers use)."
         )

@@ -89,6 +89,9 @@ Rules worth knowing:
   when called through the API.
 - **Reject unsigned webhooks** when no secret is configured, rather than
   accepting anyone who finds the URL.
+- **Prefix wake keys with your integration's key** (`linear:issue:42`). Keys whose
+  prefix names another installed integration (`github:...`) are dropped, so one
+  connection's webhooks cannot hand forged events to runs waiting on another's.
 - **Fill `IntegrationEvent.actor`** (`actor(email=..., linear=user_id)`) so
   runs started by the event are attributed to the person who caused it.
 - Helpers: `verify_hmac_sha256`, `hmac_sha256`, `verify_token`,
