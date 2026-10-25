@@ -32,7 +32,7 @@ first release must satisfy.
    long waits (days) and progress tracking.
 6. **Multi-tenant.** Hard tenant isolation in data, secrets, quotas and API keys.
 7. **Multi-engine execution.** Sandboxes on local processes, Docker,
-   Kubernetes, E2B, Perplexity Sandbox and any other provider via a plugin.
+   Kubernetes, E2B, Perplexity SPACE and any other provider via a plugin.
 8. **Open-source maturity.** Apache-2.0, semver'd public API, versioned workflow
    schema, OpenAPI spec, Helm chart, docker-compose, observability, docs.
 
@@ -97,7 +97,7 @@ YAML/JSON, so they can be authored as files (GitOps) or via the API/UI.
 - **Store** is the single source of truth. An append-only `run_events` table is
   the audit log and the feed for the UI's live view (SSE).
 
-### Why a built-in durable executor (and not Temporal by default)
+### Why a built-in durable executor (and not Temporal by default) — decided
 
 A week-long "wait for review" means runs must be durable. We implement a small
 durable state machine on top of the database rather than requiring Temporal,
@@ -259,7 +259,7 @@ leases.
 class SandboxBackend(Protocol):
     name: str
     async def create(self, spec: SandboxSpec) -> Sandbox: ...
-    async def attach(self, sandbox_id: str) -> Sandbox: ...   # optional (resume)
+    async def attach(self, sandbox_id: str) -> Sandbox: ...   # reattach after worker restart
 
 class Sandbox(Protocol):
     id: str
@@ -267,6 +267,10 @@ class Sandbox(Protocol):
     async def write_file(self, path: str, data: bytes) -> None: ...
     async def read_file(self, path: str) -> bytes: ...
     async def close(self) -> None: ...
+    # Optional capability (Sandbox.supports_suspend): persist VM state and free
+    # compute during long waits, then resume with the workspace intact.
+    async def suspend(self) -> None: ...
+    async def resume(self) -> None: ...
 ```
 
 | Backend | Notes |
@@ -275,7 +279,11 @@ class Sandbox(Protocol):
 | `docker` | One container per sandbox via the Docker API. |
 | `kubernetes` | One Pod per sandbox (namespace per tenant optional), `exec` over the K8s API, resource limits, NetworkPolicy, `activeDeadlineSeconds`. Works with gVisor/Kata runtime classes. |
 | `e2b` | E2B cloud sandboxes (and self-hosted E2B) via the `e2b` SDK. |
-| `perplexity` | Perplexity Sandbox API adapter. Shipped as **experimental** until the public API is stable. |
+| `space` | [Perplexity SPACE](https://github.com/perplexityai/SPACE): self-hosted Firecracker microVM sandboxes over its HTTP API (operations polling, SSE command streams, `files:read`/`files:write`, idempotency keys). Supports **suspend/wake**, which AWM uses to park a sandbox during long `wait` steps. |
+| `remote` | Generic adapter for any provider that implements the small AWM Remote Sandbox HTTP contract. |
+
+SPACE also ships an E2B compatibility wrapper, so the `e2b` backend can target
+a SPACE deployment by pointing the E2B domain at it.
 
 `SandboxSpec` carries image/template, CPU/memory, env, network egress policy,
 TTL and labels (`tenant`, `run`, `step`) for cost attribution. Sandbox profiles
@@ -418,7 +426,38 @@ Both journeys ship as runnable examples and as end-to-end tests using the
 
 ---
 
-## 14. Observability and operations
+## 14. Frontend (React)
+
+The UI is a first-class client of the public API (no private endpoints), built
+with React + TypeScript + Vite, TanStack Query, React Router, Tailwind and
+React Flow (`@xyflow/react`). Goals: polished, advanced, yet obvious to a
+first-time user.
+
+- **Visual workflow builder** — a drag-and-drop canvas:
+  - a palette of step types (agent, action, script, wait, approval, workflow,
+    set) and integration actions discovered from `/v1/integrations`, dragged
+    onto the canvas;
+  - edges are `needs` dependencies, drawn by connecting handles; auto-layout
+    (dagre) with manual positioning persisted in workflow metadata;
+  - an inspector panel that renders each step's form from its JSON schema
+    (prompt editor with `${{ }}` autocompletion of inputs and upstream outputs,
+    agent/sandbox/connection pickers, retry/timeout/if settings);
+  - live validation (unknown references, cycles, missing inputs) mirrored from
+    the server's pydantic validation;
+  - two-way sync with a YAML code view, undo/redo, keyboard shortcuts,
+    minimap, versions and diff, and "Run" with a generated input form.
+- **Run viewer** — the same graph colour-coded live over SSE, a step timeline,
+  agent transcripts (model turns and tool calls), outputs, approvals and
+  cancel/retry.
+- **Campaigns dashboard** — progress, per-target status table, cost, and
+  pause/resume/cancel controls.
+- **Integrations** — catalogue, connection forms rendered from schemas, webhook
+  URLs to copy, trigger builder with a test-event dry run.
+- **Agents, skills, sandbox profiles, API keys, secrets** — CRUD screens.
+- Command palette (⌘K), dark/light themes, responsive layout, accessible
+  components.
+
+## 15. Observability and operations
 
 - Structured JSON logs, OpenTelemetry traces (run → step → tool call),
   Prometheus metrics (`awm_runs_total`, `awm_step_duration_seconds`,
@@ -429,7 +468,7 @@ Both journeys ship as runnable examples and as end-to-end tests using the
 
 ---
 
-## 15. Plugin authoring
+## 16. Plugin authoring
 
 Plugins are normal Python packages exposing entry points:
 
@@ -448,7 +487,7 @@ new plugin needs no frontend changes.
 
 ---
 
-## 16. Delivery plan
+## 17. Delivery plan
 
 1. Architecture doc + repo scaffolding, CI.
 2. Core models, expressions, plugin registry.
@@ -457,12 +496,11 @@ new plugin needs no frontend changes.
 5. Integrations framework + GitHub + Jira + webhook/schedule triggers.
 6. Campaigns.
 7. API server: tenancy, API keys, all resources, SSE.
-8. Kubernetes, Docker and E2B sandbox backends; Perplexity (experimental).
-9. React UI.
+8. Kubernetes, Docker, E2B and SPACE sandbox backends.
+9. React UI with the drag-and-drop workflow builder.
 10. Journeys as examples + e2e tests; docker-compose, Helm, docs.
 
-## 17. Open questions
+## 18. Open questions
 
 - Product name (working name: AWM).
-- Default orchestrator: built-in durable executor (proposed) vs. Temporal.
 - OIDC provider defaults for the UI (generic OIDC proposed).
