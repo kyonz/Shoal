@@ -101,7 +101,7 @@ export default function BlueprintDetailPage() {
           {mine.length > 0 && (
             <Card>
               <CardHeader title={`Adopted in ${ns}`} />
-              <AdoptionsTable ns={ns} adoptions={mine} latest={{ [name!]: s.version }} />
+              <AdoptionsTable ns={ns} adoptions={mine} specs={{ [name!]: s }} />
             </Card>
           )}
           <Card className="p-6">

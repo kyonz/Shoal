@@ -8,8 +8,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, Response
 
-from shoal.api.deps import SESSION_COOKIE, EngineDep
+from shoal.api.deps import SESSION_COOKIE, EngineDep, _bearer
 from shoal.api.schemas import LoginProvider
+from shoal.auth.sessions import SESSION_PREFIX, revoke_account_session, revoke_session, verify_session
 from shoal.core.errors import NotFound, ShoalError
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -26,17 +27,27 @@ def _safe_redirect(target: str | None) -> str:
     return target
 
 
-@router.get("/providers", response_model=list[LoginProvider], summary="Sign-in options for a tenant (public)")
-async def providers(tenant: str, engine: EngineDep) -> Any:
+@router.get("/providers", response_model=list[LoginProvider],
+            summary="Sign-in options (public): the instance-wide sign-in, or a tenant's own providers")
+async def providers(engine: EngineDep, tenant: str | None = None) -> Any:
+    base = engine.settings.public_url.rstrip("/")
+    if tenant is None:
+        cfg = engine.settings.instance_oidc
+        return [LoginProvider(name="instance", display_name=cfg.display_name, login_url=f"{base}/v1/auth/login/instance")] if cfg else []
     row = await engine.store.get_tenant_by_slug(tenant)
     if row is None:
         raise NotFound(f"tenant '{tenant}' not found")
-    base = engine.settings.public_url.rstrip("/")
     return [
         LoginProvider(name=p.name, display_name=p.display_name, login_url=f"{base}/v1/auth/login/{tenant}/{p.name}")
         for p in await engine.directory.list_oidc_providers(row.id)
         if p.enabled
     ]
+
+
+@router.get("/login/instance", summary="Start the instance-wide sign-in (redirects to the provider)")
+async def login_instance(engine: EngineDep, redirect_to: str | None = None) -> RedirectResponse:
+    url = await engine.oidc.begin(None, "instance", _callback_url(engine), _safe_redirect(redirect_to))
+    return RedirectResponse(url, status_code=302)
 
 
 @router.get("/login/{tenant}/{provider}", summary="Start OIDC sign-in (redirects to the provider)")
@@ -69,8 +80,26 @@ async def callback(request: Request, engine: EngineDep, state: str | None = None
     return response
 
 
-@router.post("/logout", status_code=204, summary="Clear the session cookie")
-async def logout() -> Response:
+@router.post("/logout", status_code=204, summary="Sign out: end the session and clear its cookie")
+async def logout(request: Request, engine: EngineDep) -> Response:
+    token = _bearer(request)
+    if token and token.startswith(SESSION_PREFIX):
+        try:
+            claims = verify_session(engine.settings, token)
+            user = await engine.directory.get_user(claims["tid"], claims["sub"]) if claims.get("sub") else None
+            actor = None
+            if claims.get("acc"):  # an instance account's session, with or without a tenant user
+                account = await engine.accounts.get(claims["acc"])
+                await revoke_account_session(engine.accounts, account, claims)
+                actor = f"account:{account.email or account.id}"
+            elif user is not None:
+                await revoke_session(engine.directory, user, claims)
+            if user is not None:
+                actor = f"user:{user.username}"
+            if actor:
+                await engine.store.audit(claims.get("tid"), actor, "auth.logout", None, user_id=claims.get("sub"))
+        except (ShoalError, KeyError):
+            pass  # expired or unknown: nothing left to end
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

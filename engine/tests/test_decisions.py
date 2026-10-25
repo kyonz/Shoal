@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
 from shoal.agents.providers.base import ModelRequest, ModelResponse, ProviderUnavailable, ToolDef
 from shoal.agents.providers.openai_compat import OpenAICompatibleProvider, to_openai_messages
@@ -191,6 +192,39 @@ async def test_jev_provider_maps_wire_format(engine, tenant):
     assert (a["level"].value, a["level"].score, a["level"].confidence) == ("good", 1.0, 0.9)
     assert a["risky"].value is False and a["risky"].score == 0.15
     assert result.usage["cost_usd"] == round(1000 * 0.042 / 1e6, 8)
+
+
+async def test_jev_provider_against_the_real_sdk(engine, tenant):
+    """The installed typesafe-sdk, its HTTP layer stubbed: request shape and response parsing end to end."""
+    httpx2 = pytest.importorskip("httpx2")
+    typesafe_sdk = pytest.importorskip("typesafe_sdk")
+    sent: list[dict[str, Any]] = []
+
+    def api(request):
+        sent.append(json.loads(request.content))
+        return httpx2.Response(200, json={"model": "jev-1", "usage": {"input_tokens": 120, "output_tokens": 3}, "answers": {
+            "kind": {"type": "choice", "choice": "bug", "confidence": 0.9, "probabilities": {"bug": 0.9, "feature": 0.1}},
+            "sev": {"type": "score", "score": 1.7, "confidence": 0.8, "legend": {"0": "low", "1": "mid", "2": "high"},
+                    "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}},
+            "repro": {"type": "noul", "noul": 0.8}}})
+
+    def client(config):
+        return typesafe_sdk.TypeSafeClient(api_key=config["api_key"], transport=httpx2.MockTransport(api))
+
+    engine.registry.register("decision_providers", "jev", JevProvider(client_factory=client))
+    await engine.secrets.writable().put(tenant.id, "jev-key", "ts-key")
+    questions = {
+        "kind": DecisionQuestion(type="choice", instructions="What is it?", options={"bug": "A defect", "feature": "A request"}),
+        "sev": DecisionQuestion(type="score", instructions="How bad?", levels=["low", "mid", "high"]),
+        "repro": DecisionQuestion(type="boolean", instructions="Has steps."),
+    }
+    result = await engine.decisions.decide(tenant.id, "Crash on save", questions, provider="jev",
+                                           config={"api_key_secret": "jev-key"})
+    assert sent[0]["questions"]["sev"] == {"type": "score", "instructions": "How bad?", "criteria": ["low", "mid", "high"]}
+    a = result.answers
+    assert (a["kind"].value, a["kind"].confidence) == ("bug", 0.9)
+    assert a["sev"].value == "high" and a["sev"].probabilities == {"low": 0.1, "mid": 0.1, "high": 0.8}
+    assert a["repro"].value is True and result.usage["decision_input_tokens"] == 120
 
 
 # --------------------------------------------------------------------------- model routing

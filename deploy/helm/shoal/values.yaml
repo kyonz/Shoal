@@ -1,7 +1,7 @@
 # Default values for the shoal chart.
 
 image:
-  repository: ghcr.io/kyonz/ai-workflow-manager
+  repository: ghcr.io/kyonz/shoal
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -58,6 +58,21 @@ orchestrator:
       buildId: ""
       deploymentName: ""
       behavior: auto-upgrade
+
+# Instance-wide sign-in. People sign in once and switch between the tenants
+# they belong to; instance admins create and manage tenants. Leave oidc.issuer
+# empty to keep sign-in per tenant only.
+instance:
+  # Emails that become instance admins when they first sign in.
+  admins: []
+  oidc:
+    issuer: ""
+    clientId: ""
+    # Client secret: a key in an existing Secret (recommended) or a literal.
+    clientSecret: ""
+    clientSecretRef: {name: "", key: ""}
+    displayName: Single sign-on
+    allowedDomains: []
 
 # Credentials. Leave secretKey/adminToken empty to generate them once (they are
 # kept across upgrades), or point existingSecret at a Secret you manage with keys

@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { relTime, usd } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
 import { Badge, Button, Card, CardHeader, EmptyState, Page, PageHeader, Segmented, Skeleton, Stat, StatusIcon } from "@/components/ui";
+import { actorName } from "@/lib/actor";
 
 interface Stats {
   since: string;
@@ -120,7 +121,7 @@ export default function Overview() {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-mono text-[12.5px] font-medium">{r.workflow_name}</span>
                       <span className="block truncate text-[11px] text-faint">
-                        {(r.initiator as { display_name?: string })?.display_name ?? r.started_by}
+                        {(r.initiator as { display_name?: string })?.display_name ?? actorName(r.started_by)}
                         {r.trigger_name ? ` · trigger ${r.trigger_name}` : ""}
                         {r.campaign_id ? " · campaign" : ""}
                       </span>

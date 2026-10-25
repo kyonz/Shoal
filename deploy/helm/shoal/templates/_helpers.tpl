@@ -67,6 +67,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   valueFrom: {secretKeyRef: {name: {{ .name }}, key: {{ .key }}}}
 {{- end }}
 {{- end }}
+{{- with .Values.instance.oidc }}
+{{- if .issuer }}
+- name: SHOAL_INSTANCE_OIDC
+  value: {{ dict "issuer" .issuer "client_id" .clientId "display_name" .displayName "allowed_domains" .allowedDomains | toJson | quote }}
+{{- if .clientSecretRef.name }}
+- name: SHOAL_INSTANCE_OIDC_CLIENT_SECRET
+  valueFrom: {secretKeyRef: {name: {{ .clientSecretRef.name }}, key: {{ .clientSecretRef.key }}}}
+{{- else if .clientSecret }}
+- name: SHOAL_INSTANCE_OIDC_CLIENT_SECRET
+  valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" $ }}, key: SHOAL_INSTANCE_OIDC_CLIENT_SECRET}}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- with .Values.extraEnv }}
 {{ toYaml . }}
 {{- end }}

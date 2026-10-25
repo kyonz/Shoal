@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, ArrowUpCircle, Check, ExternalLink, Package, Trash2 } from "lucide-react";
+import { ArrowRight, ArrowUpCircle, Check, ExternalLink, Package, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -245,32 +245,125 @@ export function AdoptWizard({ open, onOpenChange, name, spec: s, ns }: {
 
 // --------------------------------------------------------------------------- adoptions
 
-export function AdoptionsTable({ ns, adoptions, latest }: { ns: string; adoptions: Adoption[]; latest?: Record<string, string> }) {
-  const canWrite = useCan("blueprints:adopt", ns);
-  const remove = useRemoveAdoption(ns);
+/** Upgrade an adoption to the blueprint's latest version, or change its parameters, with a preview first. */
+function AdoptionDialog({ ns, target, onClose }: {
+  ns: string;
+  target: { a: Adoption; version: string; spec: BlueprintSpec } | null;
+  onClose: () => void;
+}) {
   const update = useUpdateAdoption(ns);
-  const confirm = useConfirm();
-  const [upgrade, setUpgrade] = useState<{ a: Adoption; version: string; result: AdoptResult } | null>(null);
+  const connections = useConnections(ns);
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [preview, setPreview] = useState<AdoptResult | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const params = target?.spec.params ?? {};
+  const upgrading = !!target && target.version !== target.a.blueprint_version;
 
-  const startUpgrade = async (a: Adoption, version: string) => {
+  useEffect(() => {
+    if (!target) return;
+    setPreview(null);
+    setError(null);
+    const known = Object.keys(target.spec.params ?? {});
+    const defaults = Object.entries(target.spec.params ?? {}).filter(([, p]) => p.default != null).map(([k, p]) => [k, p.default]);
+    setValues({ ...Object.fromEntries(defaults), ...Object.fromEntries(Object.entries(target.a.params).filter(([k]) => known.includes(k))) });
+  }, [target]);
+
+  if (!target) return null;
+  const errs = paramErrors(error);
+  const missing = Object.entries(params).filter(([k, p]) => p.required !== false && (values[k] === undefined || values[k] === "")).map(([k]) => k);
+  const run = async (dry: boolean) => {
+    setError(null);
     try {
-      const result = await update.mutateAsync({ id: a.id, version, dry_run: true });
-      setUpgrade({ a, version, result });
+      const res = await update.mutateAsync({ id: target.a.id, version: target.version, params: values, dry_run: dry });
+      if (dry) setPreview(res);
+      else {
+        toast.success(upgrading ? `Upgraded to v${target.version}` : "Parameters updated");
+        onClose();
+      }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not preview upgrade");
+      setError(e);
+      setPreview(null);
     }
   };
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      size="lg"
+      title={upgrading ? `Upgrade ${target.a.blueprint} to v${target.version}` : `Change ${target.a.blueprint} parameters`}
+      description={upgrading ? "Re-renders the templates with the new version. Your parameters carry over; new ones are asked for below." : "Re-renders the adoption's resources with new parameters."}
+      footer={
+        preview ? (
+          <>
+            <Button variant="ghost" onClick={() => setPreview(null)}>Back</Button>
+            <Button variant="primary" loading={update.isPending} icon={<Check className="size-4" />} onClick={() => void run(false)}>
+              {upgrading ? "Upgrade" : "Apply"}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" loading={update.isPending} disabled={missing.length > 0} icon={<ArrowRight className="size-4" />} onClick={() => void run(true)}>
+              Preview changes
+            </Button>
+          </>
+        )
+      }
+    >
+      {preview ? (
+        <div className="space-y-3">
+          <OutcomeList items={preview.resources} ns={ns} />
+          {(preview.removed?.length ?? 0) > 0 && (
+            <>
+              <p className="text-[13px] text-muted">These will be removed:</p>
+              <OutcomeList items={(preview.removed ?? []).map((x) => ({ ...resourceRef(x), outcome: "removed" }))} ns={ns} />
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3.5">
+          {Object.entries(params).map(([k, p]) => (
+            <Field key={k} label={k} required={p.required !== false} description={p.description} error={errs[k]}
+              hint={!(k in target.a.params) && upgrading ? "new" : p.type === "connection" ? `${p.integration ?? ""} connection` : p.type}>
+              <ParamInput name={k} param={p} ns={ns} value={values[k]} connections={connections.data ?? []} onChange={(v) => setValues((cur) => {
+                const next = { ...cur };
+                if (v === undefined) delete next[k];
+                else next[k] = v;
+                return next;
+              })} />
+            </Field>
+          ))}
+          {!Object.keys(params).length && <p className="text-[13px] text-muted">This blueprint has no parameters.</p>}
+          {error && !Object.keys(errs).length ? <ErrorNotice error={error} /> : null}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+export function AdoptionsTable({ ns, adoptions, specs }: { ns: string; adoptions: Adoption[]; specs?: Record<string, BlueprintSpec> }) {
+  const canWrite = useCan("blueprints:adopt", ns);
+  const remove = useRemoveAdoption(ns);
+  const confirm = useConfirm();
+  const [target, setTarget] = useState<{ a: Adoption; version: string; spec: BlueprintSpec } | null>(null);
+
   const del = async (a: Adoption) => {
     const ok = await confirm({
       title: `Remove ${a.blueprint} from ${ns}?`,
-      description: `This deletes the ${a.resources.length} resources the adoption created.`,
+      description: `This deletes the ${a.resources.length} resources the adoption created. Resources changed outside the adoption are kept.`,
       confirmLabel: "Remove",
       danger: true,
     });
     if (!ok) return;
     try {
-      await remove.mutateAsync(a.id);
-      toast.success(`Removed ${a.blueprint}`);
+      const res = await remove.mutateAsync(a.id);
+      const kept = res?.kept ?? [];
+      if (kept.length)
+        toast.warning(`Removed ${a.blueprint}; kept ${kept.map((k) => k.name).join(", ")}`, {
+          description: kept.map((k) => `${k.name}: ${k.reason}`).join("\n"),
+        });
+      else toast.success(`Removed ${a.blueprint}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Remove failed");
     }
@@ -291,8 +384,10 @@ export function AdoptionsTable({ ns, adoptions, latest }: { ns: string; adoption
         </thead>
         <tbody>
           {adoptions.map((a) => {
-            const newest = latest?.[a.blueprint];
-            const outdated = newest && newest !== a.blueprint_version;
+            const bp = specs?.[a.blueprint];
+            const newest = bp?.version;
+            const outdated = !!newest && newest !== a.blueprint_version;
+            const editable = !!bp && !outdated && Object.keys(bp.params ?? {}).length > 0;
             return (
               <Tr key={a.id}>
                 <Td>
@@ -325,8 +420,13 @@ export function AdoptionsTable({ ns, adoptions, latest }: { ns: string; adoption
                 </Td>
                 <Td className="text-right whitespace-nowrap">
                   {canWrite && outdated && (
-                    <Button size="sm" variant="secondary" icon={<ArrowUpCircle className="size-3.5" />} loading={update.isPending && update.variables?.id === a.id} onClick={() => void startUpgrade(a, newest!)}>
+                    <Button size="sm" variant="secondary" icon={<ArrowUpCircle className="size-3.5" />} onClick={() => setTarget({ a, version: newest!, spec: bp! })}>
                       Upgrade
+                    </Button>
+                  )}
+                  {canWrite && editable && (
+                    <Button size="icon-sm" variant="ghost" aria-label="Change parameters" title="Change parameters" onClick={() => setTarget({ a, version: a.blueprint_version, spec: bp! })}>
+                      <Pencil className="size-3.5" />
                     </Button>
                   )}
                   {canWrite && (
@@ -340,45 +440,7 @@ export function AdoptionsTable({ ns, adoptions, latest }: { ns: string; adoption
           })}
         </tbody>
       </Table>
-      <Dialog
-        open={!!upgrade}
-        onOpenChange={(o) => !o && setUpgrade(null)}
-        title={upgrade ? `Upgrade ${upgrade.a.blueprint} to v${upgrade.version}` : ""}
-        description="Re-renders the templates with the new version, keeping your parameters."
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setUpgrade(null)}>Cancel</Button>
-            <Button
-              variant="primary"
-              loading={update.isPending}
-              onClick={async () => {
-                if (!upgrade) return;
-                try {
-                  await update.mutateAsync({ id: upgrade.a.id, version: upgrade.version, dry_run: false });
-                  toast.success(`Upgraded to v${upgrade.version}`);
-                  setUpgrade(null);
-                } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Upgrade failed");
-                }
-              }}
-            >
-              Upgrade
-            </Button>
-          </>
-        }
-      >
-        {upgrade && (
-          <div className="space-y-3">
-            <OutcomeList items={upgrade.result.resources} ns={ns} />
-            {(upgrade.result.removed?.length ?? 0) > 0 && (
-              <>
-                <p className="text-[13px] text-muted">These will be removed:</p>
-                <OutcomeList items={(upgrade.result.removed ?? []).map((x) => ({ ...resourceRef(x), outcome: "removed" }))} ns={ns} />
-              </>
-            )}
-          </div>
-        )}
-      </Dialog>
+      <AdoptionDialog ns={ns} target={target} onClose={() => setTarget(null)} />
     </>
   );
 }

@@ -53,6 +53,7 @@ import {
 } from "@/components/ui";
 import { KeyValueInput, SchemaForm, type Widget } from "@/components/forms/SchemaForm";
 import { KINDS, NAME_RE, kindPath, kindPermissions } from "./kinds";
+import { actorName } from "@/lib/actor";
 
 export interface Draft {
   name: string;
@@ -451,7 +452,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
             <div className="min-w-0 space-y-4">
               <Card className="p-4">
                 <div className="grid gap-3.5 sm:grid-cols-2">
-                  <Field label="Name" required error={nameError} description={isNew ? (cfg.admin ? "Unique in the organisation; agents and model policies refer to it by name." : tenantScoped ? "Unique in the organisation; used in links and adoptions." : "Unique in the namespace; other resources refer to it by name.") : "Names cannot be changed."}>
+                  <Field label="Name" required error={nameError} description={isNew ? (cfg.admin ? `Unique in the organisation; ${cfg.plural === "eval-platforms" ? "evals" : "agents and model policies"} refer to it by name.` : tenantScoped ? "Unique in the organisation; used in links and adoptions." : "Unique in the namespace; other resources refer to it by name.") : "Names cannot be changed."}>
                     <Input
                       mono
                       autoFocus={isNew}
@@ -472,6 +473,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
                   </Field>
                 </div>
               </Card>
+              {Object.keys(specSchema?.properties ?? {}).some((k) => k !== "description" && !cfg.hidden?.includes(k)) && (
               <Card className="p-4">
                 <fieldset disabled={!canWrite} className="min-w-0">
                   <SchemaForm
@@ -486,6 +488,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
                   />
                 </fieldset>
               </Card>
+              )}
               {ext.sections?.(ctx)}
             </div>
             <div className="space-y-4">
@@ -722,7 +725,7 @@ function HistoryTab({ plural, ns, name, canWrite, onRestored }: {
                 <span className="mt-0.5 font-mono text-xs font-semibold tabular-nums">v{v.version}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-xs">{relTime(v.created_at)}</span>
-                  <span className="block truncate text-[11px] text-faint">{v.created_by ?? "unknown"}</span>
+                  <span className="block truncate text-[11px] text-faint">{actorName(v.created_by)}</span>
                 </span>
                 {v === current && <Badge tone="ok">current</Badge>}
               </button>

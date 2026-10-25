@@ -48,6 +48,8 @@ export interface EvalRun {
   variants?: { name: string; workflow_version?: number; inputs?: Record<string, unknown> }[];
   mode?: string;
   status: string;
+  /** The Eval spec as it was when the run started. */
+  spec?: { threshold?: number; [k: string]: unknown };
   summary?: VariantSummary & {
     variants?: Record<string, VariantSummary>;
     baseline_diff?: Record<string, Comparison>;

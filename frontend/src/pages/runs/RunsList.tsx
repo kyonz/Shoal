@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { between, dateTime, relTime, usd } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
 import { Button, Card, EmptyState, ErrorNotice, NativeSelect, Page, PageHeader, Skeleton, StatusBadge, Table, Td, Th, Tooltip, Tr } from "@/components/ui";
+import { actorName } from "@/lib/actor";
 
 const STATUSES = ["", "running", "waiting", "succeeded", "failed", "cancelled", "pending"];
 
@@ -121,7 +122,7 @@ export default function RunsList() {
                     <span className="ml-1.5 text-[11px] text-faint">v{r.workflow_version}</span>
                   </Td>
                   <Td className="font-mono text-[11.5px] text-faint">{r.id.slice(-10)}</Td>
-                  <Td className="max-w-48 truncate text-muted">{(r.initiator as { display_name?: string })?.display_name ?? r.started_by ?? "—"}</Td>
+                  <Td className="max-w-48 truncate text-muted">{(r.initiator as { display_name?: string })?.display_name ?? actorName(r.started_by, "—")}</Td>
                   <Td className="text-xs text-muted">
                     {r.campaign_id ? "campaign" : r.trigger_name ? `trigger · ${r.trigger_name}` : r.parent_run_id ? "sub-workflow" : (r.labels as Record<string, string>)?.rerun_of ? "rerun" : "manual"}
                   </Td>

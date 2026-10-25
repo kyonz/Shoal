@@ -62,7 +62,7 @@ export function useFederatedLink(isOperator: boolean, tenantSlug: string | undef
     enabled: isOperator && !!tenantSlug,
     staleTime: 60_000,
   });
-  return links.data?.find((l) => l.tenant === tenantSlug && l.status !== "revoked") ?? null;
+  return links.data?.find((l) => l.tenant === tenantSlug && l.status !== "revoked" && l.status !== "left") ?? null;
 }
 
 /** Any successful read means the member is reachable again. */

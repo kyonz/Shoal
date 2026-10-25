@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -152,6 +153,7 @@ class FakeContainer:
 
     def put_archive(self, directory, data):
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            self.owners = {(m.uid, m.gid) for m in tar.getmembers()}
             tar.extractall(self._local(directory), filter="data")
 
     def get_archive(self, path):
@@ -191,6 +193,7 @@ async def test_docker_backend_against_fake_daemon(tmp_path):
 
     await sandbox.write_file("dir/x.txt", "hello")
     assert await sandbox.read_file("dir/x.txt") == b"hello"
+    assert created[0].owners == {(os.getuid(), os.getgid())}  # the image user's, so a non-root user can overwrite it
     result = await sandbox.exec("cat dir/x.txt; echo err >&2; exit 3")
     assert (result.exit_code, result.stdout, result.stderr) == (3, "hello", "err\n")
     try:
