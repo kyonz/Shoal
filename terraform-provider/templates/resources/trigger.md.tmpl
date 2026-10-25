@@ -1,0 +1,41 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+These are the top-level fields of the Trigger spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `description` | string | optional |  |
+| `workflow` | string | optional | Workflow to start. |
+| `campaign` | string | optional | Campaign to (re)launch instead of a single run. |
+| `connection` | string | optional | Connection whose events fire this trigger. |
+| `event` | string | **required** | Event type, e.g. 'issue_updated', 'pull_request', 'received', 'schedule'. |
+| `schedule` | string | optional | Cron expression for event='schedule'. |
+| `timezone` | string | optional | IANA time zone for the cron schedule. Default: `UTC`. |
+| `overlap` | one of `allow`, `skip` | optional | 'skip' does not fire while a run started by this trigger is still active. Default: `allow`. |
+| `filter` | string | optional | Expression over `event`; fire only when true. |
+| `inputs` | map | optional | Workflow inputs (expressions). |
+| `dedupe_key` | string | optional | Expression; events with a seen key are ignored. |
+| `triage` | object | optional |  |
+| `enabled` | bool | optional |  Default: `true`. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

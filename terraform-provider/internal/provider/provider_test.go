@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -68,13 +69,19 @@ func startEngine() (func(), error) {
 		"AWM_PUBLIC_URL="+endpoint,
 		"AWM_LOCAL_SANDBOX_ROOT="+filepath.Join(tmp, "sandboxes"),
 	)
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	logFile, err := os.Create(filepath.Join(tmp, "engine.log"))
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // so uv's child uvicorn is stopped too
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 	stop := func() {
-		_ = cmd.Process.Kill()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		_, _ = cmd.Process.Wait()
+		logFile.Close()
 		_ = os.RemoveAll(tmp)
 	}
 	deadline := time.Now().Add(60 * time.Second)

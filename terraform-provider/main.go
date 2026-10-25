@@ -14,7 +14,7 @@ import (
 // version is set by the release build (-ldflags "-X main.version=...").
 var version = "dev"
 
-//go:generate go run ./tools/docgen
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name shoal
 
 func main() {
 	var debug bool
