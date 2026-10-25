@@ -17,9 +17,13 @@ skipped=()
 want() { [[ " ${sections[*]} " == *" $1 "* ]]; }
 have() { command -v "$1" >/dev/null 2>&1; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-run() {  # run NAME CMD...: record failures and keep going
-  local name="$1"; shift
-  if ! "$@"; then failed+=("$name"); fi
+run() {  # run NAME CMD...: run a section with errexit (outside any `if`, where bash would ignore it), record failures and keep going
+  local name="$1" rc; shift
+  set +e
+  (set -e; "$@")
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || failed+=("$name")
 }
 
 engine() {

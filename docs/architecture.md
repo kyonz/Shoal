@@ -795,7 +795,9 @@ one control plane, and a federated deployment can also sit next to the hub.
   another call. The member authorises it again with its own
   RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
   and are bound to roles like any subject. A call succeeds only if the hub
-  allows it, the link mode allows it, and the member's RBAC allows it.
+  allows it, the link mode allows it, and the member's RBAC allows it. The
+  hub's operator token gets no rights in a member by default: a member that
+  wants operators to browse binds `hub_user` `system:admin` explicitly. (Decided.)
 - **Audit on both sides.** The hub records who asked for what; the member
   records the action with `via: hub`, the hub request id and the user, so
   either side can reconstruct it.
