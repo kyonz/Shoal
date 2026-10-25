@@ -8,7 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { diffLines } from "diff";
 import { ChevronRight, Code2, FileText, History, MoreHorizontal, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useBlocker, useNavigate, useParams } from "react-router";
+import { Link, useBlocker, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import YAML from "yaml";
 import { ApiError, applyYaml, rawJson, type Resource, type Schemas } from "@/api/client";
@@ -26,6 +26,7 @@ import { useCan } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { dateTime, relTime } from "@/lib/format";
 import { useNs } from "@/lib/ns";
+import { toastError } from "@/lib/setup";
 import {
   Badge,
   Button,
@@ -173,6 +174,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
   const cfg = KINDS[plural];
   const ns = useNs();
   const params = useParams();
+  const [search] = useSearchParams();
   const name = params.name;
   const isNew = !name;
   const navigate = useNavigate();
@@ -199,7 +201,8 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
     if (!specSchema) return;
     if (isNew) {
       if (draft) return;
-      const d: Draft = { name: "", description: "", labels: {}, spec: structuredClone(cfg.template) };
+      // ?name= comes from setup guidance ("Add the anthropic gateway").
+      const d: Draft = { name: search.get("name") ?? "", description: "", labels: {}, spec: structuredClone(cfg.template) };
       if (specHasDescription(specSchema)) d.description = (d.spec.description as string) ?? "";
       setDraft(d);
       setBaseline(JSON.stringify(d));
@@ -252,7 +255,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
     } catch (e) {
       setSaveError(e);
       setFailedSpec(draft.spec);
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toastError(e, "Save failed");
     }
   }, [draft, canWrite, isNew, nameError, put, specSchema, navigate, ns, plural, ext, cfg]);
 
@@ -302,7 +305,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
       toast.success(`Deleted ${name}`);
       navigate(listPath, { replace: true });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
+      toastError(e, "Delete failed");
     }
   };
 
@@ -694,7 +697,7 @@ function HistoryTab({ plural, ns, name, canWrite, onRestored }: {
       toast.success(`Restored v${v.version} as v${res.metadata.version}`);
       onRestored(res);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Restore failed");
+      toastError(e, "Restore failed");
     }
   };
 

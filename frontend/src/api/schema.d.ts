@@ -1507,6 +1507,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What still needs setting up before agents and the assistant work */
+        get: operations["setup_status_v1_setup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/assistant": {
         parameters: {
             query?: never;
@@ -3331,6 +3348,14 @@ export interface components {
             gateway: string;
             /** Model */
             model: string;
+            /**
+             * Ready
+             * @description Whether the gateway and model are set up, so the assistant can answer.
+             * @default true
+             */
+            ready: boolean;
+            /** @description Why it is not ready, and where to fix it. */
+            problem?: components["schemas"]["SetupProblem"] | null;
         };
         /** AuditOut */
         AuditOut: {
@@ -4673,6 +4698,85 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** SetupFix */
+        SetupFix: {
+            /**
+             * Href
+             * @description Where in the web UI to fix it.
+             */
+            href: string;
+            /** Label */
+            label: string;
+            /**
+             * Permission
+             * @description The permission fixing it takes; null when the caller fixes it themselves.
+             */
+            permission?: string | null;
+            /** Namespace */
+            namespace?: string | null;
+        };
+        /**
+         * SetupProblem
+         * @description A ``missing_configuration`` problem: what is missing and where to set it up.
+         */
+        SetupProblem: {
+            /**
+             * Code
+             * @default missing_configuration
+             */
+            code: string;
+            /** Detail */
+            detail: string;
+            /**
+             * Missing
+             * @description kind, name, namespace, field
+             */
+            missing?: {
+                [key: string]: string;
+            };
+            fix?: components["schemas"]["SetupFix"] | null;
+        };
+        /** GatewayStatus */
+        GatewayStatus: {
+            /** Name */
+            name: string;
+            /**
+             * Managed
+             * @description A Gateway resource; false for a provider plugin used directly.
+             */
+            managed: boolean;
+            /** Ready */
+            ready: boolean;
+            problem?: components["schemas"]["SetupProblem"] | null;
+        };
+        /** SetupCheck */
+        SetupCheck: {
+            /**
+             * Id
+             * @description models, assistant or sandbox.
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Ready */
+            ready: boolean;
+            problem?: components["schemas"]["SetupProblem"] | null;
+        };
+        /** SetupStatus */
+        SetupStatus: {
+            /**
+             * Ready
+             * @description Every check is ready.
+             */
+            ready: boolean;
+            /** Checks */
+            checks: components["schemas"]["SetupCheck"][];
+            /**
+             * Gateways
+             * @description Each gateway and built-in provider an agent can name, and whether it works.
+             */
+            gateways: components["schemas"]["GatewayStatus"][];
         };
         /** SignalIn */
         SignalIn: {
@@ -8705,6 +8809,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    setup_status_v1_setup_get: {
+        parameters: {
+            query?: {
+                namespace?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
             };
             /** @description Validation Error */
             422: {

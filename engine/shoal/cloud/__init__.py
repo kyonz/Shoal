@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
-from shoal.core.errors import NotFound, StepError
+from shoal.core.errors import MissingConfiguration, NotFound, StepError
 from shoal.core.models import CloudIdentitySpec
 
 if TYPE_CHECKING:
@@ -128,7 +128,7 @@ class CloudIdentities:
         try:
             row = await self.engine.store.get_resource_row(tenant_id, "CloudIdentity", name, namespace=namespace)
         except NotFound:
-            raise StepError(f"cloud identity '{name}' not found") from None
+            raise MissingConfiguration(f"cloud identity '{name}' not found", kind="CloudIdentity", name=name) from None
         return row.namespace, CloudIdentitySpec.model_validate(row.document["spec"])
 
     def provider(self, name: str) -> CredentialProvider:

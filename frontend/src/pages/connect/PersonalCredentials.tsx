@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { ApiError, client, unwrap, type Schemas } from "@/api/client";
 import { useAuth } from "@/lib/auth";
 import { dateTime, relTime } from "@/lib/format";
+import { toastError } from "@/lib/setup";
 import { humanize, KeyValueInput } from "@/components/forms/SchemaForm";
 import { Badge, Button, Card, CardHeader, CopyField, Dialog, Field, Input, NativeSelect, Segmented, Switch, useConfirm } from "@/components/ui";
 import { SecretPicker } from "./shared";
@@ -86,7 +87,7 @@ export function useRemoveCredential() {
       toast.success(`Removed your credential for ${v.connection}`);
       void qc.invalidateQueries({ queryKey: credentialKeys.mine });
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+    onError: (e) => toastError(e),
   });
 }
 
@@ -96,7 +97,7 @@ export function useStartOAuth() {
     mutationFn: ({ ns, connection }: { ns: string; connection: string }) =>
       unwrap(client.POST("/v1/me/credentials/{namespace}/{connection}/oauth", { params: { path: { namespace: ns, connection } } })),
     onSuccess: (r) => window.location.assign(r.authorize_url),
-    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+    onError: (e) => toastError(e),
   });
 }
 

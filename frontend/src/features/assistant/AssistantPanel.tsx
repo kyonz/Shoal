@@ -11,7 +11,8 @@ import { ApiError, rawJson } from "@/api/client";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useNs } from "@/lib/ns";
-import { Badge, Button, CodeEditor, JsonBlock, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Spinner, Switch, Tooltip } from "@/components/ui";
+import { Badge, Button, CodeEditor, JsonBlock, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, SetupEmptyState, SetupNotice, Spinner, Switch, Tooltip } from "@/components/ui";
+import { problemFrom, sentence, setupProblem, whoFixes, type SetupProblem } from "@/lib/setup";
 import { Markdown } from "@/pages/docs/Markdown";
 import {
   blocks,
@@ -43,7 +44,8 @@ export function useAssistantInfo(enabled = true) {
     queryKey: ["assistant-info"],
     queryFn: () => rawJson<AssistantInfo>("/v1/assistant"),
     enabled,
-    staleTime: 5 * 60_000,
+    // Short while it is not set up, so the panel notices when an admin adds the gateway.
+    staleTime: (q) => (q.state.data && !q.state.data.ready ? 15_000 : 5 * 60_000),
     retry: false,
   });
 }
@@ -74,12 +76,13 @@ export function AssistantLauncher() {
 
 export function AssistantPanel() {
   const { open, setOpen, draft, setDraft, autoApprove, setAutoApprove, conversation, load, save } = useAssistant();
-  const { me } = useAuth();
+  const { me, can } = useAuth();
   const ns = useNs();
   const location = useLocation();
   const qc = useQueryClient();
   const info = useAssistantInfo(open);
   const [error, setError] = useState<string | null>(null);
+  const [setup, setSetup] = useState<SetupProblem | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -106,6 +109,7 @@ export function AssistantPanel() {
       }),
     onMutate: (body) => {
       setError(null);
+      setSetup(null);
       // Show the user's message straight away; the response replaces the history.
       if (body.message) save({ messages: [...body.history, { role: "user", content: body.message }], pending: NO_PENDING, namespace, updatedAt: new Date().toISOString() });
     },
@@ -117,7 +121,11 @@ export function AssistantPanel() {
     },
     onError: (e, body) => {
       if (body.message) save({ messages: body.history, pending: body.pending, namespace, updatedAt: new Date().toISOString() });
-      setError(e instanceof ApiError ? e.detail : String(e));
+      const problem = setupProblem(e);
+      if (problem) {
+        setSetup(problem);
+        void qc.invalidateQueries({ queryKey: ["assistant-info"] });
+      } else setError(e instanceof ApiError ? e.detail : String(e));
       if (body.message) setDraft(body.message);
     },
   });
@@ -139,10 +147,12 @@ export function AssistantPanel() {
   const reset = () => {
     save(null);
     setError(null);
+    setSetup(null);
   };
 
   if (!open) return null;
-  const disabled = info.data && !info.data.enabled;
+  const notReady = info.data?.enabled && info.data.ready === false ? problemFrom(info.data.problem) : null;
+  const disabled = (info.data && !info.data.enabled) || !!notReady;
 
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-border bg-panel" aria-label="Assistant">
@@ -187,8 +197,10 @@ export function AssistantPanel() {
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-        {disabled ? (
+        {info.data && !info.data.enabled ? (
           <Notice>The assistant is turned off on this server (SHOAL_ASSISTANT_ENABLED).</Notice>
+        ) : notReady ? (
+          <NotSetUp problem={notReady} model={info.data?.model ?? ""} admin={whoFixes(notReady, can) !== "admin"} />
         ) : !messages.length ? (
           <Welcome onPick={(s) => send(s)} />
         ) : (
@@ -201,6 +213,7 @@ export function AssistantPanel() {
           </div>
         )}
         {error && <Notice tone="error">{error}</Notice>}
+        {setup && !notReady && <SetupNotice problem={setup} />}
       </div>
 
       <form
@@ -222,7 +235,9 @@ export function AssistantPanel() {
               }
             }}
             rows={Math.min(6, Math.max(1, draft.split("\n").length))}
-            placeholder={pending.length ? "Reply instead (declines the waiting changes)…" : "Ask or describe what to set up…"}
+            placeholder={
+              notReady ? "The assistant needs a model gateway first" : pending.length ? "Reply instead (declines the waiting changes)…" : "Ask or describe what to set up…"
+            }
             className="max-h-40 min-h-8 flex-1 resize-none bg-transparent px-1.5 py-1 text-[13px] outline-none placeholder:text-faint"
             disabled={!!disabled}
           />
@@ -233,6 +248,28 @@ export function AssistantPanel() {
         <p className="mt-1.5 px-1 text-[10.5px] text-faint">Acts with your permissions in {namespace}. Never paste secret values here.</p>
       </form>
     </aside>
+  );
+}
+
+/** No usable gateway or model yet: point at the setup instead of taking messages. */
+function NotSetUp({ problem, model, admin }: { problem: SetupProblem; model: string; admin: boolean }) {
+  return (
+    <SetupEmptyState
+      className="py-10"
+      problem={problem}
+      title={admin ? "Connect a model to use the assistant" : "The assistant is not set up yet"}
+      description={
+        <>
+          <span className="block">
+            {admin
+              ? `The assistant runs on ${model || "a model"} through an LLM gateway, and that is not ready yet.`
+              : "It needs an LLM gateway, which a tenant admin sets up."}
+          </span>
+          <span className="mt-2 block text-[12px] text-faint">{sentence(problem.detail)}</span>
+        </>
+      }
+
+    />
   );
 }
 

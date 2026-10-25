@@ -7,6 +7,7 @@ import { useResources } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { relTime, usd } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
+import { toastError } from "@/lib/setup";
 import { Button, Card, EmptyState, ErrorNotice, Page, PageHeader, StatusBadge, Table, Tabs, TabsContent, TabsList, TabsTrigger, Td, Th, Tr, useConfirm } from "@/components/ui";
 import { RowSkeleton } from "./shared";
 
@@ -52,7 +53,7 @@ export function useLaunchCampaign(ns: string) {
       toast.success(`Launched ${run.name}`);
       navigate(nsPath(ns, "campaign-runs", run.id));
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Launch failed"),
+    onError: (e) => toastError(e, "Launch failed"),
   });
 }
 

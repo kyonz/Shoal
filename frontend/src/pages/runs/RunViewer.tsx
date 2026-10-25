@@ -10,12 +10,14 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { between, dateTime, relTime, usd } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
+import { problemFrom, toastError } from "@/lib/setup";
 import {
   Badge,
   Button,
   EmptyState,
   JsonBlock,
   SectionTitle,
+  SetupNotice,
   Spinner,
   StatusBadge,
   Tabs,
@@ -129,7 +131,7 @@ function RunHeader({ run, state, now }: { run: RunDetail; state: StreamState; no
       toast.success("Cancellation requested");
       void qc.invalidateQueries({ queryKey: keys.run(run.id) });
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e) => toastError(e),
   });
   const rerun = useMutation({
     mutationFn: () => unwrap(client.POST("/v1/runs/{run_id}/rerun", { params: { path: { run_id: run.id } } })),
@@ -137,7 +139,7 @@ function RunHeader({ run, state, now }: { run: RunDetail; state: StreamState; no
       toast.success("Started a new run with the same inputs");
       navigate(nsPath(run.namespace, "runs", r.id));
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e) => toastError(e),
   });
   return (
     <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-panel px-4 py-2">
@@ -217,7 +219,7 @@ function ApprovalBanner({ run }: { run: RunDetail }) {
       setComment("");
       void qc.invalidateQueries({ queryKey: keys.run(run.id) });
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e) => toastError(e),
   });
   if (!pending.length) return null;
   return (
@@ -384,12 +386,14 @@ function Overview({ run, onSelect, now }: { run: RunDetail; onSelect: (id: strin
   const span = Math.max(1, end - start);
   return (
     <div className="space-y-5">
-      {run.error && (
+      {run.error && (problemFrom(run.error) ? (
+        <SetupNotice problem={problemFrom(run.error)!} />
+      ) : (
         <div className="rounded-lg border border-bad/25 bg-bad-soft p-3 text-[13px] text-bad">
           <div className="font-semibold">Run failed</div>
           <div className="mt-0.5 break-words">{String((run.error as { message?: string }).message ?? JSON.stringify(run.error))}</div>
         </div>
-      )}
+      ))}
       <div>
         <SectionTitle>Timeline</SectionTitle>
         <div className="space-y-1">
@@ -506,6 +510,7 @@ function StepDetail({ step, def, events, now }: { step: Step | undefined; def: S
       {step?.error && (
         <div>
           <SectionTitle>Error</SectionTitle>
+          {problemFrom(step.error) && <SetupNotice problem={problemFrom(step.error)!} className="mb-2" />}
           <JsonBlock value={step.error} />
         </div>
       )}

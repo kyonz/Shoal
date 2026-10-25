@@ -90,6 +90,10 @@ def fail(exc: APIError) -> None:
     err.print(f"[red]{prefix}:[/red] {escape(exc.message)}")
     if exc.status == 401:
         err.print("hint: run 'shoal login' or set SHOAL_TOKEN")
+    details = ((exc.body or {}).get("details") or {}) if isinstance(exc.body, dict) else {}
+    if fix := details.get("fix"):  # missing_configuration / credential_required: where to set it up
+        who = "" if not fix.get("permission") else f" (needs {fix['permission']})"
+        err.print(f"fix: {escape(fix.get('label', 'set it up'))}{who}: {escape((exc.server or '') + fix.get('href', ''))}")
     results = ((exc.body or {}).get("details") or {}).get("results") if isinstance(exc.body, dict) else None
     for item in results or []:
         if item.get("error"):

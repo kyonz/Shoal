@@ -18,8 +18,14 @@ import random
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
-from shoal.core.errors import StepError
+from shoal.agents.providers.base import (
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ProviderAuthFailed,
+    ProviderUnavailable,
+)
+from shoal.core.errors import MissingConfiguration, StepError
 from shoal.core.models import (
     GATEWAY_ONLY,
     AgentSpec,
@@ -47,6 +53,7 @@ class ModelTarget:
     model: str
     config: dict[str, Any] = field(default_factory=dict)
     rule: str | None = None
+    managed: bool = False  # a Gateway resource, rather than a provider plugin used directly
 
     def describe(self) -> dict[str, Any]:
         return {"gateway": self.gateway, "provider": self.provider_name, "model": self.model, "rule": self.rule}
@@ -84,6 +91,7 @@ class ModelClient:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         errors: list[str] = []
+        rejected: list[tuple[ModelTarget, str]] = []
         for index in range(self.index, len(self.targets)):
             target = self.targets[index]
             messages = request.messages
@@ -98,6 +106,11 @@ class ModelClient:
                 errors.append(f"{target.gateway}/{target.model}: {exc}")
                 await self._fallback(target, str(exc))
                 continue
+            except ProviderAuthFailed as exc:
+                errors.append(f"{target.gateway}/{target.model}: credentials rejected: {exc}")
+                rejected.append((target, str(exc)))
+                await self._fallback(target, f"credentials rejected: {exc}")
+                continue
             if response.stop_reason == "refusal" and index + 1 < len(self.targets):
                 errors.append(f"{target.gateway}/{target.model}: refusal")
                 await self._fallback(target, "refusal")
@@ -106,6 +119,13 @@ class ModelClient:
             self._last_used = index
             response.usage = {**response.usage, "model_calls": 1}
             return response
+        if rejected and len(rejected) == len(errors):  # retrying will not help: someone has to fix the gateway
+            target, reason = rejected[0]
+            raise MissingConfiguration(
+                f"gateway '{target.gateway}' was refused by the model provider; check its API key ({reason[:300]})",
+                kind="Gateway", name=target.gateway, exists=target.managed, field="api_key_secret",
+                details={"errors": errors},
+            )
         raise StepError("all model candidates failed", retryable=True, details={"errors": errors})
 
     async def _fallback(self, target: ModelTarget, reason: str) -> None:
@@ -149,7 +169,14 @@ class ModelRouter:
         else:
             provider_name = gateway
         if provider_name not in self.engine.registry.names("providers"):
-            raise StepError(f"unknown gateway or provider '{gateway}'")
+            if resource is not None:
+                raise MissingConfiguration(
+                    f"gateway '{gateway}' uses provider '{provider_name}', which is not installed on this server",
+                    kind="Gateway", name=gateway, exists=True, field="type",
+                )
+            raise MissingConfiguration(
+                f"no gateway named '{gateway}' is set up (and no provider plugin has that name)", kind="Gateway", name=gateway
+            )
         overrides = overrides or {}
         if bad := sorted({*credential_fields(overrides), *(set(overrides) & GATEWAY_ONLY)}):
             raise StepError(f"provider_config cannot set {bad}: endpoints and credentials are managed on Gateways")
@@ -157,12 +184,19 @@ class ModelRouter:
         if effort:
             config["effort"] = effort
         provider = self.engine.plugin("providers", provider_name)
-        return ModelTarget(gateway, provider_name, provider, model, config, rule)
+        if reason := provider.missing_setup(config):
+            raise MissingConfiguration(
+                f"gateway '{gateway}' is not ready: {reason}", kind="Gateway", name=gateway, exists=resource is not None
+            )
+        return ModelTarget(gateway, provider_name, provider, model, config, rule, managed=resource is not None)
 
     async def _secret(self, tenant_id: str, gateway: str, name: str, redactor: Redactor | None) -> str:
         value = await self.engine.secrets.get(tenant_id, name)
         if value is None:
-            raise StepError(f"secret '{name}' (gateway '{gateway}') is not set in the 'shared' namespace")
+            raise MissingConfiguration(
+                f"secret '{name}' (gateway '{gateway}') is not set in the 'shared' namespace",
+                kind="Secret", name=name, namespace=SHARED_NAMESPACE, details={"gateway": gateway},
+            )
         if redactor is not None:
             redactor.add(value)
         return value
@@ -215,7 +249,7 @@ class ModelRouter:
             policy_name = agent.model[len(POLICY_PREFIX) :]
             policy = await self.policy(tenant, policy_name)
             if policy is None:
-                raise StepError(f"model policy '{policy_name}' not found")
+                raise MissingConfiguration(f"model policy '{policy_name}' not found", kind="ModelPolicy", name=policy_name)
             difficulty = None
             if policy.difficulty_router is not None and any(r.match.difficulty for r in policy.rules):
                 decision = await self.engine.decisions.decide(
@@ -236,7 +270,10 @@ class ModelRouter:
                 None,
             )
             if rule is None:
-                raise StepError(f"no rule in model policy '{policy_name}' matched", details=info)
+                raise MissingConfiguration(
+                    f"no rule in model policy '{policy_name}' matched", kind="ModelPolicy", name=policy_name, exists=True,
+                    field="rules", details=info,
+                )
             seed = f"{ctx.run.id}:{ctx.step.id}:{ctx.attempt}"
             effort = provider_config.get("effort")
             for candidate in self.order(rule, seed):
@@ -261,7 +298,10 @@ class ModelRouter:
                     )
                 )
         if not targets:
-            raise StepError(f"model '{agent.model}' is not permitted by the tenant's model policy", details=info)
+            raise MissingConfiguration(
+                f"model '{agent.model}' is not permitted by the tenant's model policy", kind="ModelPolicy",
+                name=info.get("policy", DEFAULT_POLICY), exists=True, field="allow_models", details=info,
+            )
         await ctx.emit("model.routed", {**info, "candidates": [t.describe() for t in targets]})
 
         async def on_fallback(target: ModelTarget, reason: str) -> None:

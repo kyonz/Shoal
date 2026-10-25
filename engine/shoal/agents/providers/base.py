@@ -51,6 +51,14 @@ class ModelProvider(abc.ABC):
     @abc.abstractmethod
     async def complete(self, request: ModelRequest) -> ModelResponse: ...
 
+    def missing_setup(self, config: dict[str, Any]) -> str | None:
+        """Why calls with this (gateway-resolved) config cannot work, when that is clear without calling.
+
+        For example "no API key". The router reports it as a missing
+        configuration that points at the gateway, instead of a failed call.
+        """
+        return None
+
 
 class ProviderRefusal(Exception):
     pass
@@ -58,3 +66,7 @@ class ProviderRefusal(Exception):
 
 class ProviderUnavailable(Exception):
     """Transient provider failure (rate limit, overload, outage). Routers fall back on it."""
+
+
+class ProviderAuthFailed(Exception):
+    """The provider rejected the gateway's credentials (HTTP 401/403). Routers fall back on it, then report the gateway."""

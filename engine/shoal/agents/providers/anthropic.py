@@ -7,7 +7,13 @@ from typing import Any
 
 import anthropic
 
-from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
+from shoal.agents.providers.base import (
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ProviderAuthFailed,
+    ProviderUnavailable,
+)
 
 # USD per million tokens (input, output). Used for budgets and cost reporting.
 PRICING: dict[str, tuple[float, float]] = {
@@ -55,6 +61,13 @@ class AnthropicProvider(ModelProvider):
             )
         return self._clients[key]
 
+    def missing_setup(self, config: dict[str, Any]) -> str | None:
+        if config.get("api_key") or config.get("base_url") or config.get("headers"):
+            return None  # a custom endpoint may authenticate some other way
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+            return None
+        return "it has no API key secret, and ANTHROPIC_API_KEY is not set on the server"
+
     async def complete(self, request: ModelRequest) -> ModelResponse:
         cfg = request.config
         client = self._client(cfg.get("api_key"), cfg.get("base_url"), cfg.get("headers") or {})
@@ -81,6 +94,8 @@ class AnthropicProvider(ModelProvider):
                 message = await stream.get_final_message()
         except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.InternalServerError) as exc:
             raise ProviderUnavailable(str(exc)) from exc
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+            raise ProviderAuthFailed(str(exc)) from exc
         except anthropic.APIStatusError as exc:
             if exc.status_code in (408, 409, 529) or exc.status_code >= 500:
                 raise ProviderUnavailable(str(exc)) from exc

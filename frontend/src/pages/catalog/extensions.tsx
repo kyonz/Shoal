@@ -1,13 +1,14 @@
 /** Kind-specific widgets and sections for the generic editor. */
 import { useQuery } from "@tanstack/react-query";
-import { FilePlus2, KeyRound, Trash2, TriangleAlert } from "lucide-react";
+import { CircleCheck, FilePlus2, KeyRound, Trash2, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { rawJson, type Schemas } from "@/api/client";
 import { useResources } from "@/api/hooks";
 import { useCan } from "@/lib/auth";
-import { nsPath } from "@/lib/ns";
-import { Button, Card, CardHeader, CodeEditor, EmptyState, Field, Input, NativeSelect } from "@/components/ui";
+import { lastNamespace, nsPath } from "@/lib/ns";
+import { problemFrom, useSetupStatus } from "@/lib/setup";
+import { Button, Card, CardHeader, CodeEditor, EmptyState, Field, Input, NativeSelect, SetupNotice } from "@/components/ui";
 import { JsonField, KeyValueInput, SchemaForm } from "@/components/forms/SchemaForm";
 import type { EditorContext, EditorExtension } from "./ResourceEditorPage";
 import { looksLikeCredential } from "./kinds";
@@ -23,16 +24,31 @@ export function useSecrets(ns: string) {
 
 export function SecretPicker({ ns, value, onChange }: { ns: string; value: unknown; onChange: (v: unknown) => void }) {
   const canRead = useCan("secrets:read", ns);
+  const canWrite = useCan("secrets:write", ns);
   const { data } = useSecrets(ns);
   if (!canRead) return <Input mono value={(value as string) ?? ""} placeholder="secret name" onChange={(e) => onChange(e.target.value || undefined)} />;
+  const name = (value as string | undefined) ?? "";
+  // Saving works without it, but the first call that needs it fails: say so now.
+  const missing = !!name && !!data && !data.some((s) => s.name === name);
   return (
-    <Combo
-      mono
-      value={value as string | undefined}
-      onChange={onChange}
-      placeholder="secret name"
-      options={(data ?? []).map((s) => ({ value: s.name }))}
-    />
+    <div className="min-w-0 flex-1">
+      <Combo mono value={value as string | undefined} onChange={onChange} placeholder="secret name" options={(data ?? []).map((s) => ({ value: s.name }))} />
+      {missing && (
+        <p className="mt-1 flex items-center gap-1 text-xs text-warn">
+          <TriangleAlert className="size-3 shrink-0" />
+          <span>
+            “{name}” is not set in {ns} yet.{" "}
+            {canWrite ? (
+              <Link to={nsPath(ns, "secrets")} className="text-accent hover:underline">
+                Create it
+              </Link>
+            ) : (
+              `Ask an admin of the ${ns} namespace to create it.`
+            )}
+          </span>
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -82,6 +98,8 @@ function AgentProviderSelect({ ns, value, onChange }: { ns: string; value: unkno
   const builtins = (providers.data ?? []).filter((p) => !gwNames.has(p.name));
   const known = gwNames.has(v) || builtins.some((p) => p.name === v);
   const current = gw.find((g) => g.metadata.name === v);
+  const status = useSetupStatus(ns).data?.gateways.find((g) => g.name === v);
+  const problem = status && !status.ready ? problemFrom(status.problem) : null;
   return (
     <div>
       <NativeSelect value={v} onChange={(e) => onChange(e.target.value)}>
@@ -105,6 +123,7 @@ function AgentProviderSelect({ ns, value, onChange }: { ns: string; value: unkno
           ))}
         </optgroup>
       </NativeSelect>
+      {problem && <SetupNotice problem={problem} className="mt-2" />}
       <p className="mt-1 text-xs text-faint">
         {current ? (
           <>
@@ -331,8 +350,27 @@ export const gatewayExtension: EditorExtension = {
     type: ({ value, onChange }) => <ProviderSelect value={value} onChange={onChange} />,
     api_key_secret: ({ value, onChange }) => <SharedSecretPicker value={value} onChange={onChange} />,
   }),
-  sections: (ctx) => <GatewayHeaders ctx={ctx} />,
+  sections: (ctx) => (
+    <>
+      {!ctx.isNew && ctx.name && !ctx.dirty && <GatewayReadiness name={ctx.name} />}
+      <GatewayHeaders ctx={ctx} />
+    </>
+  ),
 };
+
+/** Whether the saved gateway can be used, from `GET /v1/setup`. */
+function GatewayReadiness({ name }: { name: string }) {
+  const status = useSetupStatus(lastNamespace());
+  const gateway = status.data?.gateways.find((g) => g.name === name);
+  const problem = gateway && !gateway.ready ? problemFrom(gateway.problem) : null;
+  if (!gateway) return null;
+  if (problem) return <SetupNotice problem={problem} />;
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-ok/25 bg-ok-soft px-3 py-2 text-[13px] text-ok">
+      <CircleCheck className="size-3.5" /> Ready: agents and the assistant can use this gateway.
+    </div>
+  );
+}
 
 function GatewayHeaders({ ctx }: { ctx: EditorContext }) {
   const { spec, setSpec, canWrite, errors } = ctx;

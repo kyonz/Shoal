@@ -8,6 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
+import { toastError } from "@/lib/setup";
 import {
   Badge,
   Button,
@@ -141,7 +142,7 @@ export default function WorkflowList() {
                                 await del.mutateAsync(w.metadata.name);
                                 toast.success(`Deleted ${w.metadata.name}`);
                               } catch (e) {
-                                toast.error((e as Error).message);
+                                toastError(e);
                               }
                             }}
                           >

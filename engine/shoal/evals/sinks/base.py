@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from shoal.core.errors import InvalidRequest
+from shoal.core.errors import InvalidRequest, MissingConfiguration
 from shoal.core.models import EvalCase
 
 if TYPE_CHECKING:
@@ -119,7 +119,7 @@ async def resolve_config(engine: Engine, tenant_id: str, config: dict[str, Any])
         if key.endswith("_secret") and isinstance(value, str):
             secret = await engine.secrets.get(tenant_id, value)
             if secret is None:
-                raise InvalidRequest(f"secret '{value}' ({key}) is not set")
+                raise MissingConfiguration(f"secret '{value}' ({key}) is not set", kind="Secret", name=value, field=key)
             out[key.removesuffix("_secret")] = secret
         else:
             out[key] = value

@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from shoal.agents.runtime import AgentInvocation, AgentResult, AgentRuntime
-from shoal.core.errors import StepError
+from shoal.core.errors import MissingConfiguration, StepError
 from shoal.core.models import ParamValidationError, validate_params
 
 TERMINAL = {"completed", "failed", "canceled", "rejected"}
@@ -86,7 +86,7 @@ class A2ARuntime(AgentRuntime):
             return {}
         value = await inv.ctx.engine.secrets.get(inv.ctx.tenant_id, auth["secret"])
         if value is None:
-            raise StepError(f"secret '{auth['secret']}' for A2A auth is not set")
+            raise MissingConfiguration(f"secret '{auth['secret']}' for A2A auth is not set", kind="Secret", name=auth["secret"])
         inv.ctx.redactor.add(value)
         if auth.get("type", "bearer") == "bearer":
             return {"Authorization": f"Bearer {value}"}
