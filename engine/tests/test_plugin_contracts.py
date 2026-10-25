@@ -28,6 +28,7 @@ BUILT_INS = [
     ("eval_sinks", "braintrust"), ("eval_sinks", "langfuse"), ("decision_providers", "llm"), ("decision_providers", "jev"),
     ("agent_runtimes", "tool-loop"), ("agent_runtimes", "cli"), ("agent_runtimes", "a2a"), ("credentials", "aws"),
     ("skill_sources", "git"), ("skill_sources", "registry"),
+    ("orchestrators", "builtin"), ("orchestrators", "temporal"),
 ]
 
 

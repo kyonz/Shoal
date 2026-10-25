@@ -92,6 +92,7 @@ __all__ = [
     "ModelProvider",
     "ModelRequest",
     "ModelResponse",
+    "Orchestrator",
     "PluginGroup",
     "ProviderRefusal",
     "ProviderUnavailable",

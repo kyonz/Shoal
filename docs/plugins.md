@@ -101,9 +101,10 @@ the reference implementations, and `shoal.sdk.skill_server` serves any source ov
 
 ## Orchestrators (`shoal.orchestrators`)
 
-An orchestrator decides when runs advance; the executor still runs each step. `submit` is called
-for every new run and `wake` whenever something a run waits on changes; neither may raise, because
-`tick` (called by the scheduler every few seconds) repairs anything they missed. `serve` does the
-worker-side work and `drain` advances everything that is due (used by tests and `--wait`). Pick
-one with `SHOAL_ORCHESTRATOR`. The built-in one and Temporal are the reference implementations; see
-[temporal.md](temporal.md).
+An orchestrator decides when and where a run is advanced; `Executor.advance` decides what
+advancing means. Implement the `Orchestrator` protocol: `submit` (a run was created), `wake`
+(called after every `Store.wake_run`), `serve` (the worker side), `tick` (repair missed starts and
+wakes) and `drain` (advance everything due, for tests). Take the run's lease with
+`Store.lease_run` before calling `Executor.advance`, and keep the database as the source of
+truth. Operators pick one with `SHOAL_ORCHESTRATOR`. The Temporal orchestrator
+(`shoal/runtime/temporal/`) is the reference implementation; see [Temporal](temporal.md).
