@@ -1,0 +1,468 @@
+# AI Workflow Manager — Architecture
+
+Status: **Draft v1** · Owner: @kyonz · Last updated: 2026-10-25
+
+AI Workflow Manager (AWM) is an open-source, self-hostable platform for defining,
+running and governing multi-agent AI workflows. It is API-first, multi-tenant,
+and built from pluggable parts so organisations can swap any layer (sandbox,
+model provider, integration, secret store, orchestrator) without forking.
+
+This document is the reference design. It describes the concepts, the runtime,
+the plugin contracts, the API surface and the two acceptance journeys that the
+first release must satisfy.
+
+---
+
+## 1. Goals and non-goals
+
+### Goals
+
+1. **Pluggable engine.** The core is a Python library (`awm`) with typed
+   (pydantic v2) contracts. Every external dependency sits behind a protocol and
+   is discovered through Python entry points.
+2. **Usable directly.** A polished React UI and a CLI sit on top of the same
+   public HTTP API. Nothing the UI does is unavailable to integrators.
+3. **Agent workflows.** Users compose workflows out of steps; agent steps run an
+   agent (model + instructions + skills + tools) inside an isolated sandbox.
+4. **Integrations.** A framework with three capabilities per integration:
+   *triggers* (start work from external events), *actions* (do things in
+   external systems) and *metadata* (discover and query external resources).
+5. **Campaigns.** An orchestration layer that fans a workflow out over many
+   targets (e.g. every repo in an org) with concurrency, budgets, rate limits,
+   long waits (days) and progress tracking.
+6. **Multi-tenant.** Hard tenant isolation in data, secrets, quotas and API keys.
+7. **Multi-engine execution.** Sandboxes on local processes, Docker,
+   Kubernetes, E2B, Perplexity Sandbox and any other provider via a plugin.
+8. **Open-source maturity.** Apache-2.0, semver'd public API, versioned workflow
+   schema, OpenAPI spec, Helm chart, docker-compose, observability, docs.
+
+### Non-goals (v1)
+
+- A hosted SaaS control plane (the design allows it; we do not build billing).
+- Training or fine-tuning models.
+- A general-purpose ETL/data pipeline engine. AWM is for agentic work.
+
+---
+
+## 2. Concepts
+
+| Concept | What it is |
+|---|---|
+| **Tenant** | Isolation boundary. Owns everything below. Has members, API keys, quotas. |
+| **Skill** | A reusable, versioned capability an agent can use: instructions + tools + files (compatible with the Agent Skills `SKILL.md` format). |
+| **Tool** | A callable function exposed to an agent (shell, file edit, HTTP, integration action, MCP server tool). |
+| **Agent** | A named configuration: model/provider, system prompt, skills, tools, sandbox profile, limits. |
+| **Workflow** | A versioned, declarative graph of **steps** with typed inputs/outputs. |
+| **Step** | A node in a workflow: `agent`, `action`, `wait`, `approval`, `condition`, `map`, `workflow` (sub-workflow), `script`. |
+| **Run** | One execution of a workflow version with concrete inputs. Durable; survives restarts. |
+| **Integration** | A plugin type (e.g. `github`, `jira`) providing triggers, actions and metadata. |
+| **Connection** | A tenant's configured instance of an integration (credentials + settings). |
+| **Trigger** | A binding: event source (webhook / schedule / poll) + filter → workflow inputs. |
+| **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
+| **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
+
+All of these are pydantic models in `awm.core.models` and are serialisable to
+YAML/JSON, so they can be authored as files (GitOps) or via the API/UI.
+
+---
+
+## 3. High-level architecture
+
+```
+                    ┌──────────────────────────────────────────────┐
+  React UI ───────▶ │                 API server (FastAPI)          │ ◀── CLI / SDKs / integrators
+  (frontend/)       │  auth: API keys + sessions · tenancy · OpenAPI│ ◀── Webhooks (Jira, GitHub, ...)
+                    └───────────────┬──────────────────────────────┘
+                                    │ writes intents / reads state
+                    ┌───────────────▼──────────────────────────────┐
+                    │                 State store                   │
+                    │  Postgres (SQLite for dev) via SQLAlchemy     │
+                    │  runs · steps · events · timers · campaigns   │
+                    └───────────────▲──────────────────────────────┘
+                                    │ lease / checkpoint
+     ┌──────────────────────────────┴───────────────────────────────┐
+     │                          Workers (N)                          │
+     │  Scheduler: timers, polls, campaign ticks, lease recovery     │
+     │  Executor: advances runs step-by-step (durable state machine) │
+     │      │                │                    │                  │
+     │  Agent runtime   Integration actions   Sandbox manager        │
+     │  (providers)     (github, jira, ...)   (local/docker/k8s/e2b) │
+     └──────────────────────────────────────────────────────────────┘
+```
+
+- **API server** is stateless; horizontally scalable.
+- **Workers** are stateless; all run state is in the store. Any worker can
+  resume any run. Work is claimed with row-level leases
+  (`SELECT … FOR UPDATE SKIP LOCKED` on Postgres).
+- **Store** is the single source of truth. An append-only `run_events` table is
+  the audit log and the feed for the UI's live view (SSE).
+
+### Why a built-in durable executor (and not Temporal by default)
+
+A week-long "wait for review" means runs must be durable. We implement a small
+durable state machine on top of the database rather than requiring Temporal,
+because self-hosters should be able to run AWM with just Postgres. The executor
+sits behind the `Orchestrator` protocol so a Temporal (or other) backend can be
+added as a plugin later without touching workflows.
+
+---
+
+## 4. Repository layout
+
+```
+engine/                 Python package `awm` (library + server + worker + CLI)
+  awm/core/             pydantic models, workflow schema, expressions, errors
+  awm/plugins/          plugin registry (entry points) and base protocols
+  awm/runtime/          durable executor, scheduler, step handlers
+  awm/agents/           agent runtime, model providers, skills, tools
+  awm/sandbox/          sandbox protocol + local/docker/kubernetes/e2b backends
+  awm/integrations/     integration framework + github, jira, webhook, schedule
+  awm/campaigns/        campaign planner, controller, policies
+  awm/store/            SQLAlchemy models, repositories, migrations (Alembic)
+  awm/secrets/          secret providers (env, encrypted-db, kubernetes)
+  awm/api/              FastAPI app, routers, auth, tenancy, SSE
+  awm/cli/              `awm` CLI (Typer)
+  tests/
+frontend/               React + TypeScript + Vite UI
+examples/               Workflow, campaign and trigger definitions (the journeys)
+deploy/                 Dockerfiles, docker-compose, Helm chart
+docs/                   Architecture, guides, API reference, plugin authoring
+```
+
+---
+
+## 5. Workflow model
+
+Workflows are declarative and versioned (`apiVersion: awm.dev/v1`). Example
+(abbreviated from `examples/jira-bugfix/workflow.yaml`):
+
+```yaml
+apiVersion: awm.dev/v1
+kind: Workflow
+metadata:
+  name: jira-bugfix
+spec:
+  inputs:
+    issue_key: {type: string}
+    repo:      {type: string}
+  steps:
+    - id: fetch
+      type: action
+      action: jira.get_issue
+      with: {key: "${{ inputs.issue_key }}"}
+
+    - id: fix
+      type: agent
+      agent: bugfixer               # references an Agent resource
+      sandbox: default              # sandbox profile
+      prompt: |
+        Fix the bug described below in ${{ inputs.repo }}. Run the tests.
+        ${{ steps.fetch.output.summary }}
+        ${{ steps.fetch.output.description }}
+      outputs:
+        pr_url: {type: string}
+        test_summary: {type: string}
+
+    - id: writeback
+      type: action
+      action: jira.add_comment
+      with:
+        key: "${{ inputs.issue_key }}"
+        body: "Opened ${{ steps.fix.output.pr_url }}\n\n${{ steps.fix.output.test_summary }}"
+```
+
+### Step types
+
+| Type | Purpose |
+|---|---|
+| `agent` | Run an agent in a sandbox until it returns structured outputs (validated against the declared schema). |
+| `action` | Call an integration action (e.g. `github.create_pull_request`, `jira.transition`). |
+| `script` | Run a command in a sandbox (deterministic glue, test runs). |
+| `wait` | Durable wait: for a duration, until a time, or until a condition/event (polled or event-driven) with a timeout. |
+| `approval` | Human-in-the-loop gate, resolved via API/UI with optional assignees. |
+| `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
+| `map` | Fan out a sub-list of steps over a list with a concurrency limit. |
+| `workflow` | Call another workflow as a child run. |
+
+Every step accepts `if`, `retry` (attempts, backoff), `timeout`, and
+`on_error` (`fail` · `continue` · `goto:<step>`). Steps form a DAG: by default
+they run in order; `needs: [ids]` allows parallel branches.
+
+### Expressions
+
+`${{ … }}` expressions are evaluated with a sandboxed Jinja2 environment over a
+context of `inputs`, `steps.<id>.output`, `run`, `trigger`, `campaign`,
+`target` and `secrets` (secrets are resolved late and redacted in logs/events).
+
+---
+
+## 6. Durable runtime
+
+A run is a persisted state machine:
+
+```
+run:   pending → running → (waiting ↔ running)* → succeeded | failed | cancelled
+step:  pending → running → waiting? → succeeded | failed | skipped | cancelled
+```
+
+- The executor computes the **ready set** (steps whose `needs` are complete and
+  whose `if` is true), dispatches each to its handler, and **checkpoints** the
+  result before moving on. Handlers are idempotent by `(run_id, step_id,
+  attempt)` keys, which are also passed to integrations as idempotency keys.
+- A handler returns one of `Completed(output)`, `Failed(error, retryable)` or
+  `Suspended(resume_at | event_key)`. Suspension releases the worker; a
+  **timer** row or an **event subscription** row brings the run back.
+- `wait` steps with conditions are re-evaluated on each wake (e.g. "PR approved
+  or merged"), with an absolute `timeout` (e.g. `7d`) and an `on_timeout`
+  branch.
+- Long-running agent steps heartbeat; if a worker dies its lease expires and
+  another worker resumes from the last checkpoint (the agent step restarts its
+  attempt; sandbox state is reattached when the backend supports it).
+
+The scheduler loop (in every worker, coordinated by leases) fires timers, polls
+poll-based triggers and wait conditions, ticks campaigns, and recovers expired
+leases.
+
+---
+
+## 7. Agents, skills and tools
+
+- **Model providers** (`awm.providers` entry point): `anthropic` (default),
+  `openai`-compatible, `bedrock`, `vertex`, plus `scripted` (deterministic, for
+  tests). A provider implements one async method: `complete(messages, tools,
+  …) -> ModelResponse`.
+- **Agent runtimes** (`awm.agent_runtimes`):
+  - `tool-loop` — AWM's own tool-use loop: model ↔ tools until the model
+    calls the built-in `finish` tool with outputs matching the step schema.
+  - `cli` — run an external coding agent CLI (e.g. Claude Code, Codex, Aider)
+    inside the sandbox with the prompt, collect structured output from a
+    file. This is the pragmatic choice for heavy coding tasks.
+- **Skills** are directories with a `SKILL.md` (frontmatter: name,
+  description) plus optional scripts/resources. They are stored per tenant,
+  versioned, mounted into the sandbox, and listed to the agent so it can load
+  them on demand.
+- **Tools** come from: built-ins (`shell`, `read_file`, `write_file`,
+  `edit_file`, `http`), integration actions (exposed automatically, scoped by
+  the connection), and MCP servers.
+- **Multi-agent.** A workflow composes agents by step. Within a step an agent
+  can delegate to sub-agents declared in its `subagents:` list (exposed as a
+  `delegate` tool) — this keeps orchestration visible in the workflow graph.
+- **Limits.** Per agent step: max turns, max tokens, wall-clock timeout,
+  cost budget. Usage is recorded per step and rolled up to run, campaign and
+  tenant.
+
+---
+
+## 8. Sandboxes (multi-engine execution)
+
+```python
+class SandboxBackend(Protocol):
+    name: str
+    async def create(self, spec: SandboxSpec) -> Sandbox: ...
+    async def attach(self, sandbox_id: str) -> Sandbox: ...   # optional (resume)
+
+class Sandbox(Protocol):
+    id: str
+    async def exec(self, cmd: list[str] | str, *, cwd=None, env=None, timeout=None) -> ExecResult: ...
+    async def write_file(self, path: str, data: bytes) -> None: ...
+    async def read_file(self, path: str) -> bytes: ...
+    async def close(self) -> None: ...
+```
+
+| Backend | Notes |
+|---|---|
+| `local` | Subprocess in a temp dir. Dev/test only; no isolation. |
+| `docker` | One container per sandbox via the Docker API. |
+| `kubernetes` | One Pod per sandbox (namespace per tenant optional), `exec` over the K8s API, resource limits, NetworkPolicy, `activeDeadlineSeconds`. Works with gVisor/Kata runtime classes. |
+| `e2b` | E2B cloud sandboxes (and self-hosted E2B) via the `e2b` SDK. |
+| `perplexity` | Perplexity Sandbox API adapter. Shipped as **experimental** until the public API is stable. |
+
+`SandboxSpec` carries image/template, CPU/memory, env, network egress policy,
+TTL and labels (`tenant`, `run`, `step`) for cost attribution. Sandbox profiles
+are tenant-configurable resources, so one tenant can run on K8s while another
+uses E2B.
+
+---
+
+## 9. Integrations framework
+
+```python
+class Integration(Protocol):
+    key: str                                  # "github"
+    connection_schema: type[BaseModel]        # credentials/settings (secret refs)
+    triggers: dict[str, TriggerSpec]          # "issue.transitioned", "pull_request.review"
+    actions:  dict[str, ActionSpec]           # "create_pull_request", "add_comment"
+    resources: dict[str, ResourceSpec]        # metadata: "repository", "issue"
+
+    async def verify_webhook(self, conn, request) -> bool: ...
+    async def parse_webhook(self, conn, request) -> list[Event]: ...
+    async def poll(self, conn, trigger, cursor) -> tuple[list[Event], cursor]: ...
+    async def call_action(self, conn, action, params, ctx) -> BaseModel: ...
+    async def query(self, conn, resource, filter, page) -> Page[Resource]: ...
+```
+
+- **Actions** have pydantic input/output models, so they are simultaneously
+  workflow `action` steps, agent tools (JSON schema from the model) and API
+  operations (`POST /v1/connections/{id}/actions/{action}`).
+- **Triggers**: `webhook` (signature-verified, per-trigger URL
+  `/v1/hooks/{trigger_id}`), `poll` (cursor persisted), `schedule` (cron).
+  A trigger has a **filter** (expression over the event, e.g. "issue moved to
+  column *Ready for AI*") and an **input mapping** into workflow inputs, plus
+  dedupe keys and concurrency (e.g. one run per issue).
+- **Metadata** (`resources`) powers campaign target selection and UI pickers,
+  e.g. `github.repository` filtered by `owner`, `topic`, `language`,
+  `permission: admin`.
+- Built-in integrations in v1: `github`, `jira`, `webhook` (generic, HMAC),
+  `schedule`, `http`. Slack/Linear/GitLab follow the same contract.
+
+---
+
+## 10. Campaigns
+
+A campaign = **workflow** × **target selector** × **policies**.
+
+```yaml
+apiVersion: awm.dev/v1
+kind: Campaign
+metadata: {name: test-coverage-uplift}
+spec:
+  workflow: repo-uplift
+  targets:
+    source: github.repository
+    connection: github-acme
+    filter: {owner: acme, permission: admin, archived: false}
+  inputs:
+    repo: "${{ target.full_name }}"
+    goal: "Raise test coverage to 100%"
+  policy:
+    concurrency: 10            # max active runs
+    rate: {runs_per_hour: 50}
+    budget: {usd: 500}
+    on_failure: continue       # or pause_after: 5
+  schedule: {start: now}
+```
+
+- The **planner** resolves targets through metadata queries and snapshots them
+  (so the target set is reproducible and auditable).
+- The **controller** (ticked by the scheduler) starts runs within concurrency,
+  rate and budget limits; supports pause / resume / cancel / retry-failed and
+  adding targets later.
+- Progress: per-target status, aggregate counts, cost, and outcome summaries
+  (`steps.*.output`) shown in a dashboard.
+
+---
+
+## 11. Multi-tenancy, auth and security
+
+- Every row carries `tenant_id`; all repository queries are tenant-scoped by
+  construction (the repository layer takes a `TenantContext`, there is no
+  unscoped query API). Postgres row-level security is enabled as defence in
+  depth.
+- **API keys**: `awm_<prefix>_<secret>`, stored as SHA-256 hashes, with
+  scopes (`workflows:read`, `runs:write`, `admin`, …), expiry, last-used, and
+  revocation. Users authenticate to the UI via OIDC (and a bootstrap admin
+  for local installs); service accounts use API keys.
+- **RBAC**: roles `owner`, `admin`, `editor`, `operator`, `viewer` per tenant.
+- **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
+  KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
+  are injected at the last moment and redacted from events and logs.
+- **Quotas**: per-tenant concurrency, sandbox minutes and token budgets.
+- **Audit log**: every mutating API call and every agent tool call is recorded.
+
+---
+
+## 12. API
+
+- REST + JSON under `/v1`, generated OpenAPI 3.1 spec, cursor pagination,
+  `Idempotency-Key` header support on POSTs, problem+json errors.
+- Resources: `tenants`, `api-keys`, `agents`, `skills`, `workflows`
+  (+versions), `runs` (+steps, events, cancel, approve), `connections`
+  (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),
+  `sandbox-profiles`, `hooks/{trigger_id}`.
+- Live updates: `GET /v1/runs/{id}/events` (SSE).
+- Outbound: tenant-configurable webhooks for run/campaign lifecycle events.
+
+---
+
+## 13. Acceptance journeys
+
+### J1 — GitHub org uplift campaign
+
+> "Get all the repos I own to 100% (coverage), wait for people to review (max 1
+> week), then merge if we have merge rights."
+
+1. Connection `github-acme` (GitHub App or PAT).
+2. Workflow `repo-uplift`:
+   `agent: uplift` (clone, raise coverage, open PR; outputs `pr_number`) →
+   `wait` until `github.pull_request` is approved **or** 7 days elapse,
+   polling every 30 min and woken early by PR review webhooks →
+   `condition` approved and `github.can_merge` → `action: github.merge_pull_request`
+   else `action: github.add_comment` ("closing the loop" note).
+3. Campaign over `github.repository` filtered to `owner: acme, permission: admin`.
+4. Dashboard shows per-repo state: *PR open → awaiting review (3d left) → merged*.
+
+### J2 — Jira webhook bugfix with writeback
+
+1. Connection `jira-acme`; Jira webhook (advanced/automation webhook) points at
+   the trigger URL with a shared secret.
+2. Trigger filter: `event.issue_event_type == "issue_generic" and
+   event.changelog.status.to == "Ready for AI"`; input mapping pulls
+   `issue_key` and the repo from a custom field; dedupe on issue key.
+3. Workflow `jira-bugfix`: fetch issue → transition to *In Progress* →
+   agent fixes bug & runs tests in a K8s/E2B sandbox → open PR → comment on
+   the ticket with PR + test results → transition to *In Review* (or back with
+   a failure comment on error via `on_error`).
+
+Both journeys ship as runnable examples and as end-to-end tests using the
+`scripted` provider, `local` sandbox and fake GitHub/Jira servers.
+
+---
+
+## 14. Observability and operations
+
+- Structured JSON logs, OpenTelemetry traces (run → step → tool call),
+  Prometheus metrics (`awm_runs_total`, `awm_step_duration_seconds`,
+  `awm_tokens_total`, `awm_sandbox_seconds_total`).
+- Deploy: `docker compose up` (API, worker, Postgres, UI) and a Helm chart.
+- Config via env vars (`AWM_DATABASE_URL`, `AWM_SECRET_KEY`, …) with a
+  pydantic-settings model.
+
+---
+
+## 15. Plugin authoring
+
+Plugins are normal Python packages exposing entry points:
+
+```toml
+[project.entry-points."awm.integrations"]
+linear = "awm_linear:LinearIntegration"
+
+[project.entry-points."awm.sandboxes"]
+modal = "awm_modal:ModalBackend"
+```
+
+Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
+`awm.agent_runtimes`, `awm.secrets`, `awm.steps`, `awm.orchestrators`.
+The UI renders connection/action forms from the plugins' JSON schemas, so a
+new plugin needs no frontend changes.
+
+---
+
+## 16. Delivery plan
+
+1. Architecture doc + repo scaffolding, CI.
+2. Core models, expressions, plugin registry.
+3. Store + durable executor + step handlers; local sandbox; scripted provider.
+4. Agent runtime (tool loop + CLI runtime), Anthropic provider, skills.
+5. Integrations framework + GitHub + Jira + webhook/schedule triggers.
+6. Campaigns.
+7. API server: tenancy, API keys, all resources, SSE.
+8. Kubernetes, Docker and E2B sandbox backends; Perplexity (experimental).
+9. React UI.
+10. Journeys as examples + e2e tests; docker-compose, Helm, docs.
+
+## 17. Open questions
+
+- Product name (working name: AWM).
+- Default orchestrator: built-in durable executor (proposed) vs. Temporal.
+- OIDC provider defaults for the UI (generic OIDC proposed).
