@@ -78,7 +78,7 @@ class EnvSecretProvider:
     """Read-only secrets from the environment.
 
     Looks up ``SHOAL_SECRET_<TENANT>__<NAME>`` and then ``SHOAL_SECRET_<NAME>``
-    (shared by all tenants; intended for single-tenant installs). Variables that
+    (shared by all tenants, unless ``SHOAL_SECRET_ENV_SHARED=false``). Variables that
     configure Shoal itself (``SHOAL_SECRET_KEY``, ``SHOAL_SECRET_PROVIDERS``) are
     never secrets: a workflow asking for ``key`` must not get the master key.
     """
@@ -88,11 +88,12 @@ class EnvSecretProvider:
 
     def setup(self, engine: Engine) -> None:
         self.store = engine.store
+        self.settings = engine.settings
 
     async def get(self, tenant_id: str, name: str) -> str | None:
         tenant = await self.store.get_tenant(tenant_id)
         value = os.environ.get(f"SHOAL_SECRET_{_env_name(tenant.slug)}__{_env_name(name)}")
-        if value is not None:
+        if value is not None or not self.settings.secret_env_shared:
             return value
         shared = f"SHOAL_SECRET_{_env_name(name)}"
         return None if shared in _SETTINGS_VARS else os.environ.get(shared)

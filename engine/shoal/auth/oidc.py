@@ -159,12 +159,23 @@ class OIDCService:
         return claims
 
     async def _user_for(self, provider: t.OIDCProvider, claims: dict[str, Any]) -> t.User:
+        try:
+            return await self._find_or_provision(provider, claims)
+        except Forbidden as exc:  # a valid token for someone who may not come in: worth a record
+            await self.engine.store.audit(
+                provider.tenant_id, f"oidc:{claims.get('email') or claims.get('sub')}", "auth.login", provider.name,
+                outcome="denied", reason=exc.message, subject=claims.get("sub"),
+            )
+            raise
+
+    async def _find_or_provision(self, provider: t.OIDCProvider, claims: dict[str, Any]) -> t.User:
         directory = self.engine.directory
         tenant_id = provider.tenant_id
         email = claims.get("email")
         verified_email = email if claims.get("email_verified", True) else None
-        if provider.allowed_domains and (not email or email.rsplit("@", 1)[-1].lower() not in {d.lower() for d in provider.allowed_domains}):
-            raise Forbidden("your email domain is not allowed to sign in to this tenant")
+        domains = {d.lower() for d in provider.allowed_domains or []}
+        if domains and (not verified_email or verified_email.rsplit("@", 1)[-1].lower() not in domains):
+            raise Forbidden("your email domain is not allowed to sign in to this tenant (or the provider has not verified it)")
         user = await directory.find_user(tenant_id, oidc_issuer=provider.issuer, oidc_subject=claims["sub"])
         if user is None and verified_email:
             user = await directory.find_user(tenant_id, email=verified_email)

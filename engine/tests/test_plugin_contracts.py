@@ -134,3 +134,7 @@ async def test_env_secrets_never_expose_shoal_settings(engine, tenant, monkeypat
     assert await env.get(tenant.id, "providers") is None
     assert await env.get(tenant.id, "slack-token") == "shared"
     assert await engine.secrets.get(tenant.id, "key") is None
+    engine.settings.secret_env_shared = False  # an instance shared by several organisations
+    assert await env.get(tenant.id, "slack-token") is None
+    monkeypatch.setenv("SHOAL_SECRET_ACME__SLACK_TOKEN", "acme's own")
+    assert await env.get(tenant.id, "slack-token") == "acme's own"
