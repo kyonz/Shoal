@@ -41,7 +41,7 @@ export default function BlueprintsPage() {
       return [r.metadata.name, s.title, s.summary, s.author, ...(s.tags ?? []), ...(s.categories ?? [])].filter(Boolean).join(" ").toLowerCase().includes(needle);
     })
     .sort((a, b) => Number(isFeatured(spec(b))) - Number(isFeatured(spec(a))) || spec(a).title.localeCompare(spec(b).title));
-  const latest = Object.fromEntries(all.map((r) => [r.metadata.name, spec(r).version]));
+  const specs = Object.fromEntries(all.map((r) => [r.metadata.name, spec(r)]));
   const adoptedCount = (bp: string) => (adoptions.data ?? []).filter((a) => a.blueprint === bp).length;
 
   return (
@@ -160,7 +160,7 @@ export default function BlueprintsPage() {
             ) : !adoptions.data?.length ? (
               <EmptyState icon={<Package className="size-5" />} title={`Nothing adopted in ${ns}`} description="Adopt a blueprint from the catalogue to get a ready-made workflow wired to your connections." />
             ) : (
-              <AdoptionsTable ns={ns} adoptions={adoptions.data} latest={latest} />
+              <AdoptionsTable ns={ns} adoptions={adoptions.data} specs={specs} />
             )}
           </Card>
         </TabsContent>
