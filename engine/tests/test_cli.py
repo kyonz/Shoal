@@ -203,6 +203,79 @@ def test_approve_and_reject(cli, tenant_key):
     assert steps["done"]["status"] == "skipped"
 
 
+FLEET = """
+apiVersion: shoal.dev/v1
+kind: Campaign
+metadata: {name: greet-all}
+spec:
+  workflow: hello
+  targets: {items: [{id: ada}, {id: grace}], key: "{{ target.id }}"}
+  inputs: {name: "{{ target.id }}"}
+---
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata: {name: by-hand}
+spec:
+  workflow: hello
+  event: schedule
+  schedule: "0 0 1 1 *"
+  inputs: {name: "{{ event.who }}"}
+---
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata: {name: greeter}
+spec:
+  title: Greeter
+  summary: Greets
+  status: published
+  params: {greeting: {default: Hello}}
+  resources:
+    - kind: Workflow
+      metadata: {name: "{{ prefix }}greet"}
+      spec: {steps: [{id: g, type: set, values: {text: "{{ params.greeting }}"}}]}
+"""
+
+
+def test_rerun_triggers_campaigns_and_blueprints(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0
+    applied = cli(*auth, "apply", "-f", "-", input=FLEET)
+    assert applied.exit_code == 0, applied.output
+
+    first = cli(*auth, "run", "hello", "-i", "name=Ada", "--wait", "-o", "json")
+    run_id = json.loads(first.stdout)["id"]
+    again = cli(*auth, "rerun", run_id, "--wait")
+    assert again.exit_code == 0, again.output
+    assert "rerun of" in again.output and "Hello Ada" in again.output
+
+    fired = cli(*auth, "triggers", "fire", "by-hand", "-d", '{"who": "Grace"}', "-o", "json")
+    assert fired.exit_code == 0, fired.output
+    fired_run = json.loads(fired.stdout)["run_id"]
+    assert _wait_for(cli, auth, fired_run, "succeeded", "failed")["outputs"] == {"greeting": "Hello Grace"}
+    assert cli(*auth, "triggers", "fire", "by-hand", "-d", "[1]").exit_code == 2
+
+    launched = cli(*auth, "campaigns", "launch", "greet-all", "--paused", "-o", "json")
+    assert launched.exit_code == 0, launched.output
+    campaign_id = json.loads(launched.stdout)["id"]
+    assert campaign_id in cli(*auth, "campaigns", "list").output
+    resumed = cli(*auth, "campaigns", "resume", campaign_id)
+    assert resumed.exit_code == 0, resumed.output
+    for _ in range(200):
+        shown = json.loads(cli(*auth, "campaigns", "get", campaign_id, "-o", "json").stdout)
+        if shown["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert shown["stats"]["succeeded"] == 2
+    assert "2/2" in cli(*auth, "campaigns", "get", campaign_id).output
+
+    dry = cli(*auth, "blueprints", "adopt", "greeter", "--prefix", "cli", "--dry-run")
+    assert dry.exit_code == 0 and "workflow/cli-greet" in dry.output and "dry run" in dry.output
+    adopted = cli(*auth, "blueprints", "adopt", "greeter", "--prefix", "cli", "-p", "greeting=Hi")
+    assert adopted.exit_code == 0, adopted.output
+    assert "adoption" in adopted.output
+    assert "cli-greet" in cli(*auth, "get", "workflows").output
+
+
 def test_delete_names_the_kind(cli, tenant_key):
     auth = ("--token", tenant_key)
     assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0

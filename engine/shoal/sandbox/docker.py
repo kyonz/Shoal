@@ -20,6 +20,7 @@ class DockerSandbox(Sandbox):
         self.container = container
         self.id = container.id
         self.workdir = spec.workdir
+        self._owner: tuple[int, int] | None = None
 
     async def exec(self, command, *, cwd=None, env=None, timeout=None) -> ExecResult:  # type: ignore[no-untyped-def]
         cmd = command if isinstance(command, str) else " ".join(shell_quote(c) for c in command)
@@ -51,8 +52,17 @@ class DockerSandbox(Sandbox):
             info = tarfile.TarInfo(name)
             info.size = len(raw)
             info.mode = 0o644
+            info.uid, info.gid = await self.owner()
             tar.addfile(info, io.BytesIO(raw))
         await asyncio.to_thread(self.container.put_archive, directory or "/", buffer.getvalue())
+
+    async def owner(self) -> tuple[int, int]:
+        """The image user's uid and gid. The archive API writes files as the tar says, so without
+        this they would belong to root and a non-root image could not overwrite them."""
+        if self._owner is None:
+            ids = (await self.exec("id -u; id -g")).stdout.split()
+            self._owner = (int(ids[0]), int(ids[1])) if len(ids) >= 2 and all(i.isdigit() for i in ids[:2]) else (0, 0)
+        return self._owner
 
     async def read_file(self, path: str) -> bytes:
         try:

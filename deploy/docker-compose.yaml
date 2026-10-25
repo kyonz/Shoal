@@ -18,9 +18,9 @@ x-shoal: &shoal
   image: ${SHOAL_IMAGE:-shoal:local}
   restart: unless-stopped
   environment:
-    SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:-shoal}@postgres:5432/shoal
-    SHOAL_SECRET_KEY: ${SHOAL_SECRET_KEY:-dev-insecure-secret-key-change-me}
-    SHOAL_ADMIN_TOKEN: ${SHOAL_ADMIN_TOKEN:-dev-admin-token}
+    SHOAL_DATABASE_URL: postgresql+asyncpg://shoal:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env (copy deploy/.env.example)}@postgres:5432/shoal
+    SHOAL_SECRET_KEY: ${SHOAL_SECRET_KEY:?set SHOAL_SECRET_KEY in deploy/.env (copy deploy/.env.example)}
+    SHOAL_ADMIN_TOKEN: ${SHOAL_ADMIN_TOKEN:?set SHOAL_ADMIN_TOKEN in deploy/.env (copy deploy/.env.example)}
     SHOAL_PUBLIC_URL: ${SHOAL_PUBLIC_URL:-http://localhost:8080}
     SHOAL_CORS_ORIGINS: ${SHOAL_CORS_ORIGINS:-["http://localhost:8080","http://localhost:5173"]}
     SHOAL_DEFAULT_SANDBOX_BACKEND: ${SHOAL_DEFAULT_SANDBOX_BACKEND:-local}
@@ -42,7 +42,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: shoal
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shoal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env (copy deploy/.env.example)}
       POSTGRES_DB: shoal
     volumes:
       - postgres:/var/lib/postgresql/data

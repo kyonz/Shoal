@@ -50,6 +50,12 @@ app.add_typer(integrations_app, name="integrations")
 app.add_typer(federation_app, name="federation")
 app.add_typer(skills_app, name="skills")
 app.add_typer(db_app, name="db")
+triggers_app = typer.Typer(help="Fire triggers by hand.", no_args_is_help=True)
+campaigns_app = typer.Typer(help="Launch campaigns and follow, pause, resume, cancel or retry their runs.", no_args_is_help=True)
+blueprints_app = typer.Typer(help="Adopt blueprints from the tenant's catalogue into a namespace.", no_args_is_help=True)
+app.add_typer(triggers_app, name="triggers")
+app.add_typer(campaigns_app, name="campaigns")
+app.add_typer(blueprints_app, name="blueprints")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -534,6 +540,206 @@ def signal(
     with api(ctx) as client:
         result = client.request("POST", f"/v1/runs/{quote(run_id)}/signals/{quote(name)}", json={"payload": payload})
     console.print(f"signal {result['id']} sent to run {run_id}")
+
+
+@app.command()
+def rerun(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id to start again, with the same inputs and workflow version.")],
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Stream the new run's events until it finishes.")] = False,
+    wait: Annotated[bool, typer.Option("--wait", "-w", help="Wait for the new run to finish without streaming.")] = False,
+) -> None:
+    """Start a run again with the same inputs. With --follow or --wait, exit 1 unless it succeeds."""
+    with api(ctx) as client:
+        started = client.request("POST", f"/v1/runs/{quote(run_id)}/rerun")
+        err.print(f"run [bold]{started['id']}[/bold] started ({escape(started['workflow_name'])}@v{started['workflow_version']}, rerun of {escape(run_id)})")
+        if not (follow or wait):
+            return
+        final = _follow(client, started["id"], show=follow)
+        if final.get("outputs"):
+            console.print_json(json.dumps(final["outputs"], default=str))
+    raise typer.Exit(0 if final["status"] == "succeeded" else 1)
+
+
+def _parse_pairs(pairs: list[str], what: str) -> dict[str, Any]:
+    """key=value pairs; values parse as JSON when they can."""
+    values: dict[str, Any] = {}
+    for pair in pairs:
+        key, sep, raw = pair.partition("=")
+        if not sep or not key:
+            err.print(f"[red]error:[/red] {what} must be key=value, got '{escape(pair)}'")
+            raise typer.Exit(2)
+        try:
+            values[key] = json.loads(raw)
+        except ValueError:
+            values[key] = raw
+    return values
+
+
+# --------------------------------------------------------------------------- triggers
+
+
+@triggers_app.command("fire")
+def triggers_fire(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Trigger name.")],
+    data: Annotated[str | None, typer.Option("--data", "-d", help="Event payload as JSON ({{ event }} in the trigger).")] = None,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Fire a trigger now, as if its event had arrived."""
+    try:
+        payload = json.loads(data) if data else {}
+    except ValueError as exc:
+        err.print(f"[red]error:[/red] --data must be JSON: {escape(str(exc))}")
+        raise typer.Exit(2) from exc
+    if not isinstance(payload, dict):
+        err.print("[red]error:[/red] --data must be a JSON object")
+        raise typer.Exit(2)
+    with api(ctx, namespace) as client:
+        result = client.request("POST", f"/v1/namespaces/{quote(client.target.namespace)}/triggers/{quote(name)}/fire", json={"data": payload})
+    if output is not Format.table:
+        emit(result, output, name=lambda r: r.get("run_id") or r.get("campaign_id") or r["trigger"])
+        return
+    started = result.get("run_id") or result.get("campaign_id")
+    detail = f": started {started}" if started else f" ({result['reason']})" if result.get("reason") else ""
+    console.print(f"trigger {escape(name)} {styled(result['status'])}{escape(detail)}")
+    if result["status"] not in ("fired", "skipped", "duplicate"):
+        raise typer.Exit(1)
+
+
+# --------------------------------------------------------------------------- campaigns
+
+CAMPAIGN_COLUMNS = [
+    ("ID", lambda c: c["id"]),
+    ("NAME", lambda c: c["name"]),
+    ("STATUS", lambda c: styled(c["status"])),
+    ("PROGRESS", lambda c: _progress(c["stats"])),
+    ("AGE", lambda c: age(c["created_at"])),
+    ("STARTED BY", lambda c: c.get("created_by")),
+]
+
+
+def _progress(stats: dict[str, Any]) -> str:
+    total = stats.get("total") or 0
+    done = sum(stats.get(k) or 0 for k in ("succeeded", "failed", "skipped", "cancelled"))
+    failed = stats.get("failed") or 0
+    return f"{done}/{total}" + (f" ({failed} failed)" if failed else "")
+
+
+@campaigns_app.command("launch")
+def campaigns_launch(
+    ctx: typer.Context,
+    campaign: Annotated[str, typer.Argument(help="Campaign resource name.")],
+    inputs: Annotated[list[str] | None, typer.Option("--input", "-i", help="Extra or override workflow input key=value.")] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Name for this campaign run.")] = None,
+    paused: Annotated[bool, typer.Option("--paused", help="Create the run without starting it ('campaigns resume' starts it).")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Launch a campaign: one workflow run per target."""
+    body = {"name": name, "inputs": _parse_pairs(inputs or [], "--input"), "start": not paused}
+    with api(ctx, namespace) as client:
+        row = client.request("POST", f"/v1/namespaces/{quote(client.target.namespace)}/campaigns/{quote(campaign)}/launch", json=body)
+    if output is not Format.table:
+        emit(row, output, name=lambda c: c["id"])
+        return
+    console.print(f"campaign run [bold]{row['id']}[/bold] {styled(row['status'])} ({escape(campaign)})")
+
+
+@campaigns_app.command("list")
+def campaigns_list(
+    ctx: typer.Context,
+    status: Annotated[str | None, typer.Option(help="Only campaign runs with this status.")] = None,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """List campaign runs in a namespace."""
+    with api(ctx, namespace) as client:
+        rows = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/campaign-runs", status=status)
+    emit(rows, output, CAMPAIGN_COLUMNS, name=lambda c: c["id"])
+
+
+@campaigns_app.command("get")
+def campaigns_get(
+    ctx: typer.Context,
+    campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")],
+    output: Output = Format.table,
+) -> None:
+    """Show a campaign run and its progress."""
+    with api(ctx) as client:
+        row = client.get(f"/v1/campaign-runs/{quote(campaign_id)}")
+    if output is not Format.table:
+        emit(row, output, name=lambda c: c["id"])
+        return
+    console.print(f"[bold]{row['id']}[/bold]  {escape(row['name'])}  {styled(row['status'])}")
+    console.print(f"namespace {escape(row['namespace'])} · started by {escape(row.get('created_by') or '-')} · {age(row['created_at'])} ago")
+    stats = row["stats"]
+    counts = ", ".join(f"{k} {stats[k]}" for k in ("pending", "running", "succeeded", "failed", "skipped", "cancelled") if stats.get(k))
+    console.print(f"progress {_progress(row['stats'])}" + (f" · {escape(counts)}" if counts else ""))
+    if row.get("error"):
+        console.print(f"[red]error:[/red] {escape(json.dumps(row['error'], default=str))}")
+
+
+def _campaign_operation(ctx: typer.Context, campaign_id: str, operation: str) -> None:
+    with api(ctx) as client:
+        row = client.request("POST", f"/v1/campaign-runs/{quote(campaign_id)}/{operation}")
+    console.print(f"campaign run {row['id']} {styled(row['status'])}")
+
+
+@campaigns_app.command("pause")
+def campaigns_pause(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Stop starting new targets; runs in flight carry on."""
+    _campaign_operation(ctx, campaign_id, "pause")
+
+
+@campaigns_app.command("resume")
+def campaigns_resume(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Start (or carry on) a paused campaign run."""
+    _campaign_operation(ctx, campaign_id, "resume")
+
+
+@campaigns_app.command("cancel")
+def campaigns_cancel(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Cancel a campaign run and its runs in flight."""
+    _campaign_operation(ctx, campaign_id, "cancel")
+
+
+@campaigns_app.command("retry")
+def campaigns_retry(ctx: typer.Context, campaign_id: Annotated[str, typer.Argument(help="Campaign run id.")]) -> None:
+    """Run the failed targets again."""
+    _campaign_operation(ctx, campaign_id, "retry")
+
+
+# --------------------------------------------------------------------------- blueprints
+
+
+@blueprints_app.command("adopt")
+def blueprints_adopt(
+    ctx: typer.Context,
+    blueprint: Annotated[str, typer.Argument(help="Blueprint name in the tenant's catalogue.")],
+    params: Annotated[list[str] | None, typer.Option("--param", "-p", help="Blueprint parameter key=value.")] = None,
+    prefix: Annotated[str, typer.Option(help="Prefix for the names of the resources it creates.")] = "",
+    version: Annotated[str | None, typer.Option("--version", help="Blueprint version (default: the current one).")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be created; write nothing.")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Adopt a blueprint: create its workflows, agents, triggers and other resources in a namespace."""
+    body = {"params": _parse_pairs(params or [], "--param"), "prefix": prefix, "version": version, "dry_run": dry_run}
+    with api(ctx, namespace) as client:
+        ns = client.target.namespace
+        result = client.request("POST", f"/v1/namespaces/{quote(ns)}/blueprints/{quote(blueprint)}/adopt", json=body)
+    if output is not Format.table:
+        emit(result, output)
+        return
+    suffix = " (dry run)" if dry_run else ""
+    for r in result["resources"]:
+        console.print(f"{r['kind'].lower()}/{escape(r['name'])} ({escape(ns)}) {r.get('outcome') or 'adopted'}{suffix}")
+    for r in result.get("removed") or []:
+        console.print(f"{r['kind'].lower()}/{escape(r['name'])} ({escape(ns)}) removed{suffix}")
+    if result.get("adoption"):
+        console.print(f"adoption {result['adoption']['id']} of {escape(blueprint)} v{escape(result['adoption']['blueprint_version'])}")
 
 
 # --------------------------------------------------------------------------- secrets
