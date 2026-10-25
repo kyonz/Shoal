@@ -577,7 +577,7 @@ def credentials_connect(ctx: typer.Context, connection: Annotated[str, typer.Arg
     namespace, _, name = connection.rpartition("/")
     with api(ctx) as client:
         result = client.request("POST", f"/v1/me/credentials/{quote(namespace or 'default')}/{quote(name)}/oauth")
-    console.print(f"Open this URL to connect {connection}:\n{result['authorize_url']}")
+    console.print(f"Open this URL in a browser signed in to Shoal as you, to connect {connection}:\n{result['authorize_url']}")
 
 
 @credentials_app.command("remove")

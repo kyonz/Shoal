@@ -173,6 +173,7 @@ export default function Users() {
                           {u.active ? (
                             <MenuItem
                               icon={<UserX />}
+                              disabled={u.id === me?.user_id}
                               onSelect={async () => {
                                 if (
                                   await confirm({
@@ -201,7 +202,7 @@ export default function Users() {
                               if (
                                 await confirm({
                                   title: "Delete user?",
-                                  description: "This removes the user, their role bindings and API keys. Use deactivate to keep history.",
+                                  description: "This removes the user, their role bindings, API keys and connected accounts. Use deactivate to keep history.",
                                   confirmLabel: "Delete",
                                   danger: true,
                                   typeToConfirm: u.username,

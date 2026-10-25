@@ -276,7 +276,7 @@ export default function NamespaceDetail() {
                   <div className="text-muted">
                     {protectedNs
                       ? "The default and shared namespaces cannot be deleted."
-                      : "Removes everything in it: workflows, agents, connections, secrets and run history."}
+                      : "Only an empty namespace can be deleted: remove its resources first. Its members, secrets and people's connected accounts are deleted with it."}
                   </div>
                 </div>
                 <Button

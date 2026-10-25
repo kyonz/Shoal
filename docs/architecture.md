@@ -782,7 +782,15 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   immediately; group membership changes flow through to role bindings.
 - **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
-  than the owner holds), with expiry, last-used, and revocation.
+  than the owner holds), with expiry, last-used, and revocation. A key
+  limited to namespaces keeps only the tenant-level `:read` permissions of its
+  owner, never tenant administration.
+- **Nobody hands out more than they hold.** Granting a role, changing a custom
+  role's permissions, changing a group that has role bindings, choosing an
+  OIDC provider's default role, minting a key for a service account, and
+  managing (deactivating, deleting, editing) a user or service account all
+  need the caller to hold every permission involved. Nobody can deactivate or
+  delete themselves.
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
   KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
   are injected at the last moment and redacted from events and logs.
@@ -932,7 +940,14 @@ one control plane, and a federated deployment can also sit next to the hub.
 ### 11.4 Where secrets live
 
 Every credential is encrypted at rest, write-only through the API, resolved at
-the moment of use and redacted from run logs. There are four scopes:
+the moment of use and redacted from run logs. The `env` provider reads
+`SHOAL_SECRET_<TENANT>__<NAME>` and then `SHOAL_SECRET_<NAME>`; the second is
+readable by every tenant, so instances shared by several organisations set
+`SHOAL_SECRET_ENV_SHARED=false`. Variables that configure Shoal itself
+(`SHOAL_SECRET_KEY`, `SHOAL_SECRET_PROVIDERS`) are never handed out as
+secrets. Deleting a namespace deletes its secrets, role bindings and
+personal credentials; deleting a user deletes their personal credentials.
+There are four scopes:
 
 | Scope | Holds | Managed by |
 |---|---|---|
@@ -952,7 +967,9 @@ who has not connected it, the step **waits** (event `credential.required`
 with a link to connect) and resumes as soon as they save the credential,
 rather than failing. People connect under `/v1/me/credentials` (paste a token,
 or `oauth:` on the connection runs an authorization-code flow with PKCE and
-refreshes access tokens before they expire) or with `shoal credentials
+refreshes access tokens before they expire; the callback only saves the
+grant in the browser that started the flow or one signed in as that person,
+so an authorize link sent to someone else cannot collect their account) or with `shoal credentials
 set|connect`. Every set, removal and revocation is audited. This applies to
 every integration, MCP servers included.
 
