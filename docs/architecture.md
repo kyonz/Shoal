@@ -58,6 +58,7 @@ first release must satisfy.
 | **Integration** | A plugin type (e.g. `github`, `jira`) providing triggers, actions and metadata. |
 | **Connection** | A tenant's configured instance of an integration (credentials + settings). |
 | **Trigger** | A binding: event source (webhook / schedule / poll) + filter → workflow inputs. |
+| **Blueprint** | A versioned, parameterised package of resources others install and wire up. |
 | **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
 | **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
@@ -463,6 +464,41 @@ spec:
   adding targets later.
 - Progress: per-target status, aggregate counts, cost, and outcome summaries
   (`steps.*.output`) shown in a dashboard.
+
+## 10.1 Blueprints and the marketplace
+
+A **blueprint** is a reusable, versioned package of an agent workflow that
+someone builds once and others wire up to their own systems.
+
+- **Contents.** A blueprint bundles resources (workflow, agents, skills,
+  triggers, campaign templates, sandbox profile hints) plus a README, icon,
+  tags, author and semver version. Resources inside it are templates with
+  `${{ params.* }}` placeholders.
+- **Parameters.** It declares what the consumer must supply: connections by
+  integration type ("a `github` connection", "a `jira` connection"), secrets,
+  values (e.g. Jira column name, coverage goal) and optional choices
+  (sandbox profile, model policy). The UI renders an install wizard from these
+  declarations, with pickers for existing connections.
+- **Install.** Installing renders the templates with the parameters and
+  applies the resulting resources under a name prefix, labelled
+  `awm.dev/blueprint=<name>@<version>` and linked to the installation, so
+  the workflow can be opened in the visual builder and customised.
+  Upgrading to a new version shows a diff and re-applies, keeping local
+  overrides where possible. Uninstall removes what was installed.
+- **Publishing and promotion.** Blueprints move through
+  `draft → published → promoted (featured/verified) → deprecated`.
+  Visibility is per tenant (private), install-wide (shared with every tenant
+  in the deployment) or public. Promotion is an approval workflow run by
+  platform admins and can require passing evals (§7.4).
+- **Marketplace.** A searchable catalogue with categories, integration
+  filters, install counts, success rates and eval scores taken from real
+  runs, ratings, and the README.
+- **Registries.** Sources are pluggable (`awm.registries`): the local
+  database, a Git repository of blueprint folders, an OCI registry, or an
+  HTTP index. That lets an organisation host an internal marketplace and the
+  open-source community share a public one.
+- The two acceptance journeys ship as the first blueprints:
+  **GitHub org uplift** and **Jira bugfix with writeback**.
 
 ---
 
