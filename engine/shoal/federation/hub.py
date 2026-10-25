@@ -29,6 +29,7 @@ ENROLLMENT_TTL = timedelta(days=7)
 CONNECTED_WITHIN = timedelta(seconds=45)  # a connector polls at least this often while connected
 FORWARD_TIMEOUT = 30.0
 MAX_WAIT = 25.0
+ENDED = ("revoked", "left")  # link states that keep the tenant federated but forward nothing
 FEDERATED_CACHE_TTL = 10.0  # seconds a replica trusts its hosted/federated answer for a tenant
 FORWARDED_HEADERS = ("content-type", "accept", "x-shoal-client", "if-match")
 
@@ -92,9 +93,9 @@ class FederationHub:
         if mode not in p.MODES:
             raise InvalidRequest(f"mode must be one of {p.MODES}")
         existing = await self.link_for_tenant(tenant_id)
-        if existing is not None and existing.status != "revoked":
+        if existing is not None and existing.status not in ENDED:
             raise Conflict("this tenant is already federated; issue a new enrollment token instead")
-        if existing is not None:  # a revoked link is replaced by the new one
+        if existing is not None:  # a revoked or left link is replaced by the new one
             async with self.store.session() as s:
                 await s.execute(delete(t.FederationRequest).where(t.FederationRequest.link_id == existing.id))
                 await s.execute(delete(t.FederationLink).where(t.FederationLink.id == existing.id))
@@ -116,8 +117,8 @@ class FederationHub:
 
     async def reissue_enrollment(self, tenant_id: str) -> tuple[t.FederationLink, str]:
         link = await self.link_for_tenant(tenant_id)
-        if link is not None and link.status == "revoked":
-            raise Conflict("this link was revoked; federate the tenant again to get a new enrollment token")
+        if link is not None and link.status in ENDED:
+            raise Conflict(f"this link has ended ({link.status}); federate the tenant again to get a new enrollment token")
         token = p.ENROLLMENT_PREFIX + secrets.token_urlsafe(32)
         link = await self._update(tenant_id, enrollment_hash=p.hash_token(token), enrollment_expires_at=clock.now() + ENROLLMENT_TTL)
         return link, token
@@ -131,6 +132,12 @@ class FederationHub:
         link = await self._update(tenant_id, status="revoked", secret_ciphertext=None, enrollment_hash=None)
         self._federated.pop(tenant_id, None)
         return link
+
+    async def member_left(self, link: t.FederationLink) -> None:
+        """The member left the hub: the link ends, like a revocation, but says who ended it."""
+        await self._update(link.tenant_id, status="left", secret_ciphertext=None, enrollment_hash=None)
+        self._federated.pop(link.tenant_id, None)
+        await self.store.audit(link.tenant_id, "federation:member", "federation.member_left", link.id)
 
     async def _update(self, tenant_id: str, **values: Any) -> t.FederationLink:
         async with self.store.session() as s:
@@ -256,8 +263,9 @@ class FederationHub:
                       headers: dict[str, str], body: bytes, request_id: str) -> dict[str, Any]:
         async with self.store.session() as s:
             link = await s.get(t.FederationLink, link_id)
-        if link is not None and link.status == "revoked":
-            raise FederationRevoked("the hub's link to this tenant's member deployment was revoked; an operator can federate it again")
+        if link is not None and link.status in ENDED:
+            who = "the member deployment left the hub" if link.status == "left" else "the hub's link to this tenant's member deployment was revoked"
+            raise FederationRevoked(f"{who}; an operator can federate it again")
         if link is None or link.status != "active" or not link.secret_ciphertext:
             raise FederationUnavailable("this federated tenant has not enrolled a member deployment yet")
         if not self.connected(link):

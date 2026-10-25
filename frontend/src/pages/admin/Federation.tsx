@@ -186,18 +186,18 @@ function HubLinks() {
                         {(["read", "read_write"] as Mode[])
                           .filter((m) => m !== l.requested_mode)
                           .map((m) => (
-                            <MenuItem key={m} icon={<CircleDot />} disabled={l.status === "revoked"} onSelect={() => setMode.mutate({ tenant: l.tenant, mode: m })}>
+                            <MenuItem key={m} icon={<CircleDot />} disabled={ended(l)} onSelect={() => setMode.mutate({ tenant: l.tenant, mode: m })}>
                               Ask for {MODE_LABEL[m].toLowerCase()}
                             </MenuItem>
                           ))}
-                        <MenuItem icon={<KeyRound />} disabled={l.status === "revoked"} onSelect={() => reissue.mutate(l.tenant)}>
+                        <MenuItem icon={<KeyRound />} disabled={ended(l)} onSelect={() => reissue.mutate(l.tenant)}>
                           New enrollment token
                         </MenuItem>
                         <MenuSeparator />
                         <MenuItem
                           danger
                           icon={<Trash2 />}
-                          disabled={l.status === "revoked"}
+                          disabled={ended(l)}
                           onSelect={async () => {
                             const ok = await confirm({
                               title: `Revoke the link to ${l.tenant}?`,
@@ -231,8 +231,21 @@ function memberVersion(l: FederationLink): string | null {
   return v ? `v${v}` : null;
 }
 
+/** Revoked by the hub or left by the member: nothing is forwarded until the tenant is federated again. */
+function ended(l: FederationLink): boolean {
+  return l.status === "revoked" || l.status === "left";
+}
+
 function ConnectionCell({ link }: { link: FederationLink }) {
   if (link.status === "revoked") return <Badge>Revoked</Badge>;
+  if (link.status === "left")
+    return (
+      <Tooltip content="The member deployment left the hub. Federate the tenant again to reconnect it.">
+        <span>
+          <Badge>Member left</Badge>
+        </span>
+      </Tooltip>
+    );
   if (link.status === "pending")
     return (
       <div>
@@ -260,7 +273,7 @@ function CreateLinkDialog({ open, onOpenChange, onCreated }: { open: boolean; on
   const [mode, setMode] = useState<Mode>("read_write");
   const tenants = useQuery({ queryKey: ["admin", "tenants"], queryFn: () => unwrap(client.GET("/v1/tenants")), enabled: open });
   const links = useQuery({ queryKey: adminKeys.links, queryFn: () => unwrap(client.GET("/v1/federation/links")), enabled: open });
-  const linked = new Set((links.data ?? []).filter((l) => l.status !== "revoked").map((l) => l.tenant));
+  const linked = new Set((links.data ?? []).filter((l) => !ended(l)).map((l) => l.tenant));
   const create = useAction(() => unwrap(client.POST("/v1/federation/links", { body: { tenant, mode } })), {
     invalidate: [adminKeys.links],
     onSuccess: (r) => {
@@ -562,7 +575,8 @@ function MembershipDetail({ m }: { m: Membership }) {
               onClick={async () => {
                 const ok = await confirm({
                   title: "Leave the hub?",
-                  description: "The hub can no longer reach this organisation. This deployment keeps running on its own with all of its data.",
+                  description:
+                    "The hub can no longer reach this organisation, and is told so. Roles given to hub people and groups are removed. This deployment keeps running on its own with all of its data.",
                   confirmLabel: "Leave hub",
                   danger: true,
                 });
