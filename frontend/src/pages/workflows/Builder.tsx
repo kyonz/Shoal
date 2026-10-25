@@ -26,6 +26,7 @@ import {
   LayoutGrid,
   Loader2,
   MousePointerClick,
+  PackagePlus,
   Play,
   Redo2,
   Save,
@@ -54,6 +55,7 @@ import { serverIssue, validateWorkflow, type Issue } from "@/features/workflow/v
 import { Inspector } from "./builder/Inspector";
 import { DND_MIME, Palette, type PaletteItem } from "./builder/Palette";
 import { useBuilder, useDirty } from "./builder/store";
+import { SaveAsBlueprintWizard } from "../catalog/blueprints/SaveAsBlueprint";
 import { VersionsDialog } from "./builder/Versions";
 import { WorkflowSettings } from "./builder/WorkflowSettings";
 import { YamlPane } from "./builder/YamlPane";
@@ -84,6 +86,7 @@ function Builder() {
   const { can } = useAuth();
   const canWrite = can("workflows:write", ns);
   const canRun = can("runs:create", ns);
+  const canPublish = can("blueprints:publish");
   const resource = useResource("workflows", ns, isNew ? undefined : routeName);
   const put = usePutResource("workflows", ns);
   const { data: integrations = NO_INTEGRATIONS } = useIntegrations();
@@ -104,6 +107,7 @@ function Builder() {
   const [view, setView] = useState<View>(() => (localStorage.getItem("shoal.builderView") as View) || "canvas");
   const [runOpen, setRunOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [blueprintOpen, setBlueprintOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [serverIssues, setServerIssues] = useState<Issue[]>([]);
   const [checking, setChecking] = useState(false);
@@ -427,6 +431,15 @@ function Builder() {
               </Button>
             </Tooltip>
           )}
+          {!isNew && canPublish && (
+            <Tooltip content={dirty ? "Save your changes before packaging" : "Save as blueprint"}>
+              <span>
+                <Button variant="ghost" size="icon" disabled={dirty} onClick={() => setBlueprintOpen(true)} aria-label="Save as blueprint">
+                  <PackagePlus className="size-4" />
+                </Button>
+              </span>
+            </Tooltip>
+          )}
           <Tooltip content="Keyboard shortcuts (?)">
             <Button variant="ghost" size="icon" onClick={() => setHelpOpen(true)} aria-label="Keyboard shortcuts">
               <Keyboard className="size-4" />
@@ -538,6 +551,7 @@ function Builder() {
       {!isNew && meta.name && (
         <RunDialog open={runOpen} onOpenChange={setRunOpen} ns={ns} workflow={meta.name} inputs={(spec.inputs as Record<string, ParamDoc>) ?? {}} />
       )}
+      {!isNew && routeName && canPublish && <SaveAsBlueprintWizard open={blueprintOpen} onOpenChange={setBlueprintOpen} ns={ns} workflow={routeName} />}
       {!isNew && routeName && <VersionsDialog open={versionsOpen} onOpenChange={setVersionsOpen} ns={ns} name={routeName} currentYaml={yamlText} />}
       <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </ExprVarsContext.Provider>

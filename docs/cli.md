@@ -85,6 +85,21 @@ shoal skills rollback pdf 1                   # restore an earlier version
 Sources themselves are tenant-wide resources: `shoal apply` a `SkillSource` and
 `shoal get skill-sources` (see [skills.md](skills.md)).
 
+## Blueprints from workflows
+
+```sh
+shoal blueprints save jira-bugfix --dry-run    # what would be packaged, and the hard-coded values found
+shoal blueprints save jira-bugfix --param connection:github-acme=github --keep model:claude-opus-5-5
+shoal blueprints save jira-bugfix --exclude trigger/on-ready --publish    # publish instead of a draft
+shoal blueprints save jira-bugfix --new-version   # next minor version of the existing blueprint
+```
+
+The workflow's agents, skills, child workflows, and the triggers and campaigns that start it are
+packaged with it (`--include`/`--exclude KIND/NAME`). Connections, secrets, repositories, Jira
+projects, models, sandbox profiles and cloud identities written into them become parameters
+(`--param FINDING=NAME`, `--default FINDING=VALUE`, `--keep FINDING`); clear-text credentials are
+always removed. See [architecture §10.1](architecture.md#101-blueprints-and-the-marketplace).
+
 ## Integrations
 
 `shoal integrations new servicenow --title ServiceNow` scaffolds an integration project from the

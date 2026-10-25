@@ -1,4 +1,4 @@
-import { FileUp, MoreHorizontal, Play, Plus, Search, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import { FileUp, MoreHorizontal, PackagePlus, Play, Plus, Search, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -31,6 +31,7 @@ import {
 import { RunDialog } from "@/features/workflow/RunDialog";
 import { stepType } from "@/features/workflow/stepTypes";
 import type { ParamDoc, StepDoc } from "@/features/workflow/types";
+import { SaveAsBlueprintWizard } from "../catalog/blueprints/SaveAsBlueprint";
 
 export default function WorkflowList() {
   const ns = useNs();
@@ -43,6 +44,7 @@ export default function WorkflowList() {
   const [q, setQ] = useState("");
   const [runFor, setRunFor] = useState<Resource | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [packaging, setPackaging] = useState<string | null>(null);
 
   const lastRun = useMemo(() => {
     const m = new Map<string, { status: string; created_at: string; count: number }>();
@@ -128,6 +130,9 @@ export default function WorkflowList() {
                     <MenuContent>
                       <MenuItem onSelect={() => navigate(nsPath(ns, "workflows", w.metadata.name))}>Open builder</MenuItem>
                       <MenuItem onSelect={() => navigate(`${nsPath(ns, "runs")}?workflow=${w.metadata.name}`)}>View runs</MenuItem>
+                      {can("blueprints:publish") && (
+                        <MenuItem icon={<PackagePlus />} onSelect={() => setPackaging(w.metadata.name)}>Save as blueprint…</MenuItem>
+                      )}
                       {can("workflows:delete", ns) && (
                         <>
                           <MenuSeparator />
@@ -207,6 +212,7 @@ export default function WorkflowList() {
         />
       )}
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} ns={ns} />
+      {packaging && <SaveAsBlueprintWizard open={!!packaging} onOpenChange={(o) => !o && setPackaging(null)} ns={ns} workflow={packaging} />}
     </Page>
   );
 }

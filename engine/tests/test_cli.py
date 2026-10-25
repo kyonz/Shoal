@@ -291,3 +291,53 @@ def test_skills_import_and_upgrade(cli, tenant_key, server, tmp_path):
     assert "(was 1.0.0)" in upgraded.stdout and "/spec/instructions" in upgraded.stdout
     rolled = cli(*auth, "skills", "rollback", "pdf", "1")
     assert rolled.exit_code == 0 and "(1.0.0)" in rolled.stdout
+
+
+SAVE_ME = """
+apiVersion: shoal.dev/v1
+kind: Connection
+metadata: {name: gh-acme}
+spec: {integration: github}
+---
+apiVersion: shoal.dev/v1
+kind: Agent
+metadata: {name: fixer}
+spec: {model: claude-opus-5-5, env: {GITHUB_TOKEN: ghp_abcdefghijklmnopqrstuvwxyz0123456789}}
+---
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata: {name: fix-api}
+spec:
+  connections: {github: gh-acme}
+  defaults: {agent: fixer}
+  steps:
+    - {id: fix, type: agent, prompt: "Fix the flaky test in acme/api"}
+    - {id: pr, type: action, action: github.create_pull_request, with: {repo: acme/api, head: fix, title: Fix}}
+"""
+
+
+def test_blueprints_save(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=SAVE_ME).exit_code == 0
+
+    dry = cli(*auth, "blueprints", "save", "fix-api", "--dry-run")
+    assert dry.exit_code == 0, dry.output
+    assert "connection:gh-acme: gh-acme -> params.github" in dry.output
+    assert "repository:acme/api" in dry.output and "credential removed" in dry.output
+    assert "ghp_" not in dry.output
+
+    assert cli(*auth, "blueprints", "save", "fix-api", "--keep", "model:nope", "--dry-run").exit_code == 2
+    saved = cli(*auth, "blueprints", "save", "fix-api", "--name", "api-fixer", "--param", "repository:acme/api=repository",
+                "--exclude", "agent/fixer", "--tag", "github", "--publish", "-y")
+    assert saved.exit_code == 0, saved.output
+    assert "blueprint/api-fixer 0.1.0 created (published)" in saved.output
+    spec = yaml.safe_load(cli(*auth, "get", "blueprint", "api-fixer", "-o", "yaml").stdout)["spec"]
+    assert set(spec["params"]) == {"github", "repository"} and spec["tags"] == ["github"]
+    assert [r["kind"] for r in spec["resources"]] == ["Workflow"]
+    assert spec["resources"][0]["spec"]["steps"][0]["prompt"] == "Fix the flaky test in {{ params.repository }}"
+
+    again = cli(*auth, "blueprints", "save", "fix-api", "--name", "api-fixer", "--new-version", "-y", "-o", "json")
+    assert again.exit_code == 0, again.output
+    result = json.loads(again.stdout)
+    assert result["outcome"] == "updated" and result["blueprint"]["spec"]["version"] == "0.2.0"
+    assert cli(*auth, "blueprints", "save", "fix-api", "--name", "api-fixer", "-y").exit_code == 1

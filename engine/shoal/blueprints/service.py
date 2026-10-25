@@ -8,23 +8,29 @@ can be upgraded or removed later.
 
 Only expressions rooted at ``params``, ``prefix`` or ``blueprint`` are filled
 in at adoption; every other ``{{ }}`` (``inputs``, ``steps``, ``event``, ...)
-is left untouched for run time.
+is left untouched for run time, except that ``secrets[params.x]`` inside one
+becomes ``secrets["<the secret the adopter chose>"]``.
+
+``save_from_workflow`` goes the other way: it packages a workflow (and what it
+uses) as a blueprint, see ``packaging``.
 """
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from shoal.blueprints import packaging
 from shoal.core import clock
 from shoal.core.errors import Conflict, Forbidden, InvalidRequest, NotFound
 from shoal.core.expressions import ExpressionError, evaluate_expression
 from shoal.core.ids import new_id
 from shoal.core.models import Blueprint, BlueprintSpec, ResourceBase, parse_resource
-from shoal.core.scope import TENANT_SCOPED_KINDS, use_namespace
+from shoal.core.scope import SHARED_NAMESPACE, TENANT_SCOPED_KINDS, use_namespace
 from shoal.store import tables as t
 
 ADOPTABLE = ("published", "featured")
@@ -33,6 +39,10 @@ EXPR = re.compile(r"\{\{\s*((?:(?!\}\}).)+?)\s*\}\}", re.DOTALL)
 LABEL_BLUEPRINT = "shoal.dev/blueprint"
 LABEL_VERSION = "shoal.dev/blueprint-version"
 LABEL_ADOPTION = "shoal.dev/adoption"
+LABEL_FROM_WORKFLOW = "shoal.dev/from-workflow"
+LABEL_FROM_NAMESPACE = "shoal.dev/from-namespace"
+SECRET_PARAM = re.compile(r"secrets\[\s*params\.([A-Za-z_][A-Za-z0-9_]*)\s*\]")
+SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+.*)?$")
 
 
 def _is_template(expr: str) -> bool:
@@ -54,11 +64,36 @@ def render(value: Any, context: dict[str, Any]) -> Any:
 
     def substitute(match: re.Match[str]) -> str:
         if not _is_template(match.group(1)):
-            return match.group(0)
+            return _bind_secret_names(match.group(0), context)
         result = evaluate_expression(match.group(1), context)
         return "" if result is None else str(result)
 
     return EXPR.sub(substitute, value)
+
+
+def _bind_secret_names(expression: str, context: dict[str, Any]) -> str:
+    """``secrets[params.x]`` -> ``secrets["<value of x>"]``, leaving the rest for run time."""
+
+    def name(m: re.Match[str]) -> str:
+        value = (context.get("params") or {}).get(m.group(1))
+        if not isinstance(value, str) or not value:
+            raise ExpressionError(f"params.{m.group(1)} must name a secret")
+        return f"secrets[{json.dumps(value)}]"
+
+    return SECRET_PARAM.sub(name, expression)
+
+
+def semver_key(version: str) -> tuple[int, int, int, int, str]:
+    m = SEMVER.match(version)
+    if not m:
+        raise InvalidRequest(f"'{version}' is not a semantic version (1.2.3)")
+    major, minor, patch, pre = m.groups()
+    return int(major), int(minor), int(patch), 0 if pre else 1, pre or ""
+
+
+def next_version(version: str) -> str:
+    major, minor, _, _, _ = semver_key(version)
+    return f"{major}.{minor + 1}.0"
 
 
 class BlueprintService:
@@ -309,6 +344,121 @@ class BlueprintService:
                 await s.delete(row)
         return removed
 
+    # ------------------------------------------------------------------ save a workflow as a blueprint
+
+    async def package_workflow(
+        self,
+        tenant_id: str,
+        namespace: str,
+        workflow: str,
+        *,
+        blueprint: str | None = None,
+        target: Literal["new", "existing"] = "new",
+        version: str | None = None,
+        details: dict[str, Any] | None = None,
+        status: str | None = None,
+        include: set[tuple[str, str]] | None = None,
+        choices: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Package ``workflow`` as a new blueprint or a new version of an existing one, without writing.
+
+        ``details`` holds title, summary, readme, author, icon, tags, categories and namespaces; for a new
+        version, what is left out is kept from the current version. Returns the blueprint document, the
+        package (candidates, findings, warnings) and what exists; ``publish_package`` writes it.
+        """
+        store = self.engine.store
+        name = blueprint or workflow
+        with use_namespace(namespace):
+            candidates, warnings = await packaging.collect(store, tenant_id, namespace, workflow)
+            connections: dict[str, tuple[str, str]] = {}
+            for row in [
+                *await store.list_resources(tenant_id, "Connection", namespace=namespace),
+                *await store.list_resources(tenant_id, "Connection", namespace=SHARED_NAMESPACE),
+            ]:
+                connections.setdefault(row.name, (row.document["spec"]["integration"], row.namespace))
+        pkg = packaging.package(
+            candidates, include=include, choices=choices or {}, connections=connections, warnings=warnings
+        )
+
+        existing = await store.find_resource(tenant_id, "Blueprint", name)
+        current: BlueprintSpec | None = existing.spec if existing is not None else None  # type: ignore[attr-defined]
+        if target == "new" and current is not None:
+            pkg.warnings.insert(0, f"blueprint '{name}' already exists; publish this as a new version of it instead")
+        if target == "existing" and current is None:
+            raise NotFound(f"blueprint '{name}' not found")
+        base = current if target == "existing" else None
+        if version is None:
+            version = next_version(base.version) if base else "0.1.0"
+        if base and semver_key(version) <= semver_key(base.version):
+            raise InvalidRequest(f"version {version} must be newer than the current {base.version}")
+
+        details = {k: v for k, v in (details or {}).items() if v is not None}
+        root = next(c for c in candidates if c.root)
+        spec: dict[str, Any] = {
+            "title": details.get("title") or (base.title if base else _title(workflow)),
+            "summary": details.get("summary") or (base.summary if base else (
+                root.document["metadata"].get("description") or root.document["spec"].get("description")
+                or f"Workflow {workflow}, packaged for other teams to adopt."
+            )),
+            "readme": details["readme"] if "readme" in details else (base.readme if base else _readme(pkg, namespace, workflow)),
+            "version": version,
+            "status": status or (base.status if base else "draft"),
+        }
+        for key in ("author", "icon"):
+            value = details.get(key) or (getattr(base, key) if base else None)
+            if value:
+                spec[key] = value
+        for key in ("tags", "categories", "namespaces"):
+            value = details[key] if key in details else (getattr(base, key) if base else [])
+            if value:
+                spec[key] = value
+        if pkg.params:
+            spec["params"] = pkg.params
+        spec["resources"] = pkg.resources
+
+        document = {
+            "apiVersion": "shoal.dev/v1",
+            "kind": "Blueprint",
+            "metadata": {
+                "name": name,
+                **({"description": existing.metadata.description} if existing and existing.metadata.description else {}),
+                "labels": {
+                    **(existing.metadata.labels if existing else {}),
+                    LABEL_FROM_WORKFLOW: workflow,
+                    LABEL_FROM_NAMESPACE: namespace,
+                },
+            },
+            "spec": spec,
+        }
+        try:
+            resource = Blueprint.model_validate(document)
+        except ValidationError as exc:
+            raise InvalidRequest(f"the packaged blueprint is invalid: {exc}") from exc
+        # it must render back into valid resources, with the original values in every parameter
+        sample = {f.param: f.default if f.default is not None else (f.value or "secret")
+                  for f in pkg.findings if f.enabled}
+        self.render_resources(resource, sample, "")
+
+        return {
+            "package": pkg,
+            "blueprint": document,
+            "resource": resource,
+            "target": target,
+            "source": f"{namespace}/{workflow}",
+            "exists": current is not None,
+            "previous_version": current.version if current else None,
+        }
+
+    async def publish_package(self, tenant_id: str, packaged: dict[str, Any], *, actor: str) -> tuple[t.Resource, str]:
+        """Write a blueprint from ``package_workflow``; returns (row, created | updated | unchanged)."""
+        name = packaged["blueprint"]["metadata"]["name"]
+        if packaged["target"] == "new" and packaged["exists"]:
+            raise Conflict(f"blueprint '{name}' already exists; publish a new version of it instead")
+        return await self.engine.store.apply_resource(
+            tenant_id, packaged["resource"], actor=actor, namespace=SHARED_NAMESPACE,
+            source=packaged["blueprint"]["spec"], message=f"Saved from workflow {packaged['source']}",
+        )
+
     async def _in_namespace(self, tenant_id: str, kind: str, name: str, namespace: str) -> bool:
         try:
             await self.engine.store.get_resource_row(
@@ -317,3 +467,16 @@ class BlueprintService:
             return True
         except NotFound:
             return False
+
+
+def _title(name: str) -> str:
+    return name.replace("-", " ").capitalize()
+
+
+def _readme(pkg: packaging.Package, namespace: str, workflow: str) -> str:
+    lines = [f"Packaged from the workflow `{workflow}` in `{namespace}`.", "", "**Contents**", ""]
+    lines += [f"- {c.kind} `{c.name}`" for c in pkg.candidates if c.included]
+    if pkg.params:
+        lines += ["", "**What you supply when adopting**", ""]
+        lines += [f"- `{name}` ({p['type']}): {p.get('description') or ''}".rstrip(": ") for name, p in pkg.params.items()]
+    return "\n".join(lines) + "\n"

@@ -1,16 +1,17 @@
-"""Blueprint adoption: namespace owners adopt catalogue blueprints (architecture §10.1)."""
+"""Blueprint adoption: namespace owners adopt catalogue blueprints, and teams save
+workflows as blueprints for others to adopt (architecture §10.1)."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
 from shoal.api.deps import Ctx, CtxDep
 from shoal.core.errors import NotFound
-from shoal.core.models import KIND_BY_PLURAL
+from shoal.core.models import KIND_BY_PLURAL, NAME_PATTERN
 from shoal.store import tables as t
 
 router = APIRouter(prefix="/v1")
@@ -196,3 +197,134 @@ async def remove_adoption(namespace: str, adoption_id: str, ctx: CtxDep) -> Resp
         "blueprint.removed", row.blueprint, namespace=namespace, adoption=adoption_id, resources=removed
     )
     return Response(status_code=204)
+
+
+# --------------------------------------------------------------------------- save a workflow as a blueprint
+
+
+DETAILS = {"title", "summary", "readme", "author", "icon", "tags", "categories", "namespaces"}
+
+
+class FindingChoice(BaseModel):
+    enabled: bool | None = Field(None, description="Turn the value into a parameter (credentials always are).")
+    name: str | None = Field(None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", description="Parameter name.")
+    description: str | None = None
+    default: Any = Field(None, description="Default the adopter can keep; null makes the parameter required.")
+
+
+class SaveAsBlueprintIn(BaseModel):
+    blueprint: str | None = Field(None, pattern=NAME_PATTERN, description="Blueprint name; defaults to the workflow's.")
+    target: Literal["new", "existing"] = Field(
+        "new", description="'new' creates the blueprint; 'existing' publishes a new version of it."
+    )
+    version: str | None = Field(
+        None, description="Semantic version; defaults to 0.1.0, or the next minor version of an existing blueprint."
+    )
+    title: str | None = None
+    summary: str | None = None
+    readme: str | None = None
+    author: str | None = None
+    icon: str | None = None
+    tags: list[str] | None = None
+    categories: list[str] | None = None
+    namespaces: list[str] | None = Field(None, description="Namespaces that may adopt it (empty: all).")
+    status: Literal["draft", "published"] | None = Field(
+        None, description="Defaults to draft for a new blueprint and the current status for a new version."
+    )
+    include: list[ResourceRef] | None = Field(
+        None, description="Resources to package besides the workflow; defaults to those in its namespace."
+    )
+    params: dict[str, FindingChoice] = Field(
+        default_factory=dict, description="Finding id -> how to turn it into a parameter (see the dry run)."
+    )
+    dry_run: bool = False
+
+
+class PackagedResource(ResourceRef):
+    namespace: str
+    reason: str = Field(description="Why it is part of the package.")
+    included: bool
+    root: bool = False
+
+
+class FindingOut(BaseModel):
+    id: str
+    category: str = Field(description="connection, secret, credential, repository, organization, jira_project, "
+                                      "model, sandbox or cloud_identity.")
+    value: str = Field(description="The hard-coded value (empty for credentials, which are never echoed).")
+    param: str
+    type: str
+    integration: str | None = None
+    description: str
+    default: Any = None
+    required: bool
+    enabled: bool
+    locked: bool = Field(description="Credentials are always stripped and cannot be kept.")
+    locations: list[str]
+
+
+class SaveAsBlueprintOut(BaseModel):
+    blueprint: dict[str, Any] = Field(description="The Blueprint document (published, or would be on a dry run).")
+    resources: list[PackagedResource]
+    findings: list[FindingOut]
+    stripped: list[str] = Field(description="Places where a credential-looking value was redacted from text.")
+    warnings: list[str]
+    exists: bool = Field(description="A blueprint with this name already exists.")
+    previous_version: str | None = None
+    outcome: str | None = Field(None, description="created, updated or unchanged; absent on a dry run.")
+    resource_version: int | None = None
+    dry_run: bool
+
+
+@router.post(
+    "/namespaces/{namespace}/workflows/{name}/save-as-blueprint",
+    tags=["blueprints"],
+    response_model=SaveAsBlueprintOut,
+    summary="Package a workflow (and what it uses) as a new blueprint or a new blueprint version",
+)
+async def save_as_blueprint(namespace: str, name: str, body: SaveAsBlueprintIn, ctx: CtxDep, response: Response) -> Any:
+    await ctx.namespace(namespace, "workflows:read")
+    svc = ctx.engine.blueprints
+    packaged = await svc.package_workflow(
+        ctx.tenant_id,
+        namespace,
+        name,
+        blueprint=body.blueprint,
+        target=body.target,
+        version=body.version,
+        details=body.model_dump(include=DETAILS, exclude_unset=True),
+        status=body.status,
+        include={(r.kind, r.name) for r in body.include} if body.include is not None else None,
+        choices={k: v.model_dump(exclude_unset=True) for k, v in body.params.items()},
+    )
+    pkg = packaged["package"]
+    for kind in sorted({c.kind for c in pkg.candidates if c.included}):  # it copies each of these
+        await ctx.require(f"{PLURAL_BY_KIND[kind]}:read", namespace)
+    outcome, version = None, None
+    if not body.dry_run:
+        await ctx.require("blueprints:publish")
+        row, outcome = await svc.publish_package(ctx.tenant_id, packaged, actor=ctx.actor)
+        version = row.version
+        if outcome == "created":
+            response.status_code = 201
+        if outcome != "unchanged":
+            spec = packaged["blueprint"]["spec"]
+            await ctx.audit("blueprint.saved_from_workflow", row.name, namespace=namespace, workflow=name,
+                            version=spec["version"], status=spec["status"],
+                            resources=[f"{c.kind}/{c.name}" for c in pkg.candidates if c.included])
+    return SaveAsBlueprintOut(
+        blueprint=packaged["blueprint"],
+        resources=[PackagedResource(kind=c.kind, name=c.name, namespace=c.namespace, reason=c.reason,
+                                    included=c.included, root=c.root) for c in pkg.candidates],
+        findings=[FindingOut(id=f.id, category=f.category, value=f.value, param=f.param, type=f.type,
+                             integration=f.integration, description=f.description, default=f.default,
+                             required=f.required, enabled=f.enabled, locked=f.locked,
+                             locations=[pkg.location(loc) for loc in f.locations]) for f in pkg.findings],
+        stripped=pkg.stripped,
+        warnings=pkg.warnings,
+        exists=packaged["exists"],
+        previous_version=packaged["previous_version"],
+        outcome=outcome,
+        resource_version=version,
+        dry_run=body.dry_run,
+    )

@@ -728,6 +728,25 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   {version?, params?, dry_run}` upgrades or re-parameterises an adoption and
   deletes resources the new version no longer has. `DELETE` removes the
   adoption and what it created. (Built.)
+- **Save a workflow as a blueprint.** `POST /v1/namespaces/{ns}/workflows/{name}/save-as-blueprint`
+  (also `shoal blueprints save` and *Save as blueprint* in the builder and the workflow list)
+  packages a workflow with what it uses from its namespace: agents, skills and child workflows
+  it references, and the triggers and campaigns that start it (each can be left out; resources
+  in `shared` are referenced, not copied). It renames them to `{{ prefix }}name` and rewrites
+  references between them, drops workflow version pins, and reports what it finds hard-coded:
+  connections (typed by integration), secrets referenced as `secrets.x`, repositories (in
+  `repo` fields and GitHub URLs, then everywhere they appear in text), organisations, Jira
+  project keys (in `project` fields and JQL), agent models, sandbox profiles and cloud
+  identities. Each finding becomes a parameter unless the author keeps it; the author names it,
+  describes it and sets a default. Clear-text credentials are never kept: a credential-named
+  field (`API_TOKEN`, `password`, …) becomes a required secret parameter, and token-shaped
+  text (GitHub, Slack, AWS, Anthropic/OpenAI keys, private keys, bearer tokens) is redacted.
+  Secret parameters are used as `{{ secrets[params.x] }}`; adoption rewrites that to the
+  adopter's secret name and leaves the rest for run time. `dry_run` returns the blueprint,
+  the findings and warnings (the wizard previews each change with it); otherwise it creates the
+  blueprint (`draft` unless published, `blueprints:publish`) or, with `target: existing`, a new
+  version that must be newer than the current one and keeps its status. The blueprint is
+  labelled `shoal.dev/from-workflow` and `shoal.dev/from-namespace`. (Built.)
 - **Publishing.** Blueprints are tenant-wide resources. Teams publish them
   from a namespace (`blueprints:publish`); they move through
   `draft → published → featured → deprecated`. Featuring is done by tenant
