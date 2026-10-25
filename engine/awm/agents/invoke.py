@@ -40,7 +40,20 @@ async def resolve_env(ctx: StepContext, agent: AgentSpec) -> dict[str, str]:
     missing = names - set(secrets)
     if missing:
         raise StepError(f"secrets not set: {', '.join(sorted(missing))}")
-    env = {k: str(v) for k, v in ctx.render(agent.env, secrets={**ctx.expr["secrets"], **secrets}).items()}
+    env: dict[str, str] = {}
+    for entry in agent.credentials:
+        integration_key, _, connection = entry.partition(":")
+        name = await ctx.engine.integrations.resolve_name(
+            ctx.tenant_id, integration_key, connection or ctx.connection_for(integration_key)
+        )
+        conn = await ctx.engine.integrations.connection(ctx.tenant_id, name)
+        provider = getattr(conn.integration, "sandbox_credentials", None)
+        if provider is None:
+            raise StepError(f"integration '{integration_key}' does not provide sandbox credentials")
+        creds = await provider(conn)
+        ctx.redactor.add(*(v for k, v in creds.items() if any(s in k for s in ("TOKEN", "SECRET", "PASSWORD"))))
+        env.update(creds)
+    env.update({k: str(v) for k, v in ctx.render(agent.env, secrets={**ctx.expr["secrets"], **secrets}).items()})
     ctx.redactor.add(*secrets.values())
     return env
 

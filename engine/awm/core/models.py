@@ -332,6 +332,11 @@ class AgentSpec(Model):
         description="Built-in tools, integration actions ('github.create_pull_request', 'github.*').",
     )
     subagents: list[str] = Field(default_factory=list, description="Agents this agent may delegate to.")
+    credentials: list[str] = Field(
+        default_factory=list,
+        description="Integrations whose short-lived credentials are injected into the sandbox env, e.g. "
+        "'github' or 'github:github-acme' (integration:connection).",
+    )
     sandbox: str | None = None
     env: dict[str, str] = Field(default_factory=dict, description="Sandbox env; values may use expressions.")
     limits: AgentLimits = Field(default_factory=AgentLimits)

@@ -1,0 +1,96 @@
+apiVersion: awm.dev/v1
+kind: Workflow
+metadata:
+  name: repo-uplift
+  description: Uplift one repository, wait up to a week for review, merge when allowed.
+spec:
+  inputs:
+    repo: {type: string, description: owner/name}
+    goal: {type: string, default: "Raise test coverage to 100%"}
+    merge_method: {type: string, default: squash, enum: [merge, squash, rebase]}
+  connections:
+    github: github-acme
+  defaults:
+    agent: uplift
+    sandbox: default
+  steps:
+    - id: uplift
+      type: agent
+      prompt: |
+        Repository: https://github.com/${{ inputs.repo }}
+        Goal: ${{ inputs.goal }}
+
+        Clone the repository into the workspace, create the branch `awm/uplift-${{ run.id }}`, make the
+        changes needed to reach the goal, run the full test suite, commit with a clear message and
+        `git push -u origin` the branch. If the goal is already met, change nothing and set changed=false.
+      outputs:
+        changed: {type: boolean, description: True if a branch with changes was pushed}
+        branch: {type: string, required: false}
+        metric_before: {type: number, required: false}
+        metric_after: {type: number, required: false}
+        pr_body: {type: string, required: false, description: Markdown PR description}
+      retry: {max_attempts: 2, backoff: 5m}
+
+    - id: open_pr
+      type: action
+      if: ${{ steps.uplift.output.changed }}
+      action: github.create_pull_request
+      with:
+        repo: ${{ inputs.repo }}
+        head: ${{ steps.uplift.output.branch }}
+        title: "chore: ${{ inputs.goal }}"
+        body: |
+          ${{ steps.uplift.output.pr_body }}
+
+          ---
+          Opened by AI Workflow Manager ([run](${{ run.url }})). This PR is merged automatically once approved.
+        labels: [automated]
+
+    - id: await_review
+      type: wait
+      if: ${{ steps.open_pr.status == 'succeeded' }}
+      condition:
+        action: github.get_pull_request
+        with:
+          repo: ${{ inputs.repo }}
+          number: ${{ steps.open_pr.output.number }}
+        check: ${{ result.review_decision == 'approved' or result.state != 'open' }}
+        poll_interval: 30m
+        wake_on:
+          - github:pr:${{ inputs.repo }}#${{ steps.open_pr.output.number }}
+      max_wait: 7d
+      on_timeout: continue
+
+    - id: merge
+      type: action
+      if: ${{ steps.await_review.output.satisfied and steps.await_review.output.result.state == 'open' }}
+      action: github.merge_pull_request
+      with:
+        repo: ${{ inputs.repo }}
+        number: ${{ steps.open_pr.output.number }}
+        method: ${{ inputs.merge_method }}
+
+    - id: report_unmerged
+      type: action
+      needs: [merge]
+      if: ${{ steps.merge.status == 'succeeded' and not steps.merge.output.merged }}
+      action: github.add_comment
+      with:
+        repo: ${{ inputs.repo }}
+        number: ${{ steps.open_pr.output.number }}
+        body: "Approved, but AI Workflow Manager could not merge: ${{ steps.merge.output.reason }}"
+
+    - id: nudge
+      type: action
+      needs: [await_review]
+      if: ${{ steps.await_review.output.timed_out }}
+      action: github.add_comment
+      with:
+        repo: ${{ inputs.repo }}
+        number: ${{ steps.open_pr.output.number }}
+        body: "No review after 7 days, so this PR was left open for a human to decide."
+
+  outputs:
+    pr_url: ${{ steps.open_pr.output.url }}
+    merged: ${{ steps.merge.output.merged or false }}
+    metric_after: ${{ steps.uplift.output.metric_after }}

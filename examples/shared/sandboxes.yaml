@@ -1,0 +1,43 @@
+apiVersion: awm.dev/v1
+kind: SandboxProfile
+metadata:
+  name: default
+  description: Local subprocess sandbox for development. Use 'k8s' or 'space' in production.
+spec:
+  backend: local
+  scope: run
+---
+apiVersion: awm.dev/v1
+kind: SandboxProfile
+metadata:
+  name: k8s
+  description: One pod per run on Kubernetes (gVisor), workspace shared across steps.
+spec:
+  backend: kubernetes
+  image: ghcr.io/kyonz/awm-sandbox:latest
+  cpu: 2
+  memory_mb: 4096
+  scope: run
+  ttl: 8h
+  network:
+    egress: allow
+  config:
+    namespace: awm-sandboxes
+    runtime_class: gvisor
+---
+apiVersion: awm.dev/v1
+kind: SandboxProfile
+metadata:
+  name: space
+  description: Perplexity SPACE Firecracker microVMs; suspended while waiting for reviews.
+spec:
+  backend: space
+  image: seed:latest
+  cpu: 2
+  memory_mb: 4096
+  scope: run
+  suspend_on_wait: true
+  config:
+    api_url: https://space.internal.example
+    data_plane_url: https://space-data.internal.example
+    token_secret: space-api-token

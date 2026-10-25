@@ -1,0 +1,27 @@
+# Connections reference secrets by name. Create them first, e.g.:
+#   awm secrets set github-token   ghp_...
+#   awm secrets set github-webhook-secret  "$(openssl rand -hex 32)"
+apiVersion: awm.dev/v1
+kind: Connection
+metadata:
+  name: github-acme
+  description: GitHub org "acme" (fine-grained token or GitHub App)
+spec:
+  integration: github
+  config: {}
+  secrets:
+    token: github-token
+    webhook_secret: github-webhook-secret
+---
+apiVersion: awm.dev/v1
+kind: Connection
+metadata:
+  name: jira-acme
+spec:
+  integration: jira
+  config:
+    base_url: https://acme.atlassian.net
+    email: automation@acme.example
+  secrets:
+    api_token: jira-api-token
+    webhook_secret: jira-webhook-secret
