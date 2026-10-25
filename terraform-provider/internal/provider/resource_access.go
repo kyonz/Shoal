@@ -204,7 +204,9 @@ type serviceAccountModel struct {
 	Description types.String `tfsdk:"description"`
 }
 
-type serviceAccountResource struct{ crud namedCRUD[serviceAccountModel] }
+type serviceAccountResource struct {
+	crud namedCRUD[serviceAccountModel]
+}
 
 func NewServiceAccountResource() resource.Resource {
 	r := &serviceAccountResource{}

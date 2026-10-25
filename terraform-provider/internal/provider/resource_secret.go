@@ -48,7 +48,7 @@ func (r *secretResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				MarkdownDescription: "Namespace. Defaults to the provider's `namespace`. Secrets are never read across namespaces (not even from `shared`)."},
 			"name": schema.StringAttribute{Required: true, MarkdownDescription: "Secret name.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
-			"value": schema.StringAttribute{Required: true, Sensitive: true, MarkdownDescription: "The secret value (write-only on the server)."},
+			"value":      schema.StringAttribute{Required: true, Sensitive: true, MarkdownDescription: "The secret value (write-only on the server)."},
 			"updated_at": schema.StringAttribute{Computed: true, MarkdownDescription: "When the value was last written."},
 		},
 	}

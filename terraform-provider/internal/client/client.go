@@ -240,14 +240,14 @@ type OIDCProvider struct {
 }
 
 type Me struct {
-	Actor        string   `json:"actor"`
-	Kind         string   `json:"kind"`
-	UserID       *string  `json:"user_id"`
-	DisplayName  *string  `json:"display_name"`
-	Email        *string  `json:"email"`
-	IsSystem     bool     `json:"is_system_admin"`
-	Namespaces   []string `json:"namespaces"`
-	Tenant       *Tenant  `json:"tenant"`
+	Actor       string   `json:"actor"`
+	Kind        string   `json:"kind"`
+	UserID      *string  `json:"user_id"`
+	DisplayName *string  `json:"display_name"`
+	Email       *string  `json:"email"`
+	IsSystem    bool     `json:"is_system_admin"`
+	Namespaces  []string `json:"namespaces"`
+	Tenant      *Tenant  `json:"tenant"`
 }
 
 type Tenant struct {
