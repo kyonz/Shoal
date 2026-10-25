@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
     default_sandbox_backend: str = "local"
+    default_decision_provider: str = Field("llm", description="Decision provider for decide/grade steps: llm or jev.")
 
     log_level: str = "INFO"
     log_json: bool = False

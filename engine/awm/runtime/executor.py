@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from awm.core import clock
-from awm.core.errors import NotFound, StepError
+from awm.core.errors import Conflict, NotFound, StepError
 from awm.core.expressions import ExpressionError, referenced_secrets, render
 from awm.core.ids import new_id
 from awm.core.models import (
@@ -411,6 +411,24 @@ class Executor:
             await self.store.update_run(run.id, cancel_requested=True)
             await self.store.wake_run(run.id)
         return run
+
+    async def submit_approval(
+        self, tenant_id: str, run_id: str, step_id: str, *, approved: bool, by: str | None, comment: str | None = None
+    ) -> t.StepRun:
+        """Record a human decision for a step waiting on approval and wake the run."""
+        run = await self.store.get_run(tenant_id, run_id)
+        row = await self.store.get_step(run.id, step_id)
+        if row.status != StepStatus.waiting or not row.state.get("requested"):
+            raise Conflict(f"step '{step_id}' is not waiting for approval")
+        if row.state.get("decision"):
+            raise Conflict(f"step '{step_id}' was already decided")
+        decision = {"approved": approved, "by": by, "comment": comment, "at": clock.now().isoformat()}
+        row.state = {**row.state, "decision": decision}
+        await self.store.save_step(row)
+        await self.engine.events.emit(run, "approval.decided", decision, step_id=step_id)
+        await self.store.wake_by_keys(tenant_id, [f"approval:{run.id}:{step_id}"])
+        await self.store.wake_run(run.id)
+        return row
 
     async def _finish(
         self,

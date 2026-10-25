@@ -54,3 +54,7 @@ class ModelProvider(abc.ABC):
 
 class ProviderRefusal(Exception):
     pass
+
+
+class ProviderUnavailable(Exception):
+    """Transient provider failure (rate limit, overload, outage). Routers fall back on it."""

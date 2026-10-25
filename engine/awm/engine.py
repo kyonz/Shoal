@@ -21,7 +21,9 @@ import httpx
 
 from awm.campaigns.service import CampaignService
 from awm.config import Settings, get_settings
+from awm.decisions.service import DecisionService
 from awm.integrations.manager import IntegrationManager
+from awm.llm.router import ModelRouter
 from awm.plugins.registry import Registry
 from awm.runtime.events import EventBus
 from awm.runtime.executor import Executor
@@ -44,6 +46,7 @@ def _builtin_steps(registry: Registry) -> None:
         WaitHandler,
         WorkflowHandler,
     )
+    from awm.runtime.steps.decide import DecideHandler, GradeHandler
 
     for name, cls in {
         "agent": AgentHandler,
@@ -53,8 +56,17 @@ def _builtin_steps(registry: Registry) -> None:
         "approval": ApprovalHandler,
         "workflow": WorkflowHandler,
         "set": SetHandler,
+        "decide": DecideHandler,
+        "grade": GradeHandler,
     }.items():
         registry.register("steps", name, cls, replace=False)
+    from awm.agents.providers.openai_compat import OpenAICompatibleProvider
+    from awm.decisions.jev import JevProvider
+    from awm.decisions.llm import LLMDecisionProvider
+
+    registry.register("providers", "openai-compatible", OpenAICompatibleProvider, replace=False)
+    registry.register("decision_providers", "llm", LLMDecisionProvider, replace=False)
+    registry.register("decision_providers", "jev", JevProvider, replace=False)
 
 
 class Engine:
@@ -77,6 +89,8 @@ class Engine:
         self.secrets = SecretManager(self)
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
+        self.models = ModelRouter(self)
+        self.decisions = DecisionService(self)
         self.executor = Executor(self)
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)

@@ -26,6 +26,7 @@ class AgentHandler:
                 extra_tools=step.tools,
             )
         usage = dict(result.usage)
-        for key, value in (ctx.state.pop("delegated_usage", None) or {}).items():
-            usage[key] = usage.get(key, 0) + value
+        for extra in ("delegated_usage", "guard_usage"):
+            for key, value in (ctx.state.pop(extra, None) or {}).items():
+                usage[key] = usage.get(key, 0) + value
         return Completed({**result.outputs, "summary": result.summary}, usage=usage)

@@ -60,6 +60,21 @@ class TriggerService:
             return {"matched": False, "reason": f"expression error: {exc}", "error": True}
         return {"matched": True, "inputs": inputs, "dedupe_key": None if dedupe is None else str(dedupe)}
 
+    async def triage(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
+        """Ask a decision model about the event; ``passed`` is the trigger's ``when`` expression."""
+        spec = trigger.spec.triage
+        assert spec is not None
+        scope = {"event": event.data, "event_type": event.type, "trigger": {"name": trigger.metadata.name}}
+        result = await self.engine.decisions.decide(
+            tenant_id,
+            render(spec.state, scope),
+            spec.questions,
+            provider=spec.provider,
+            config=spec.provider_config,
+        )
+        answers = {k: a.to_dict() for k, a in result.answers.items()}
+        return {"answers": answers, "passed": truthy(spec.when, {**scope, "answers": answers}), "provider": result.provider}
+
     async def dispatch_event(self, tenant_id: str, connection: str, event: IntegrationEvent) -> list[dict[str, Any]]:
         fired = []
         for trigger in await self._triggers(tenant_id):
@@ -95,6 +110,18 @@ class TriggerService:
             return {"trigger": name, "status": "duplicate", "dedupe_key": delivery.dedupe_key}
 
         spec = trigger.spec
+        triage: dict[str, Any] | None = None
+        if spec.triage is not None:
+            try:
+                triage = await self.triage(tenant_id, trigger, event)
+            except Exception as exc:
+                await store.update_delivery(delivery.id, status="error", detail={**delivery.detail, "reason": f"triage failed: {exc}"})
+                return {"trigger": name, "status": "error", "reason": f"triage failed: {exc}"}
+            delivery.detail = {**delivery.detail, "triage": triage}
+            if not triage["passed"]:
+                await store.update_delivery(delivery.id, status="triaged_out", detail=delivery.detail)
+                return {"trigger": name, "status": "triaged_out", "triage": triage}
+            await store.update_delivery(delivery.id, detail=delivery.detail)
         if spec.overlap == "skip" and spec.workflow:
             active = await store.count_runs(
                 tenant_id, statuses=[RunStatus.pending, RunStatus.running, RunStatus.waiting], trigger_name=name
@@ -103,7 +130,9 @@ class TriggerService:
                 await store.update_delivery(delivery.id, status="skipped", detail={**delivery.detail, "reason": "previous run still active"})
                 return {"trigger": name, "status": "skipped"}
         try:
-            context = {"trigger": {"name": name, "event_type": event.type}, "event": event.data}
+            context: dict[str, Any] = {"trigger": {"name": name, "event_type": event.type}, "event": event.data}
+            if triage is not None:
+                context["trigger"]["triage"] = triage["answers"]
             if spec.workflow:
                 run = await self.engine.executor.start_run(
                     tenant_id,

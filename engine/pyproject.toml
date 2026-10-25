@@ -56,6 +56,11 @@ webhook = "awm.integrations.webhook:WebhookIntegration"
 [project.entry-points."awm.providers"]
 anthropic = "awm.agents.providers.anthropic:AnthropicProvider"
 scripted = "awm.agents.providers.scripted:ScriptedProvider"
+openai-compatible = "awm.agents.providers.openai_compat:OpenAICompatibleProvider"
+
+[project.entry-points."awm.decision_providers"]
+llm = "awm.decisions.llm:LLMDecisionProvider"
+jev = "awm.decisions.jev:JevProvider"
 
 [project.entry-points."awm.agent_runtimes"]
 tool-loop = "awm.agents.tool_loop:ToolLoopRuntime"
@@ -92,4 +97,4 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
-ignore = ["B008"]
+ignore = ["B008", "E501", "ASYNC109"]

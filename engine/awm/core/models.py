@@ -257,7 +257,8 @@ class DecideStep(StepBase):
     """Ask a decision model typed questions about some state and branch on the answers."""
 
     type: Literal["decide"] = "decide"  # type: ignore[misc]
-    provider: str | None = Field(None, description="Decision provider name; defaults to the tenant default.")
+    provider: str | None = Field(None, description="Decision provider plugin (jev, llm); defaults to settings.")
+    provider_config: dict[str, Any] = Field(default_factory=dict)
     state: Any = Field(description="Text or JSON (expressions allowed) the questions are about.")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     min_confidence: float | None = Field(None, ge=0, le=1)
@@ -271,6 +272,7 @@ class GradeStep(StepBase):
 
     type: Literal["grade"] = "grade"  # type: ignore[misc]
     provider: str | None = None
+    provider_config: dict[str, Any] = Field(default_factory=dict)
     subject: Any = Field(description="What to grade (expression).")
     instructions: str
     levels: list[str] = Field(min_length=2, description="Ordered rubric levels, worst first.")
@@ -370,6 +372,21 @@ class AgentLimits(Model):
     budget_usd: float | None = Field(None, ge=0)
 
 
+class ToolGuardSpec(Model):
+    """Screen mutating tool calls with a decision model before they run (§7.5)."""
+
+    provider: str | None = None
+    provider_config: dict[str, Any] = Field(default_factory=dict)
+    tools: list[str] = Field(
+        default_factory=lambda: ["shell", "write_file", "edit_file", "*__*"],
+        description="Glob patterns of tool names to screen.",
+    )
+    thresholds: dict[str, float] = Field(
+        default_factory=lambda: {"irreversible": 0.7, "intent_mismatch": 0.7},
+        description="Block when the probability for a check is at or above its threshold.",
+    )
+
+
 class AgentSpec(Model):
     description: str | None = None
     provider: str = "anthropic"
@@ -392,6 +409,7 @@ class AgentSpec(Model):
     limits: AgentLimits = Field(default_factory=AgentLimits)
     provider_config: dict[str, Any] = Field(default_factory=dict)
     runtime_config: dict[str, Any] = Field(default_factory=dict)
+    guard: ToolGuardSpec | None = Field(None, description="Optional decision-model screening of tool calls.")
 
 
 class SkillSpec(Model):
@@ -430,6 +448,16 @@ class ConnectionSpec(Model):
     secrets: dict[str, str] = Field(default_factory=dict, description="Connection field -> secret name.")
 
 
+class TriageSpec(Model):
+    """Semantic trigger filter: ask a decision model about the event before starting a run."""
+
+    provider: str | None = None
+    provider_config: dict[str, Any] = Field(default_factory=dict)
+    state: Any = Field("${{ event }}", description="What the questions are about (expressions allowed).")
+    questions: dict[str, DecisionQuestion] = Field(min_length=1)
+    when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
+
+
 class TriggerSpec(Model):
     description: str | None = None
     workflow: str | None = Field(None, description="Workflow to start.")
@@ -444,6 +472,7 @@ class TriggerSpec(Model):
     filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
+    triage: TriageSpec | None = None
     enabled: bool = True
 
     @model_validator(mode="after")

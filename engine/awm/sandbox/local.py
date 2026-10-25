@@ -59,11 +59,16 @@ class LocalSandbox(Sandbox):
 
     async def write_file(self, path: str, data: bytes | str) -> None:
         target = Path(self.resolve(path))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data.encode() if isinstance(data, str) else data)
+        raw = data.encode() if isinstance(data, str) else data
+
+        def write() -> None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+
+        await asyncio.to_thread(write)
 
     async def read_file(self, path: str) -> bytes:
-        return Path(self.resolve(path)).read_bytes()
+        return await asyncio.to_thread(Path(self.resolve(path)).read_bytes)
 
     async def suspend(self) -> None:
         return None
