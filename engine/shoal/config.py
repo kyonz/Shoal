@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     default_sandbox_backend: str = "local"
     default_decision_provider: str = Field("llm", description="Decision provider for decide/grade steps: llm or jev.")
 
+    assistant_enabled: bool = Field(True, description="Serve the chat assistant (POST /v1/assistant/chat).")
+    assistant_gateway: str = Field(
+        "anthropic", description="Gateway resource (tenant-wide) or provider plugin name."
+    )
+    assistant_model: str = Field("claude-opus-5-5", description="Model the assistant runs on.")
+    assistant_effort: str = Field("medium", description="Reasoning effort for the assistant's model calls.")
+    assistant_max_turns: int = Field(16, ge=1, le=100, description="Model calls per user message before it stops.")
+
     audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
 
     log_level: str = "INFO"

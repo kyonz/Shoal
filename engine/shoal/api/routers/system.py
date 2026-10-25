@@ -35,7 +35,8 @@ async def info(engine: EngineDep) -> dict[str, Any]:
         "version": shoal.__version__,
         "api_version": "v1",
         "public_url": engine.settings.public_url,
-        "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "skill-sources", "evals", "decisions", "a2a"],
+        "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "skill-sources", "evals", "decisions", "a2a",
+                     "assistant", "script-languages"],
         "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "skill_sources", "steps")},
     }
 

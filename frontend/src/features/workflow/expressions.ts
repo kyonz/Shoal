@@ -38,6 +38,8 @@ export function stepOutputKeys(step: StepDoc, integrations: IntegrationCatalog[]
       const action = integrations.find((i) => i.key === key)?.actions.find((a) => a.name === name);
       return schemaProps(action?.output_schema);
     }
+    case "wait":
+      return step.signal ? ["received", "timed_out", "payload", "name", "source", "sender", "received_at"] : STATIC_OUTPUTS.wait;
     case "decide":
       return [...STATIC_OUTPUTS.decide, ...Object.keys((step.questions as object) ?? {}).map((q) => `answers.${q}`)];
     default:
@@ -66,7 +68,7 @@ export function expressionVars(
     }
     vars.push({ label: `steps.${s.id}.error.message`, detail: "error", type: "property" });
   }
-  for (const v of ["run.id", "run.url", "run.namespace", "run.workflow", "run.initiator"]) vars.push({ label: v, type: "variable" });
+  for (const v of ["run.id", "run.url", "run.namespace", "run.workflow", "run.initiator", "run.signal_url"]) vars.push({ label: v, type: "variable" });
   vars.push({ label: "trigger.event", detail: "trigger payload", type: "variable" });
   vars.push({ label: "campaign", detail: "campaign context", type: "variable" });
   vars.push({ label: "target", detail: "campaign target", type: "variable" });

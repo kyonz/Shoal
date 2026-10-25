@@ -24,6 +24,7 @@ from shoal.api.deps import authenticate
 from shoal.api.routers import (
     a2a,
     admin,
+    assistant,
     auth,
     blueprints,
     evals,
@@ -117,7 +118,7 @@ def install_request_context(app: FastAPI) -> None:
             path=request.url.path,
             ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
-            source="scim" if request.url.path.startswith("/scim/") else ("ui" if client == "ui" else "api"),
+            source="scim" if request.url.path.startswith("/scim/") else (client if client in ("ui", "assistant") else "api"),
         )
         token = set_request(info)
         status = 500  # also when the handler is cancelled (BaseException)
@@ -260,7 +261,8 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, resources):
+    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
+                   resources):
         app.include_router(module.router)
     if engine.settings.static_dir:
         _mount_frontend(app, engine.settings.static_dir)

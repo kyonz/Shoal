@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { nsPath, rememberNamespace, useNs, useSwitchNamespace } from "@/lib/ns";
 import { useTheme } from "@/lib/theme";
 import { Button, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Popover, Tooltip } from "@/components/ui";
+import { AssistantLauncher, AssistantPanel } from "@/features/assistant/AssistantPanel";
 import { CommandPalette, useCommandPalette } from "./CommandPalette";
 import { NAV } from "./nav";
 import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, federationMessage, useFederatedLink, useFederationState } from "@/lib/federation";
@@ -151,6 +152,7 @@ export function AppShell() {
             <span className="flex-1 text-left">Search or jump to…</span>
             <Kbd>⌘K</Kbd>
           </button>
+          <AssistantLauncher />
           <ThemeToggle />
           <UserMenu />
         </header>
@@ -159,6 +161,7 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <AssistantPanel />
       <CommandPalette open={palette.open} onOpenChange={palette.setOpen} />
     </div>
   );

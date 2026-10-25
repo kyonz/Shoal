@@ -44,6 +44,7 @@ const UI_PLACEMENT: Record<string, { slug: string; section: string; order: numbe
   "getting-started": { slug: "getting-started", section: "getting-started", order: 0 },
   "workflow-builder": { slug: "guides/workflow-builder", section: "guides", order: 0 },
   "live-runs": { slug: "guides/live-runs", section: "guides", order: 1 },
+  assistant: { slug: "guides/assistant", section: "guides", order: 2 },
   "building-integrations": { slug: "integrations/overview", section: "integrations", order: 0 },
 };
 

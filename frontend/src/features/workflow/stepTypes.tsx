@@ -11,6 +11,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { SCRIPT_LANGUAGES, SCRIPT_TEMPLATES } from "./scriptTemplates";
 import type { StepDoc } from "./types";
 
 export interface StepTypeInfo {
@@ -51,16 +52,19 @@ export const STEP_TYPES: StepTypeInfo[] = [
   {
     type: "script",
     label: "Script",
-    description: "Run a shell script in the sandbox (tests, glue, builds).",
+    description: "Run Python, Node or shell code in the sandbox with typed inputs and outputs: deterministic work without an agent.",
     icon: SquareTerminal,
     color: "#334155",
-    defaults: () => ({ run: "echo hello" }),
-    summary: (s) => first(s.run) || "Empty script",
+    defaults: () => ({ language: "python", code: SCRIPT_TEMPLATES.python, outputs: { count: { type: "integer" } } }),
+    summary: (s) =>
+      s.code !== undefined
+        ? `${SCRIPT_LANGUAGES.find((l) => l.value === (s.language ?? "shell"))?.label ?? s.language} · ${first(String(s.code).replace(/^(import|const|#|set -).*$/gm, "")) || "code"}`
+        : first(s.run) || "Empty script",
   },
   {
     type: "wait",
     label: "Wait",
-    description: "Durably wait for a duration, a time, or until a condition holds.",
+    description: "Durably wait for a duration, a time, a condition, or a signal sent into the run.",
     icon: Clock,
     color: "#b45309",
     defaults: () => ({ duration: "1h" }),
@@ -68,6 +72,10 @@ export const STEP_TYPES: StepTypeInfo[] = [
       if (s.condition && typeof s.condition === "object") {
         const c = s.condition as { action?: string };
         return `Until ${c.action ?? "condition"}${s.max_wait ? ` · max ${s.max_wait}` : ""}`;
+      }
+      if (s.signal && typeof s.signal === "object") {
+        const g = s.signal as { name?: string; event?: string };
+        return `${g.name ? `Signal ${g.name}` : `Event ${first(g.event, 30)}`}${s.max_wait ? ` · max ${s.max_wait}` : ""}`;
       }
       if (s.until) return `Until ${first(s.until, 40)}`;
       return s.duration ? `For ${s.duration}` : "Configure the wait";

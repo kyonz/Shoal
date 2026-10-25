@@ -33,6 +33,7 @@ import { nodeTypes, type StepNodeType } from "@/features/workflow/StepNode";
 import { stepType } from "@/features/workflow/stepTypes";
 import { LAYOUT_ANNOTATION, type StepDoc } from "@/features/workflow/types";
 import { EventRow, Terminal, Transcript } from "./EventViews";
+import { SignalBanner, SignalsTab, useSignals } from "./Signals";
 import { useRunEvents, type StreamState } from "./useRunEvents";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
@@ -79,12 +80,13 @@ function RunViewer() {
     <div className="flex h-full flex-col">
       <RunHeader run={r} state={state} now={now} />
       <ApprovalBanner run={r} />
+      <SignalBanner run={r} />
       <div className="flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
           <RunGraph run={r} selected={selected} onSelect={setSelected} />
         </div>
         <aside className="flex w-[460px] shrink-0 flex-col border-l border-border bg-panel">
-          <SidePanel run={r} events={events} selected={selected} onSelect={setSelected} now={now} />
+          <SidePanel run={r} events={events} selected={selected} onSelect={setSelected} now={now} terminal={terminal} />
         </aside>
       </div>
     </div>
@@ -315,8 +317,9 @@ function RunGraph({ run, selected, onSelect }: { run: RunDetail; selected: strin
 
 // --------------------------------------------------------------------------- side panel
 
-function SidePanel({ run, events, selected, onSelect, now }: {
+function SidePanel({ run, events, selected, onSelect, now, terminal }: {
   run: RunDetail;
+  terminal: boolean;
   events: import("@/api/client").RunEvent[];
   selected: string | null;
   onSelect: (id: string | null) => void;
@@ -328,6 +331,10 @@ function SidePanel({ run, events, selected, onSelect, now }: {
   }, [selected]);
   const step = selected ? run.steps.find((s) => s.step_id === selected) : undefined;
   const def = selected ? (run.workflow.steps as StepDoc[] | undefined)?.find((s) => s.id === selected) : undefined;
+  // Show signals for workflows that wait on them, or once any has been sent.
+  const signals = useSignals(run.id);
+  const signalCount = signals.data?.length ?? 0;
+  const hasSignals = signalCount > 0 || ((run.workflow.steps as StepDoc[] | undefined) ?? []).some((s) => s.type === "wait" && s.signal);
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
       <TabsList className="shrink-0 px-3">
@@ -336,6 +343,11 @@ function SidePanel({ run, events, selected, onSelect, now }: {
         <TabsTrigger value="events" count={events.length}>
           Events
         </TabsTrigger>
+        {hasSignals && (
+          <TabsTrigger value="signals" count={signalCount || undefined}>
+            Signals
+          </TabsTrigger>
+        )}
       </TabsList>
       <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto p-4">
         <Overview run={run} onSelect={onSelect} now={now} />
@@ -346,6 +358,9 @@ function SidePanel({ run, events, selected, onSelect, now }: {
         ) : (
           <EmptyState icon={<WorkflowIcon className="size-5" />} title="Select a step" description="Click a step in the graph to see its output, logs and agent transcript." />
         )}
+      </TabsContent>
+      <TabsContent value="signals" className="min-h-0 flex-1 overflow-y-auto p-4">
+        <SignalsTab run={run} terminal={terminal} />
       </TabsContent>
       <TabsContent value="events" className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="relative space-y-3 before:absolute before:top-2 before:bottom-2 before:left-[9px] before:w-px before:bg-border">

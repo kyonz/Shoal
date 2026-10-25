@@ -24,7 +24,7 @@ function required(step: StepDoc): [string, string][] {
     case "action":
       return [["action", "Choose an integration action"]];
     case "script":
-      return [["run", "Add a script to run"]];
+      return step.run !== undefined && step.code === undefined ? [["run", "Add a command to run"]] : [["code", "Write the script's code"]];
     case "approval":
       return [["message", "Add a message for the approver"]];
     case "workflow":
@@ -60,7 +60,12 @@ export function validateWorkflow(
     if (ids.filter((i) => i === step.id).length > 1) at(`Duplicate step id '${step.id}'`, "error", "id");
     for (const [field, msg] of required(step)) if (blank(step[field])) at(msg, "error", field);
 
-    if (step.type === "wait" && !step.duration && !step.until && !step.condition) at("Wait needs a duration, a time or a condition");
+    if (step.type === "wait" && !step.duration && !step.until && !step.condition && !step.signal) at("Wait needs a duration, a time, a condition or a signal");
+    if (step.type === "wait" && step.signal) {
+      const sig = step.signal as { name?: string; event?: string };
+      if (!sig.name === !sig.event) at("A signal wait needs exactly one of a signal name or an event key", "error", "signal");
+      else if (sig.name && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(sig.name)) at("Signal names use letters, digits and _ . : - (up to 100)", "error", "signal");
+    }
 
     for (const n of step.needs ?? []) if (!known.has(n)) at(`Depends on unknown step '${n}'`, "error", "needs");
 

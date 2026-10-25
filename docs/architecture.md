@@ -181,7 +181,7 @@ spec:
 |---|---|
 | `agent` | Run an agent in a sandbox until it returns structured outputs (validated against the declared schema). |
 | `action` | Call an integration action (e.g. `github.create_pull_request`, `jira.transition`). |
-| `script` | Run a command in a sandbox (deterministic glue, test runs). |
+| `script` | Run deterministic code in a sandbox: a shell `run:` line, or a `code:` program in Python, Node, sh or bash with typed `inputs` (JSON in `$SHOAL_INPUTS`) and validated `outputs` (`$SHOAL_OUTPUTS`). See §5.2. |
 | `wait` | Durable wait: for a duration, until a time, until a condition/event (polled or event-driven), or for a **signal** carrying data, with a timeout. |
 | `approval` | Human-in-the-loop gate, resolved via API/UI with optional assignees. |
 | `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
@@ -231,6 +231,46 @@ spelled differently, does not. (Decided.)
   {version}`), with a dry-run diff first.
 
 ---
+
+### 5.2 Script steps: deterministic work without an agent
+
+Much of a workflow is glue that needs no judgement: reshape an API response,
+dedupe a list, compute a score, call a plain HTTP endpoint, run the tests.
+A `script` step does that as code, which is faster, cheaper and repeatable.
+(Decided.)
+
+```yaml
+- id: summarise
+  type: script
+  language: python            # python · node · shell (default) · bash
+  sandbox: default            # any sandbox profile, on any backend
+  inputs:                     # rendered, then written as JSON
+    issues: "{{ steps.fetch.output.items }}"
+  outputs:                    # typed; checked like agent outputs
+    count: {type: integer}
+  code: |
+    import shoal_step
+    shoal_step.set_output("count", len(shoal_step.inputs["issues"]))
+```
+
+- **Sources.** `run` is a shell command line and is rendered as an
+  expression (as before). `code` is a program used verbatim, never rendered,
+  so data reaches it only through `inputs` and code cannot be injected through
+  an expression. A step has exactly one of the two.
+- **Contract.** The handler writes the program, `inputs.json` and an empty
+  `outputs.json` under `.shoal/steps/<step>-<attempt>/` in the sandbox
+  workspace and runs it with `$SHOAL_INPUTS`, `$SHOAL_OUTPUTS` and
+  `$SHOAL_STEP_DIR` set. Scalar inputs are also exported as
+  `$SHOAL_INPUT_<NAME>` for shell. Python and Node get a small `shoal_step`
+  helper (`inputs`, `set_output`, `set_outputs`) on their module path, so
+  nothing has to be installed in the image. Because the contract is files and
+  environment variables, it works on every sandbox backend.
+- **Outputs.** After a successful exit, the JSON object in `$SHOAL_OUTPUTS` is
+  validated against `outputs` (defaults, coercion, required fields) and merged
+  into the step output next to `exit_code`, `stdout`, `stderr` and
+  `duration_seconds` (also under `outputs`). Missing or mistyped outputs fail
+  the step. Those output names are reserved. A non-zero exit fails the step
+  unless `fail_on_error: false`. Secrets are redacted from everything.
 
 ## 6. Durable runtime
 
@@ -910,7 +950,33 @@ first-time user.
 - Command palette (⌘K), dark/light themes, responsive layout, accessible
   components.
 
-### 14.1 Built-in documentation
+### 14.1 The assistant
+
+A chat panel (⌘J) on every page sets up anything Shoal offers (workflows,
+agents, triggers, connections, campaigns, evals, gateways, runs, approvals)
+and writes `script` step code so deterministic work runs as code instead of
+through an agent. (Decided.)
+
+- **Public API only.** `POST /v1/assistant/chat` runs a tool loop on the
+  configured gateway and model (`SHOAL_ASSISTANT_GATEWAY`, `_MODEL`, `_EFFORT`,
+  `_MAX_TURNS`; the tenant's `default` model policy applies). Its tools
+  (`list_endpoints`, `describe_endpoint`, `api_get`, `apply_resources`,
+  `api_call`) call the API in-process over ASGI with the caller's own
+  credentials, through the full middleware stack. RBAC, auditing (source
+  `assistant`, sharing the chat's request id) and federation forwarding apply
+  unchanged, and the assistant can never do more than the user could.
+- **Changes need approval.** Reads run immediately. `apply_resources` first
+  dry-runs the YAML (validation errors go back to the model to fix), then
+  returns as a pending action with the per-document plan. `api_call` (POST,
+  PUT, PATCH, DELETE) is pending too. The UI shows each as a card to approve
+  or decline, unless the user turns on auto-approve. Sign-in, webhook,
+  SCIM and assistant endpoints are not reachable as tools.
+- **Stateless server.** The client sends the history (Anthropic Messages
+  shape) with each message and keeps it per tenant in the browser, so no
+  table is needed. A forged history buys nothing: every action still runs
+  with the caller's credentials.
+
+### 14.2 Built-in documentation
 
 The product ships its own documentation at `/docs` in the UI, so it always
 matches the running version.

@@ -33,6 +33,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
       pending.current = setTimeout(() => {
         pending.current = null;
         void qc.invalidateQueries({ queryKey: keys.run(runId) });
+        void qc.invalidateQueries({ queryKey: ["run-signals", runId] });
       }, 350);
     };
 
@@ -84,7 +85,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
             try {
               const ev = JSON.parse(msg.data) as RunEvent;
               add([ev]);
-              if (/^(run|step|approval)\./.test(ev.type)) refresh();
+              if (/^(run|step|approval|signal)\./.test(ev.type)) refresh();
             } catch {
               /* ignore malformed */
             }

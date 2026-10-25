@@ -13,7 +13,7 @@ class RequestInfo:
     path: str = ""
     ip: str | None = None
     user_agent: str | None = None
-    source: str = "api"  # api | ui | scim | hub | system
+    source: str = "api"  # api | ui | assistant | scim | hub | system
     via: str | None = None  # e.g. "hub" for calls forwarded by a federation hub
     audited: bool = field(default=False)  # a domain audit entry was written for this request
 

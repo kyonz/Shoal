@@ -1,4 +1,6 @@
+import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
+import { python } from "@codemirror/lang-python";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
@@ -53,7 +55,7 @@ export const expressionHighlight = ViewPlugin.fromClass(
 export interface CodeEditorProps {
   value: string;
   onChange?: (v: string) => void;
-  language?: "yaml" | "json" | "text";
+  language?: "yaml" | "json" | "python" | "javascript" | "text";
   readOnly?: boolean;
   className?: string;
   height?: string;
@@ -75,6 +77,8 @@ export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(functi
     const list: Extension[] = [baseTheme, syntaxHighlighting(highlight), expressionHighlight, EditorView.lineWrapping, ...extensions];
     if (language === "yaml") list.push(yaml());
     if (language === "json") list.push(json());
+    if (language === "python") list.push(python());
+    if (language === "javascript") list.push(javascript());
     if (placeholder) list.push(cmPlaceholder(placeholder));
     return list;
   }, [language, extensions, placeholder]);
