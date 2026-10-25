@@ -460,7 +460,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Clear the session cookie */
+        /** Sign out: end the session and clear its cookie */
         post: operations["logout_v1_auth_logout_post"];
         delete?: never;
         options?: never;
@@ -714,6 +714,23 @@ export interface paths {
         put?: never;
         /** Tenant connector long-poll (authenticated by the link credential) */
         post: operations["tunnel_v1_federation_tunnel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/federation/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The member left the hub (authenticated by the link credential) */
+        post: operations["member_left_v1_federation_leave_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7505,6 +7522,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    member_left_v1_federation_leave_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
