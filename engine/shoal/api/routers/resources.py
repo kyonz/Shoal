@@ -379,6 +379,13 @@ async def _connection(ctx: Ctx, namespace: str, name: str) -> Connection:
     return Connection.model_validate(row.document)
 
 
+@router.get("/namespaces/{namespace}/cloud-identities/{name}/trust-policy", tags=["cloud-identities"],
+            summary="The trust policy the cloud role needs so this identity can assume it")
+async def cloud_identity_trust_policy(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "cloud-identities:read")
+    return await ctx.engine.cloud.trust_policy(ctx.tenant_id, namespace, name)
+
+
 @router.post("/namespaces/{namespace}/connections/{name}/test", tags=["connections"])
 async def test_connection(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:use")

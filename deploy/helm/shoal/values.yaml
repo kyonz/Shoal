@@ -75,6 +75,8 @@ serviceAccount:
   create: true
   name: ""
   # Annotations for workload identity (e.g. eks.amazonaws.com/role-arn, iam.gke.io/gcp-service-account).
+  # With IRSA here, set SHOAL_AWS_AMBIENT=true (extraEnv) so cloud identities with trust "ambient" can
+  # assume namespace roles through this deployment role (docs/cloud-identities.md).
   annotations: {}
 
 podSecurityContext:

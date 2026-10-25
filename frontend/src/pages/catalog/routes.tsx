@@ -15,9 +15,9 @@ function KeyedEditor({ plural }: { plural: CatalogPlural }) {
   return <Editor key={`${ns}/${plural}/${name ?? "_new"}`} plural={plural} />;
 }
 
-const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "gateways", "model-policies", "evals"];
+const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "cloud-identities", "gateways", "model-policies", "evals"];
 
-/** Namespaced: agents, skills, sandbox-profiles, gateways, model-policies, evals, blueprints. */
+/** Namespaced: agents, skills, sandbox-profiles, cloud-identities, gateways, model-policies, evals, blueprints. */
 export const catalogRoutes: RouteObject[] = [
   ...generic.flatMap((plural): RouteObject[] => [
     { path: plural, element: <Lazy><List plural={plural} /></Lazy> },

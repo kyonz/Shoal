@@ -1,5 +1,5 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, FlaskConical, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Cloud, FlaskConical, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
 
 export interface KindConfig {
@@ -60,6 +60,25 @@ export const KINDS: Record<string, KindConfig> = {
     hidden: ["config"],
     template: { backend: "local", scope: "run" },
     summary: (s) => [s.backend, s.image].filter(Boolean).join(" · ") || undefined,
+  },
+  "cloud-identities": {
+    plural: "cloud-identities",
+    kind: "CloudIdentity",
+    label: "Cloud identities",
+    singular: "cloud identity",
+    icon: Cloud,
+    blurb: "A cloud role (AWS IAM) your namespace brings, and which workflows and agents may use it. Steps get short-lived credentials.",
+    order: ["description", "provider", "trust", "aws", "allow", "config"],
+    template: {
+      provider: "aws",
+      trust: "web_identity",
+      aws: { role_arn: "arn:aws:iam::123456789012:role/shoal-deploy", region: "us-east-1", duration: "1h" },
+      allow: { workflows: [], agents: [] },
+    },
+    summary: (s) => {
+      const aws = s.aws as { role_arn?: string } | undefined;
+      return [s.provider, aws?.role_arn, s.trust].filter(Boolean).join(" · ") || undefined;
+    },
   },
   gateways: {
     plural: "gateways",
