@@ -527,7 +527,10 @@ replace them.
   rubric) and `boolean` (Jev's *noul*: probability a statement is true).
   Providers: `jev` (TypeSafe API via its SDK, or via OpenRouter / Vercel AI
   Gateway where configured) and `llm` (any model through the gateways in
-  §7.3 using structured output) as the self-hostable fallback.
+  §7.3 using structured output) as the self-hostable fallback. Jev needs
+  the `typesafe-sdk` package (`pip install 'shoal[jev]'`; the container
+  image includes it) and an API key from a secret named by
+  `provider_config.api_key_secret`, or `TYPESAFE_API_KEY` on the worker.
 - **`decide` step.** A workflow step that asks typed questions about any
   expression (issue text, diff summary, prior outputs) and exposes
   `answer`, `probabilities` and `confidence` for branching with `if`. A
