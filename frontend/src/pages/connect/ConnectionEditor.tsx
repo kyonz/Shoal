@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, KeyRound, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, Download, KeyRound, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -279,13 +279,35 @@ function PickIntegration({ integrations, onPick, loading }: { integrations: Inte
   );
 }
 
+type WebhookSetup = { url: string; instructions: string; manifest?: Record<string, unknown>; install?: boolean };
+
 function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string; webhookUrl?: string }) {
   const { can } = useAuth();
+  const [params, setParams] = useSearchParams();
   const webhook = useQuery({
     queryKey: ["connection-webhook", ns, name],
-    queryFn: () => rawJson<{ url: string; instructions: string }>(`/v1/namespaces/${ns}/connections/${name}/webhook`),
+    queryFn: () => rawJson<WebhookSetup>(`/v1/namespaces/${ns}/connections/${name}/webhook`),
     retry: false,
   });
+  const install = useMutation({
+    mutationFn: () => rawJson<{ authorize_url: string }>(`/v1/namespaces/${ns}/connections/${name}/install`, { method: "POST" }),
+    onSuccess: (r) => window.location.assign(r.authorize_url),
+    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+  });
+  const manifest = webhook.data?.manifest;
+  const copyManifest = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(manifest, null, 2));
+      toast.success("Manifest copied");
+    } catch {
+      toast.error("Could not copy; select the text instead");
+    }
+  };
+  const dismissInstalled = () => {
+    const next = new URLSearchParams(params);
+    next.delete("installed");
+    setParams(next, { replace: true });
+  };
   const test = useMutation({
     mutationFn: () => rawJson<Record<string, unknown>>(`/v1/namespaces/${ns}/connections/${name}/test`, { method: "POST" }),
   });
@@ -294,6 +316,34 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
   const url = webhook.data?.url ?? webhookUrl;
   return (
     <>
+      {params.get("installed") && (
+        <div role="status" className="flex items-center gap-2 rounded-lg border border-ok/25 bg-ok-soft px-3 py-2 text-[13px] text-ok">
+          <CheckCircle2 className="size-4 shrink-0" /> App installed; its token is stored as a secret.
+          <button className="ml-auto text-xs underline-offset-2 hover:underline" onClick={dismissInstalled}>
+            Dismiss
+          </button>
+        </div>
+      )}
+      {(manifest || webhook.data?.install) && (
+        <Card>
+          <CardHeader title="App setup" description="Create the app from this manifest, then install it." />
+          <div className="space-y-3 p-4">
+            {manifest && (
+              <>
+                <JsonBlock value={manifest} maxHeight="220px" />
+                <Button className="w-full justify-center" variant="secondary" icon={<Copy className="size-4" />} onClick={copyManifest}>
+                  Copy manifest
+                </Button>
+              </>
+            )}
+            {webhook.data?.install && can("connections:write", ns) && can("secrets:write", ns) && (
+              <Button className="w-full justify-center" variant="primary" icon={<Download className="size-4" />} loading={install.isPending} onClick={() => install.mutate()}>
+                Install app
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
       {can("connections:use", ns) && (
         <Card>
           <CardHeader title="Test connection" description="Checks the credentials against the service." />

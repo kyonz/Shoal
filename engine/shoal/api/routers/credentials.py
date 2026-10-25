@@ -110,6 +110,17 @@ async def oauth_callback(engine: EngineDep, code: str | None = None, state: str 
     return RedirectResponse(f"{ui}?connected={namespace}/{connection}", status_code=303)
 
 
+@router.get("/v1/install/callback", include_in_schema=False)
+async def install_callback(engine: EngineDep, code: str | None = None, state: str | None = None, error: str | None = None) -> Any:
+    """Where an app install (e.g. Add to Slack) returns; stores the token as the connection's secret."""
+    base = engine.settings.public_url.rstrip("/")
+    if error or not code or not state:
+        return RedirectResponse(f"{base}/?install_error={error or 'missing_code'}", status_code=303)
+    tenant_id, namespace, connection, actor, fields = await engine.integrations.install_callback(code, state)
+    await engine.store.audit(tenant_id, actor, "connection.installed", f"{namespace}/{connection}", namespace=namespace, fields=fields)
+    return RedirectResponse(f"{base}/ns/{namespace}/connections/{connection}?installed=1", status_code=303)
+
+
 @router.get("/v1/users/{username}/credentials", response_model=list[CredentialOut], summary="Who connected what (admins)")
 async def user_credentials(username: str, ctx: CtxDep) -> Any:
     await ctx.require("users:manage")

@@ -190,7 +190,7 @@ spec:
 | `action` | Call an integration action (e.g. `github.create_pull_request`, `jira.transition`). |
 | `script` | Run deterministic code in a sandbox: a shell `run:` line, or a `code:` program in Python, Node, sh or bash with typed `inputs` (JSON in `$SHOAL_INPUTS`) and validated `outputs` (`$SHOAL_OUTPUTS`). See §5.2. |
 | `wait` | Durable wait: for a duration, until a time, until a condition/event (polled or event-driven), or for a **signal** carrying data, with a timeout. |
-| `approval` | Human-in-the-loop gate, resolved via API/UI with optional assignees. |
+| `approval` | Human-in-the-loop gate, resolved via API/UI with optional `approvers`, or from Slack buttons (`notify`, §9.2). |
 | `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
 | `map` | Fan out a sub-list of steps over a list with a concurrency limit. |
 | `workflow` | Call another workflow as a child run. |
@@ -627,8 +627,8 @@ class Integration(Protocol):
 - **Metadata** (`resources`) powers campaign target selection and UI pickers,
   e.g. `github.repository` filtered by `owner`, `topic`, `language`,
   `permission: admin`.
-- Built-in integrations in v1: `github`, `jira`, `webhook` (generic, HMAC),
-  `schedule`, `http`. Slack/Linear/GitLab follow the same contract.
+- Built-in integrations in v1: `github`, `jira`, `slack`, `mcp`, `webhook`
+  (generic, HMAC), `remote` and `schedule`. Linear/GitLab follow the same contract.
 
 ### 9.1 Open integrations platform (SDK)
 
@@ -662,6 +662,35 @@ contract, so they double as reference implementations.
   [integrations.md](integrations.md).
 
 ---
+
+### 9.2 Approvals and input from other tools (Slack)
+
+An `approval` step can also ask through an integration that supports it
+(`notify: [{integration: slack, to: "#deploys"}]`). The integration posts the
+request (Slack: a message with Approve / Reject buttons) and returns a
+reference kept in the step state. Answers come back as webhook events carrying
+an `Interaction` (an approval decision, or a signal for a run). The engine, not
+the integration, decides whether to act on one:
+
+1. the webhook is verified by the integration (Slack signing secret, five-minute
+   replay window);
+2. the actor is resolved to a person: identity hints (`slack_id`, `email` from
+   `users.info`) match an `Identity`, whose `actors` (`user:<username>`) or email
+   find the directory user, and a `Principal` is built for them;
+3. `engine.authz` checks `runs:approve` (or `runs:signal`) in the run's
+   namespace, and the step's `approvers` list (identity names, usernames,
+   emails, `group:<name>`);
+4. only then the decision is recorded (`by` is the person's name, audited as
+   their actor, `via: slack`) or the signal is sent; refusals are shown to the
+   person privately and audited as `access.denied`.
+
+Whatever decides the step (a click, the UI, the API, a timeout), the approval
+handler calls `approval_resolved` on every notification so the message shows the
+outcome. A click is only accepted for approvals that were sent through the same
+connection. Integrations can also answer the webhook themselves
+(`webhook_reply`: Slack URL challenges, slash command answers, modal errors) and
+offer an app install (`install_url` / `complete_install`: "Add to Slack" stores
+the bot token as the connection's secret).
 
 ## 10. Campaigns
 

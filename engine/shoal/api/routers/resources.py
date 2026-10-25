@@ -412,7 +412,21 @@ async def connection_webhook(namespace: str, name: str, ctx: CtxDep) -> dict[str
         url = await ctx.engine.integrations.webhook_url(ctx.tenant_id, name)
         conn = await _connection(ctx, namespace, name)
     integration = ctx.engine.integrations.get(conn.spec.integration)
-    return {"url": url, "instructions": integration.webhook_setup_instructions(url)}
+    out: dict[str, Any] = {"url": url, "instructions": integration.webhook_setup_instructions(url)}
+    manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name)
+    if manifest is not None:
+        out["manifest"] = manifest
+    out["install"] = bool(integration.install_fields)
+    return out
+
+
+@router.post("/namespaces/{namespace}/connections/{name}/install", tags=["connections"],
+             summary="Start an app install (e.g. Add to Slack); returns the URL to send the admin to")
+async def install_connection(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "connections:write")
+    await ctx.require("secrets:write", namespace)
+    url = await ctx.engine.integrations.install_start(ctx.tenant_id, namespace, name, ctx.actor)
+    return {"authorize_url": url}
 
 
 @router.get("/namespaces/{namespace}/connections/{name}/actions", tags=["connections"],

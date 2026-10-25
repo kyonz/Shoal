@@ -280,20 +280,24 @@ class ApprovalHandler:
         assert isinstance(step, ApprovalStep)
         decision = ctx.state.get("decision")
         if decision:
-            return Completed(
-                {
-                    "approved": decision["approved"],
-                    "by": decision.get("by"),
-                    "comment": decision.get("comment"),
-                    "timed_out": False,
-                }
-            )
+            outcome = {
+                "approved": decision["approved"],
+                "by": decision.get("by"),
+                "comment": decision.get("comment"),
+                "timed_out": False,
+            }
+            await ctx.engine.interactions.approval_resolved(ctx, outcome)
+            return Completed(outcome)
         deadline = ctx.deadline("deadline", step.max_wait) if step.max_wait else None
         if deadline is not None and ctx.now() >= deadline:
-            return Completed({"approved": step.on_timeout == "approve", "by": None, "comment": None, "timed_out": True})
+            outcome = {"approved": step.on_timeout == "approve", "by": None, "comment": None, "timed_out": True}
+            await ctx.engine.interactions.approval_resolved(ctx, outcome)
+            return Completed(outcome)
         if not ctx.state.get("requested"):
-            ctx.state["requested"] = True
             ctx.state["message"] = ctx.render(step.message)
+            if step.notify:
+                await ctx.engine.interactions.notify_approval(ctx, step, deadline)
+            ctx.state["requested"] = True
             await ctx.emit(
                 "approval.requested",
                 {"message": ctx.state["message"], "approvers": step.approvers, "deadline": deadline and deadline.isoformat()},

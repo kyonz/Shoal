@@ -16,13 +16,29 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args, get_origin
 
 import httpx
 from pydantic import BaseModel, Field, SecretStr
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
+
+
+class Interaction(BaseModel):
+    """A person acting on something Shoal sent them (a button, a form).
+
+    The engine resolves the event's ``actor`` to a Shoal user, checks their
+    permission on the run, then records the approval decision or sends the signal.
+    """
+
+    kind: Literal["approval", "signal"]
+    run_id: str
+    step_id: str | None = Field(None, description="approval: the approval step.")
+    approved: bool | None = Field(None, description="approval: the decision.")
+    comment: str | None = None
+    signal: str | None = Field(None, description="signal: the signal name.")
+    payload: Any = Field(None, description="signal: the signal payload.")
 
 
 class IntegrationEvent(BaseModel):
@@ -34,8 +50,34 @@ class IntegrationEvent(BaseModel):
     wake_keys: list[str] = Field(default_factory=list, description="Wait-subscription keys this event satisfies.")
     actor: dict[str, Any] = Field(
         default_factory=dict,
-        description="Who caused the event: identity hints such as github, jira_account_id, email, display_name.",
+        description="Who caused the event: identity hints such as github, jira_account_id, slack_id, email, display_name.",
     )
+    interaction: Interaction | None = Field(
+        None, description="Set when the event is a person answering an approval or sending a run a signal."
+    )
+
+
+class ApprovalRequest(BaseModel):
+    """An approval step asking people for a decision through an integration (``notify`` on the step)."""
+
+    run_id: str
+    step_id: str
+    workflow: str
+    namespace: str
+    message: str
+    to: str | None = Field(None, description="Where to ask: a channel or a person, in the integration's terms.")
+    options: dict[str, Any] = Field(default_factory=dict, description="Integration-specific options (`with`).")
+    approvers: list[str] = Field(default_factory=list)
+    deadline: str | None = None
+    run_url: str
+    initiator: str | None = Field(None, description="Display name of the person the run acts for.")
+
+
+class WebhookReply(BaseModel):
+    """The HTTP answer to a webhook delivery, for services that read it (Slack challenges, modal errors)."""
+
+    status: int = 200
+    body: Any = None
 
 
 class Page(BaseModel):
@@ -198,8 +240,52 @@ class Integration:
     ) -> list[IntegrationEvent]:
         return []
 
+    async def webhook_reply(
+        self, ctx: ConnectionContext, headers: dict[str, str], body: bytes, result: dict[str, Any]
+    ) -> WebhookReply | None:
+        """Answer the delivery yourself; ``result`` holds the events and each interaction's outcome.
+
+        ``None`` (the default) answers ``202`` with the processing summary.
+        """
+        return None
+
     def webhook_setup_instructions(self, url: str) -> str:
         return f"Send webhooks to {url}"
+
+    def setup_manifest(self, webhook_url: str, install_redirect_url: str, connection: str) -> dict[str, Any] | None:
+        """An app manifest for the service with Shoal's URLs filled in (Slack app manifests), if it has one."""
+        return None
+
+    # --- approvals -----------------------------------------------------------
+
+    supports_approvals: ClassVar[bool] = False
+
+    async def request_approval(self, ctx: ConnectionContext, request: ApprovalRequest) -> dict[str, Any]:
+        """Ask for a decision (e.g. a message with Approve / Reject buttons); returns a reference to it.
+
+        Answers come back as webhook events carrying an ``Interaction``.
+        """
+        raise IntegrationError(f"{self.key} cannot ask for approvals")
+
+    async def approval_resolved(
+        self, ctx: ConnectionContext, request: ApprovalRequest, ref: dict[str, Any], outcome: dict[str, Any]
+    ) -> None:
+        """The step was decided (here, in the UI or API) or timed out: show the outcome where it was asked.
+
+        ``outcome`` is the step output: ``approved``, ``by``, ``comment``, ``timed_out``.
+        """
+
+    # --- workspace install (OAuth) ---------------------------------------------
+
+    install_fields: ClassVar[list[str]] = []  # connection fields an install fills in (e.g. bot_token)
+
+    def install_url(self, config: Any, redirect_uri: str, state: str) -> str:
+        """Where to send an admin to install the app; ``config`` is the connection's (possibly partial) settings."""
+        raise IntegrationError(f"{self.key} has no app install")
+
+    async def complete_install(self, ctx: ConnectionContext, code: str, redirect_uri: str) -> dict[str, str]:
+        """Exchange the install code; returns values for ``install_fields`` (stored as the connection's secrets)."""
+        raise IntegrationError(f"{self.key} has no app install")
 
     async def actions_for(self, ctx: ConnectionContext) -> dict[str, ActionDef]:
         """Actions available on one connection; dynamic integrations (remote) override this."""
@@ -241,6 +327,8 @@ class Integration:
             "actions": describe_actions(cls.actions),
             "resources": describe_resources(cls.resources),
             "events": [{"name": e.name, "description": e.description, "example": e.example} for e in cls.events],
+            "approvals": cls.supports_approvals,
+            "install": bool(cls.install_fields),
         }
 
 

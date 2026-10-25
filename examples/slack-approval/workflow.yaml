@@ -1,0 +1,41 @@
+# Ask in Slack which version to ship, then hold the deploy for a release manager's click.
+#   shoal apply -f examples/slack-approval/ && shoal run ship -i service=api
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata:
+  name: ship
+  description: Asks for a version in Slack and waits for an approval there.
+spec:
+  inputs:
+    service: {type: string}
+  connections: {slack: slack}
+  steps:
+    - id: ask
+      type: action
+      action: slack.request_input
+      with:
+        text: "Which version of *{{ inputs.service }}* should we ship?"
+        signal: release
+        fields:
+          - {name: version, label: Version, placeholder: "1.4.2"}
+          - {name: notes, label: Release notes, type: multiline, optional: true}
+    - id: answer
+      type: wait
+      signal: {name: release}
+      max_wait: 1d
+      on_timeout: fail
+    - id: approve
+      type: approval
+      message: "Deploy *{{ inputs.service }}* {{ steps.answer.output.payload['values']['version'] }} to production?"
+      approvers: ["group:release-managers"]
+      max_wait: 4h
+      notify:
+        - integration: slack
+          to: "#deploys"
+          with: {ask_comment: true}
+    - id: announce
+      type: action
+      if: "{{ steps.approve.output.approved }}"
+      action: slack.post_message
+      with:
+        text: ":rocket: {{ inputs.service }} {{ steps.answer.output.payload['values']['version'] }} approved by {{ steps.approve.output.by }}"

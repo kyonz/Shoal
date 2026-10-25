@@ -1,6 +1,6 @@
 # Building integrations
 
-Anyone can add an integration to Shoal. The built-in GitHub, Jira and webhook
+Anyone can add an integration to Shoal. The built-in GitHub, Jira, Slack and webhook
 integrations use exactly the contract described here, so they double as
 reference implementations (`engine/shoal/integrations/`).
 
@@ -120,6 +120,7 @@ assert api.requests("POST", "/graphql")[0].json["variables"]["title"] == "Bug"
 | `IntegrationHarness` | Call actions, queries (`query_all` follows cursors), `test_connection` and webhooks with no database. |
 | `engine_harness(...)` | A real throwaway engine with your integration registered: create connections (`connect`), apply YAML resources (`apply`), deliver webhooks to the connection URL (`webhook`) and check that triggers fire and runs start. |
 | `signed_webhook`, `github_webhook` | Build correctly signed deliveries. |
+| `MockSlack`, `slack_request` | A fake Slack: Web API state (messages, updates, modals, users) and signed clicks, modal submissions, events and slash commands. |
 | `IntegrationContract` | Subclass as `TestXContract` to run the contract checks under pytest. |
 | `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m shoal.sdk.testing.contract URL --token T`. |
 
@@ -129,6 +130,101 @@ are `SecretStr` and do not leak into the catalogue, methods are async, the
 integration can be described as a remote manifest, and (given a sample
 delivery) that genuine webhooks verify while tampered or unsigned ones are
 rejected and parsed event types are declared. The built-in integrations pass it.
+
+## Approvals, buttons and forms (interactions)
+
+An integration that can show people buttons can also resolve approval steps and
+send runs data. Set `supports_approvals = True` and implement:
+
+- `request_approval(ctx, request)`: post the request (`request.message`, `to`,
+  `options` from the step's `with`, `run_url`, `deadline`) and return a JSON
+  reference to what you posted;
+- `approval_resolved(ctx, request, ref, outcome)`: show the outcome there. It is
+  called whatever decided the step (your buttons, the UI, the API, a timeout);
+- in `parse_webhook`, return an `IntegrationEvent` with an `Interaction`
+  (`kind="approval"` with `run_id`, `step_id`, `approved`, `comment`, or
+  `kind="signal"` with `run_id`, `signal`, `payload`) and `actor` hints.
+
+Never decide in the integration: the engine resolves the actor to a Shoal user
+(through `Identity` hints and email), checks `runs:approve` / `runs:signal` and
+the step's `approvers`, and only then records the decision. Its outcome is in
+`result["interactions"]` for `webhook_reply(ctx, headers, body, result)`, which
+lets you answer the delivery yourself (`WebhookReply(status, body)`). Two more
+optional hooks: `setup_manifest` (an app manifest shown on the connection) and
+`install_fields` + `install_url` / `complete_install` (an OAuth app install
+that stores tokens as the connection's secrets).
+
+## Slack
+
+Slack is built in. One Slack app per connection:
+
+1. Create the connection (`integration: slack`), open it and copy the **app
+   manifest** (Event Subscriptions, Interactivity and `/shoal` already point at
+   the connection's URL). Create the app from it at api.slack.com/apps.
+2. Store the app's **signing secret** on the connection (every request from
+   Slack is verified; unsigned or older than five minutes is rejected).
+3. Install: **Add to Slack** (set `client_id` and the `client_secret` secret) or
+   paste a bot token (`bot_token`). Invite the app to its channels.
+4. Link people: Slack users map to Shoal users by `Identity.slack_id`, or by
+   email when the app can read it (`users:read.email`). Unknown people can
+   click, but nothing happens except a private note telling them why.
+
+```yaml
+kind: Connection
+metadata: {name: slack}
+spec:
+  integration: slack
+  config: {default_channel: "#deploys", client_id: "123.456"}
+  secrets: {signing_secret: slack-signing-secret, client_secret: slack-client-secret, bot_token: slack-bot-token}
+```
+
+**Approvals.** The message has Approve / Reject (and Open in Shoal) buttons and
+is updated with the outcome. `with: {ask_comment: true}` asks for a comment in a
+modal; `title`, `approve_label`, `reject_label` and `thread_ts` are optional.
+
+```yaml
+- id: go
+  type: approval
+  message: "Deploy *{{ inputs.service }}* {{ inputs.version }} to prod?"
+  approvers: ["group:release-managers"]
+  max_wait: 4h
+  notify:
+    - integration: slack
+      to: "#deploys"            # a channel id or #name, a user id, or an email (DM)
+```
+
+**Actions:** `slack.post_message` (text, Block Kit `blocks`, `thread_ts`, and
+`buttons` that send this run a signal), `slack.update_message`,
+`slack.post_ephemeral`, `slack.add_reaction`, `slack.request_input` (a button
+opening a form; answers arrive as a signal `{values, user}`) and
+`slack.lookup_user`. Resource: `channel`.
+
+```yaml
+- id: ask
+  type: action
+  action: slack.request_input
+  with:
+    text: Which version should we ship?
+    signal: release
+    fields:
+      - {name: version, label: Version}
+      - {name: env, label: Environment, type: select, options: [staging, prod]}
+- id: answer
+  type: wait
+  signal: {name: release}       # steps.answer.output.payload.values.version
+```
+
+**Events** for triggers: `app_mention` (`event.command_text` is the text after
+the mention), `message` (the app's own and other bots' messages are skipped),
+`reaction_added`, `slash_command` (`event.command`, `event.text`, `event.args`;
+the person gets a private answer naming the runs started), `block_actions` and
+`view_submission` for your own Block Kit, `shortcut` and `message_action`.
+Wake keys: `slack:thread:<channel>:<ts>` (replies in a thread, also
+`post_message`'s `thread_key`), `slack:channel:<channel>`,
+`slack:message:<channel>:<ts>` (reactions, button clicks) and
+`slack:action:<action_id>`. Slack retries an event it did not get an answer to
+in three seconds; set `dedupe_key: "{{ event.event_id }}"` on triggers that must
+not fire twice.
 
 ## Per-user credentials
 

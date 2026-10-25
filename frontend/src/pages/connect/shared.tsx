@@ -1,7 +1,7 @@
 /** Helpers shared by the connect and campaign pages. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { diffLines } from "diff";
-import { AlertTriangle, Blocks, GitPullRequest, History, KeyRound, SquareKanban, Waypoints, Webhook } from "lucide-react";
+import { AlertTriangle, Blocks, GitPullRequest, History, KeyRound, MessagesSquare, SquareKanban, Waypoints, Webhook } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import YAML from "yaml";
@@ -52,6 +52,7 @@ export function ErrorList({ error, className }: { error: unknown; className?: st
 const MARKS: Record<string, { icon: ReactNode; className: string }> = {
   github: { icon: <GitPullRequest />, className: "bg-[#24292f] text-white dark:bg-[#f0f3f6] dark:text-[#24292f]" },
   jira: { icon: <SquareKanban />, className: "bg-[#1868db] text-white" },
+  slack: { icon: <MessagesSquare />, className: "bg-[#4a154b] text-white" },
   webhook: { icon: <Webhook />, className: "bg-[#c2410c] text-white" },
   mcp: { icon: <Waypoints />, className: "bg-[#111827] text-white dark:bg-[#e5e7eb] dark:text-[#111827]" },
 };
