@@ -11,6 +11,7 @@ import { nsPath, useNs } from "@/lib/ns";
 import { Button, Card, CardHeader, EmptyState, ErrorNotice, JsonBlock, Page, PageHeader, Skeleton, Stat, StatusBadge, Table, Td, Th, Tr, useConfirm } from "@/components/ui";
 import { TARGET_SEGMENTS, TargetBar, type CampaignRun as CampaignRunT } from "./Campaigns";
 import { Crumb } from "./shared";
+import { actorName } from "@/lib/actor";
 
 type TargetRow = Schemas["TargetOut"];
 
@@ -98,7 +99,7 @@ export default function CampaignRun() {
         }
         description={
           <>
-            Runs <Link className="text-accent hover:underline" to={nsPath(ns, "workflows", String(c.spec.workflow))}>{String(c.spec.workflow)}</Link> · launched by {String(c.initiator?.display_name ?? c.created_by ?? "unknown")} {relTime(c.created_at)} · <span className="font-mono text-xs">{c.id}</span>
+            Runs <Link className="text-accent hover:underline" to={nsPath(ns, "workflows", String(c.spec.workflow))}>{String(c.spec.workflow)}</Link> · launched by {String(c.initiator?.display_name ?? actorName(c.created_by))} {relTime(c.created_at)} · <span className="font-mono text-xs">{c.id}</span>
           </>
         }
         actions={

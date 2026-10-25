@@ -9,6 +9,7 @@ import { adminRoutes } from "@/pages/admin/routes";
 import { catalogRoutes } from "@/pages/catalog/routes";
 import { connectRoutes } from "@/pages/connect/routes";
 import { docsRoutes } from "@/pages/docs/routes";
+import { instanceRoutes } from "@/pages/instance/routes";
 import { workflowRoutes } from "@/pages/workflows/routes";
 
 const CredentialsPage = lazy(() => import("@/pages/settings/Credentials"));
@@ -32,6 +33,16 @@ function RequireAuth() {
   if (loading) return <Splash />;
   if (!signedIn) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   return <Outlet />;
+}
+
+/** `/`: the last namespace used, if this tenant has it; the instance console when there's no tenant. */
+function Home() {
+  const { me, instance } = useAuth();
+  if (!me?.tenant && instance.reader) return <Navigate to="/instance" replace />;
+  const visible = me?.namespaces ?? [];
+  const last = lastNamespace();
+  const ns = visible.length && !visible.includes(last) && !me?.is_system_admin ? (visible.includes("default") ? "default" : visible[0]) : last;
+  return <Navigate to={`/ns/${encodeURIComponent(ns)}/overview`} replace />;
 }
 
 function RouteError() {
@@ -60,7 +71,7 @@ const routes: RouteObject[] = [
         element: <AppShell />,
         errorElement: <RouteError />,
         children: [
-          { index: true, element: <Navigate to={`/ns/${lastNamespace()}/overview`} replace /> },
+          { index: true, element: <Home /> },
           {
             path: "ns/:ns",
             children: [
@@ -71,6 +82,7 @@ const routes: RouteObject[] = [
             ],
           },
           ...adminRoutes,
+          ...instanceRoutes,
           ...docsRoutes,
           { path: "settings/credentials", element: <Lazy><CredentialsPage /></Lazy> },
           { path: "*", element: <NotFound /> },

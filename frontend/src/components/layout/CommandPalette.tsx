@@ -1,8 +1,12 @@
 import * as RDialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
-import { Activity, ArrowRight, Moon, Plus, Search, Workflow } from "lucide-react";
+import { Activity, ArrowRight, Building2, Moon, Plus, Search, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
+import { ApiError } from "@/api/client";
+import { useMyTenants, useSwitchTenant } from "@/pages/instance/api";
+import { INSTANCE_NAV } from "@/pages/instance/InstanceLayout";
 import { useNamespaces, useResources, useRuns } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { nsPath, useNs, useSwitchNamespace } from "@/lib/ns";
@@ -32,11 +36,14 @@ const group = "[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-2 [&_
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const ns = useNs();
   const navigate = useNavigate();
-  const { can } = useAuth();
+  const { can, me, instance } = useAuth();
   const switchNs = useSwitchNamespace();
   const workflows = useResources("workflows", ns, { enabled: open && can("workflows:read", ns) });
   const runs = useRuns(ns, {}, undefined, open && can("runs:read", ns));
   const namespaces = useNamespaces();
+  // The admin token switches with a header and lists tenants in the switcher; the palette covers people.
+  const tenants = useMyTenants(open && !!me && !me.is_system_admin);
+  const switchTenant = useSwitchTenant();
 
   const go = (to: string) => {
     onOpenChange(false);
@@ -125,6 +132,34 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                     <Activity /> {n.display_name} <span className="text-xs text-faint">{n.name}</span>
                   </Command.Item>
                 ))}
+              </Command.Group>
+              {instance.reader && (
+                <Command.Group heading="Instance console" className={group}>
+                  {INSTANCE_NAV.map((i) => (
+                    <Command.Item key={i.to} className={item} value={`instance ${i.label}`} keywords={i.keywords.split(" ")} onSelect={() => go(i.to)}>
+                      <i.icon />
+                      <span className="flex-1">{i.label}</span>
+                      <ArrowRight className="opacity-40" />
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              )}
+              <Command.Group heading="Switch tenant" className={group}>
+                {(tenants.data ?? [])
+                  .filter((t) => !t.current && (t.status !== "suspended" || instance.reader))
+                  .map((t) => (
+                    <Command.Item
+                      key={t.slug}
+                      className={item}
+                      value={`tenant ${t.slug} ${t.name}`}
+                      onSelect={() => {
+                        onOpenChange(false);
+                        void switchTenant(t.slug).catch((e) => toast.error(e instanceof ApiError ? e.detail : String(e)));
+                      }}
+                    >
+                      <Building2 /> {t.name} <span className="text-xs text-faint">{t.slug}</span>
+                    </Command.Item>
+                  ))}
               </Command.Group>
             </Command.List>
           </Command>

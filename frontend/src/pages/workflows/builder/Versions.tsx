@@ -9,6 +9,7 @@ import { Badge, Button, Dialog, EmptyState, Spinner } from "@/components/ui";
 import { normalizeForDiff, toYaml } from "@/features/workflow/document";
 import type { WorkflowSpecDoc } from "@/features/workflow/types";
 import { useBuilder } from "./store";
+import { actorName } from "@/lib/actor";
 
 /** Version history with a line diff against the current editor state, and restore. */
 export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
@@ -65,7 +66,7 @@ export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
                   {i === 0 && <Badge tone="ok">latest</Badge>}
                 </div>
                 <div className="mt-0.5 truncate text-[11px] text-faint">
-                  {v.created_by ?? "unknown"} · {relTime(v.created_at)}
+                  {actorName(v.created_by)} · {relTime(v.created_at)}
                 </div>
               </button>
             ))}

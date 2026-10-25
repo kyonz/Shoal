@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { Badge, Card, CardHeader, Page, PageHeader, Skeleton } from "@/components/ui";
 import { adminKeys, useGroups, useRoles, useUsers } from "./shared";
+import { Actor } from "@/lib/actor";
 
 export default function AdminOverview() {
   const { can, me } = useAuth();
@@ -100,7 +101,7 @@ export default function AdminOverview() {
               {recent.map((e) => (
                 <div key={e.id} className="flex items-center gap-3 px-4 py-2 text-[13px]">
                   <ScrollText className="size-3.5 shrink-0 text-faint" />
-                  <span className="font-mono text-xs">{e.actor}</span>
+                  <Actor actor={e.actor} className="max-w-48" />
                   <Badge className="font-mono">{e.action}</Badge>
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">{e.target}</span>
                   <span className="text-xs text-faint">{relTime(e.created_at)}</span>
