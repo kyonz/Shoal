@@ -623,7 +623,11 @@ class Integration(Protocol):
   fires exactly once across workers.
   A trigger has a **filter** (expression over the event, e.g. "issue moved to
   column *Ready for AI*") and an **input mapping** into workflow inputs, plus
-  dedupe keys and concurrency (e.g. one run per issue).
+  dedupe keys and concurrency (e.g. one run per issue). Integrations can add
+  structured **`match`** filters on top (`trigger_filter_model` /
+  `trigger_matches`; Slack's channels, mentions, words, regex, people, threads),
+  and a **`rate_limit`** (`{max, per, key}`) caps how often a trigger fires,
+  recording the rest as `rate_limited` deliveries.
 - **Metadata** (`resources`) powers campaign target selection and UI pickers,
   e.g. `github.repository` filtered by `owner`, `topic`, `language`,
   `permission: admin`.

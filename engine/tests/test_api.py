@@ -432,12 +432,14 @@ async def test_journey_blueprints_adopt_cleanly(admin):
 
     for name, integration, config in (
         ("gh", "github", {}), ("jira", "jira", {"base_url": "https://acme.atlassian.net", "email": "bot@acme.example"}),
+        ("slack", "slack", {}),
     ):
         r = await admin.put(f"/v1/namespaces/default/connections/{name}", json={"spec": {"integration": integration, "config": config}})
         assert r.status_code == 201, r.text
     assert (await admin.put("/v1/namespaces/default/secrets/anthropic-api-key", json={"value": "k"})).status_code == 201
 
-    params = {"jira-bugfix": {"jira": "jira", "github": "gh"}, "github-uplift": {"github": "gh", "org": "acme"}}
+    params = {"jira-bugfix": {"jira": "jira", "github": "gh"}, "github-uplift": {"github": "gh", "org": "acme"},
+              "slack-bot": {"slack": "slack", "channel": "#help"}, "slack-release-check": {"slack": "slack"}}
     for blueprint in load_path(Path(__file__).parents[2] / "examples" / "blueprints"):
         doc = blueprint.to_document()
         name = doc["metadata"]["name"]

@@ -65,7 +65,10 @@ class TriggerService:
     async def integration_match(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> str | None:
         """The connection integration's structured filters (``match``); None when the event passes."""
         assert trigger.spec.connection is not None
-        ctx = await self.engine.integrations.connection(tenant_id, trigger.spec.connection)
+        try:
+            ctx = await self.engine.integrations.connection(tenant_id, trigger.spec.connection)
+        except NotFound:  # an injected or replayed event for a connection that is gone: only `match` needs it
+            return f"invalid match: connection '{trigger.spec.connection}' not found" if trigger.spec.match else None
         model = ctx.integration.trigger_filter_model
         options = None
         if model is not None:

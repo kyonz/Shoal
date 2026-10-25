@@ -154,6 +154,13 @@ optional hooks: `setup_manifest` (an app manifest shown on the connection) and
 `install_fields` + `install_url` / `complete_install` (an OAuth app install
 that stores tokens as the connection's secrets).
 
+Integrations can also give triggers structured filters: `trigger_filter_model`
+is a pydantic model for a trigger's `match:` (it becomes a form in the trigger
+editor) and `trigger_matches(ctx, event, options)` returns `None` when the event
+passes, or the reason it does not. Any trigger can also set
+`rate_limit: {max, per, key}`; events over the limit are recorded as
+`rate_limited` deliveries instead of starting runs.
+
 ## Slack
 
 Slack is built in. One Slack app per connection:
@@ -194,10 +201,12 @@ modal; `title`, `approve_label`, `reject_label` and `thread_ts` are optional.
 ```
 
 **Actions:** `slack.post_message` (text, Block Kit `blocks`, `thread_ts`, and
-`buttons` that send this run a signal), `slack.update_message`,
-`slack.post_ephemeral`, `slack.add_reaction`, `slack.request_input` (a button
-opening a form; answers arrive as a signal `{values, user}`) and
-`slack.lookup_user`. Resource: `channel`.
+`buttons` that send this run a signal), `slack.update_message`, `slack.reply`
+(answer in a message's thread), `slack.post_ephemeral`, `slack.add_reaction`,
+`slack.request_input` (a button opening a form; answers arrive as a signal
+`{values, user}`), `slack.get_conversation` (a thread or a channel's latest
+messages plus a `transcript` for an agent) and `slack.lookup_user`. Resource:
+`channel`.
 
 ```yaml
 - id: ask
@@ -214,8 +223,90 @@ opening a form; answers arrive as a signal `{values, user}`) and
   signal: {name: release}       # steps.answer.output.payload.values.version
 ```
 
+**Custom messages with hooks.** Any Block Kit message can talk back to the run
+that posted it. Add a `shoal:` key to a button, select, date picker, checkbox
+group or overflow menu (Shoal strips it and wires the element up before
+posting):
+
+- `shoal: {signal: choice}` sends this run the signal `choice` with
+  `{action_id, block_id, value, label, user, channel, message_ts}`; a `wait`
+  step with `signal: {name: choice}` resumes and later steps branch on
+  `steps.<wait>.output.payload.value`;
+- `shoal: {signal: choice, modal: {title, fields}}` opens a form first and sends
+  its values with the click;
+- `shoal: {event: true}` raises a `block_actions` event instead, so a trigger can
+  start a new run from the click;
+- `shoal: {signal: choice, after: keep}` leaves the controls in place; by
+  default they are replaced with
+  "*who* chose *what*" once someone clicks (`after_click` on the action sets it
+  for the whole message).
+
+A message-level `signal:` binds every interactive element that has no `shoal:`
+key of its own. Each click is still checked: the person must map to a Shoal
+user with `runs:signal` in the run's namespace. Blocks can be a list or a JSON
+string, and expressions like `{{ inputs.version }}` are filled in first. The
+**message builder** (Connections → a Slack connection → Message builder) lays
+out blocks with a live, clickable preview, lists the hooks, and generates the
+`post_message` and `wait` steps; `examples/blueprints/slack-release-check.yaml`
+is a worked example.
+
+```yaml
+- id: post
+  type: action
+  action: slack.post_message
+  with:
+    channel: "#releases"
+    text: "{{ inputs.service }} is ready to ship"
+    blocks:
+      - {type: section, text: {type: mrkdwn, text: "*{{ inputs.service }}* passed staging."}}
+      - type: actions
+        elements:
+          - {type: button, text: {type: plain_text, text: Go}, style: primary, value: go, shoal: {signal: release}}
+          - type: button
+            text: {type: plain_text, text: Hold}
+            style: danger
+            value: hold
+            shoal: {signal: release, modal: {title: Hold the release, fields: [{name: why, label: "Why?"}]}}
+- id: decision
+  type: wait
+  signal: {name: release}
+- id: ship
+  type: action
+  if: "{{ steps.decision.output.payload.value == 'go' }}"
+  action: slack.post_message
+  with: {channel: "#releases", text: "Shipping"}
+```
+
+**Channel bots.** A trigger on the `message` event wires a channel to a
+workflow, so the app answers whatever it is invited to. Its `match:` filters
+(all of which must hold) choose the messages: `channels`, `mentioned` (the bot
+was @-mentioned), `direct_messages`, `contains` (any), `contains_all`,
+`excludes`, `regex` (named groups land in `event.match`), `case_sensitive`,
+`users`, `exclude_users`, `groups` (Shoal groups or identities), `threads`
+(`any`, `top_level`, `replies`), `include_bots`, `has_files` and `reactions`.
+Message events carry `bot_user_id`, `command_text` (the text without the
+mention), `mentioned`, `is_dm`, `is_reply`, `reply_ts` (the thread to answer in),
+`from_bot`, `has_files` and `files`. Use `rate_limit` to keep a busy channel in
+check and `dedupe_key` against Slack's retries. The `slack-bot` blueprint reacts
+with :eyes:, reads the thread with `get_conversation`, answers with `reply` and
+asks whether the answer helped; the connection page lists every bot wired to it.
+
+```yaml
+kind: Trigger
+metadata: {name: help-bot}
+spec:
+  connection: slack
+  event: message
+  workflow: slack-answer
+  match: {channels: ["#help"], mentioned: true}
+  rate_limit: {max: 20, per: 1m, key: "{{ event.user }}"}
+  dedupe_key: "{{ event.event_id }}"
+  inputs: {channel: "{{ event.channel }}", ts: "{{ event.reply_ts }}", question: "{{ event.command_text }}"}
+```
+
 **Events** for triggers: `app_mention` (`event.command_text` is the text after
-the mention), `message` (the app's own and other bots' messages are skipped),
+the mention), `message` (housekeeping subtypes and the app's own messages are
+skipped; other bots' messages only pass `include_bots`),
 `reaction_added`, `slash_command` (`event.command`, `event.text`, `event.args`;
 the person gets a private answer naming the runs started), `block_actions` and
 `view_submission` for your own Block Kit, `shortcut` and `message_action`.

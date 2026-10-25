@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Copy, Download, KeyRound, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, Download, KeyRound, MessagesSquare, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { ApiError, rawJson } from "@/api/client";
-import { useDeleteResource, useIntegrations, usePutResource, useResource, type IntegrationCatalog } from "@/api/hooks";
+import { useDeleteResource, useIntegrations, usePutResource, useResource, useResources, type IntegrationCatalog } from "@/api/hooks";
 import { SchemaForm, humanize, unwrapNullable } from "@/components/forms/SchemaForm";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -252,6 +252,7 @@ export default function ConnectionEditor() {
             <MyCredentialCard ns={ns} connection={name} spec={existing.data!.spec as PersonalSpec} />
           )}
           {!isNew && <ConnectionSidebar ns={ns} name={name} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}
+          {!isNew && existing.data?.spec.integration === "slack" && <SlackBots ns={ns} name={name} />}
         </aside>
       </div>
     </Page>
@@ -381,6 +382,45 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
         </Card>
       )}
     </>
+  );
+}
+
+/** Triggers wired to this Slack connection: which channels run which workflows, and the message builder. */
+function SlackBots({ ns, name }: { ns: string; name: string }) {
+  const { can } = useAuth();
+  const triggers = useResources("triggers", ns, { enabled: can("triggers:read", ns) });
+  const mine = (triggers.data ?? []).filter((t) => t.spec.connection === name);
+  return (
+    <Card>
+      <CardHeader title={<span className="flex items-center gap-1.5"><MessagesSquare className="size-3.5" /> Slack bots</span>} description="Channels, mentions and commands wired to workflows." />
+      <div className="space-y-2 p-4">
+        {mine.length === 0 && <p className="text-xs text-muted">Nothing is wired yet. Add the app to a channel, then wire it to a workflow.</p>}
+        {mine.map((t) => {
+          const match = (t.spec.match ?? {}) as { channels?: string[]; mentioned?: boolean; contains?: string[]; regex?: string };
+          const where = match.channels?.length ? match.channels.join(", ") : "any channel";
+          const how = [match.mentioned ? "when mentioned" : null, match.contains?.length ? `contains ${match.contains.join(" / ")}` : null, match.regex ? `matches /${match.regex}/` : null].filter(Boolean).join(", ");
+          return (
+            <Link key={t.metadata.name} to={nsPath(ns, "triggers", t.metadata.name)} className="block rounded-lg border border-border px-3 py-2 text-xs hover:border-accent">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono font-medium">{t.metadata.name}</span>
+                <Badge tone={t.spec.enabled === false ? "neutral" : "ok"}>{String(t.spec.event)}</Badge>
+              </div>
+              <div className="mt-0.5 text-muted">{where}{how ? ` · ${how}` : ""} → {String(t.spec.workflow ?? t.spec.campaign)}</div>
+            </Link>
+          );
+        })}
+        <div className="flex flex-wrap gap-2 pt-1">
+          {can("triggers:write", ns) && (
+            <Link to={`${nsPath(ns, "triggers", "new")}?connection=${encodeURIComponent(name)}&event=message`}>
+              <Button size="sm" variant="primary">Wire a channel</Button>
+            </Link>
+          )}
+          <Link to={nsPath(ns, "slack", "builder")}>
+            <Button size="sm">Message builder</Button>
+          </Link>
+        </div>
+      </div>
+    </Card>
   );
 }
 
