@@ -640,3 +640,56 @@ async def test_an_org_wide_connection_serves_every_namespace(world, slack):
     assert [(f["namespace"], f["status"]) for f in fired["triggers"]] == [("team-a", "fired")]
     await engine.run_until_idle()
     assert (await engine.store.get_step(run.id, "ok")).output["approved"] is True
+
+
+# --------------------------------------------------------------------------- the bundled release approval blueprint
+
+
+async def adopt_release_approval(engine, tenant) -> None:
+    from shoal.blueprints import defaults
+
+    await defaults.install(engine, tenant.id, actor="test")
+    await engine.blueprints.adopt(tenant.id, "default", "slack-release-approval", {"slack": "slack", "approvers": "group:release-managers"},
+                                  actor="test")
+    group = await engine.directory.create_group(tenant.id, "release-managers")
+    await engine.directory.add_group_members(tenant.id, group.id, [(await engine.directory.find_user(tenant.id, username="dana")).id])
+
+
+async def test_release_approval_blueprint_asks_approves_and_announces(world, slack):
+    engine, tenant = world
+    await adopt_release_approval(engine, tenant)
+
+    result = await deliver(engine, tenant, slack.command("ship api", user="U_DANA"))
+    run_id = result["triggers"][0]["run_id"]
+    await engine.run_until_idle()
+    await deliver(engine, tenant, slack.click(slack.last_message("#deploys"), "shoal_input", user="U_DANA"))
+    await deliver(engine, tenant, slack.submit(slack.views[-1], {"version": "2.0.1", "notes": "Faster login"}, user="U_DANA"))
+    await engine.run_until_idle()
+    approval = slack.last_message("#deploys")
+    assert "Ship *api* 2.0.1 to production?" in approval.all_text() and "Faster login" in approval.all_text()
+    await deliver(engine, tenant, slack.click(approval, "shoal_approve", user="U_DANA"))
+    await deliver(engine, tenant, slack.submit(slack.views[-1], {"comment": "go"}, user="U_DANA"))
+    await engine.run_until_idle()
+    run = await engine.store.get_run(tenant.id, run_id)
+    assert run.status == "succeeded", run.error
+    assert run.outputs == {"approved": True, "version": "2.0.1", "by": "Dana Scully"}
+    assert slack.last_message("#deploys").text == ":rocket: api 2.0.1 approved by Dana Scully"
+
+
+async def test_release_approval_blueprint_skips_the_question_and_reports_a_rejection(world, slack):
+    engine, tenant = world
+    await adopt_release_approval(engine, tenant)
+
+    result = await deliver(engine, tenant, slack.command("ship api 3.0.0", user="U_DANA"))
+    run_id = result["triggers"][0]["run_id"]
+    await engine.run_until_idle()
+    approval = slack.last_message("#deploys")
+    assert "Ship *api* 3.0.0 to production?" in approval.all_text()  # no form: the version came with the command
+    await deliver(engine, tenant, slack.click(approval, "shoal_reject", user="U_DANA"))
+    if slack.views:  # the reject button may ask for a reason
+        await deliver(engine, tenant, slack.submit(slack.views[-1], {"comment": "freeze"}, user="U_DANA"))
+    await engine.run_until_idle()
+    run = await engine.store.get_run(tenant.id, run_id)
+    assert run.status == "succeeded", run.error
+    assert run.outputs["approved"] is False and run.outputs["version"] == "3.0.0"
+    assert slack.last_message("#deploys").text.startswith(":no_entry: api 3.0.0 not approved")

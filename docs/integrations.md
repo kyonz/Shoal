@@ -273,7 +273,7 @@ user with `runs:signal` in the run's namespace. Blocks can be a list or a JSON
 string, and expressions like `{{ inputs.version }}` are filled in first. The
 **message builder** (Connections → a Slack connection → Message builder) lays
 out blocks with a live, clickable preview, lists the hooks, and generates the
-`post_message` and `wait` steps; `examples/blueprints/slack-release-check.yaml`
+`post_message` and `wait` steps; `engine/shoal/blueprints/library/slack-release-check.yaml`
 is a worked example.
 
 ```yaml

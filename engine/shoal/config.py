@@ -61,6 +61,11 @@ class Settings(BaseSettings):
         default_factory=list,
         description="Emails that become instance admins when they sign in (bootstrap; manage the rest in the admin console).",
     )
+    default_blueprints: bool = Field(
+        True,
+        description="Put the blueprints that ship with Shoal (GitHub PR review, Jira bugfix, Slack bot and approvals, "
+        "AWS report, quality eval, ...) in every new tenant's catalogue.",
+    )
     public_url: str = Field("http://localhost:8080", description="External base URL (webhook URLs, A2A cards).")
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     static_dir: str | None = Field(None, description="Serve the built frontend from this directory.")

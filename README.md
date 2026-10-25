@@ -195,7 +195,9 @@ Or open the run in the UI to watch it live and approve it there:
 **4. Bring in agents.** Set `ANTHROPIC_API_KEY` on the server, or store a key as a secret and add a
 gateway as in [`examples/shared/gateways.yaml`](examples/shared/gateways.yaml). Then try the full journeys: [`examples/jira-bugfix`](examples/jira-bugfix) turns a Jira ticket into a
 tested pull request, and [`examples/github-uplift`](examples/github-uplift) rolls a change out to
-every repository in a GitHub org. Both are in the UI's **Blueprints** catalogue, ready to install.
+every repository in a GitHub org. Both are in the UI's **Blueprints** catalogue, ready to install, next to
+Shoal's other [bundled blueprints](docs/blueprints.md): GitHub PR review, Slack bots and release approvals,
+a weekly AWS account report and a production quality eval.
 
 ## What a workflow looks like
 
@@ -267,7 +269,7 @@ class, an entry point and a contract test), so new ones install without engine c
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
-- **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue.
+- **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue. Every tenant starts with [Shoal's own](docs/blueprints.md) for the common scenarios.
 
 ### Quality
 - **Evals** score workflows against datasets, gate CI on regressions (`shoal eval run --fail-under`) and export results to Braintrust or Langfuse.

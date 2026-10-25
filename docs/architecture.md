@@ -779,8 +779,16 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **Catalogue.** Searchable within the tenant, with categories, integration
   filters, which namespaces have adopted it, success rates and eval scores
   from real runs, and the README.
-- The two acceptance journeys ship as the first blueprints:
-  **GitHub org uplift** and **Jira bugfix with writeback**.
+- **Bundled blueprints.** Shoal ships blueprints for the common scenarios
+  (`engine/shoal/blueprints/library`, listed in [blueprints.md](blueprints.md)),
+  starting with the two acceptance journeys, **GitHub org uplift** and **Jira
+  bugfix with writeback**. They are put in every new tenant's catalogue
+  (`SHOAL_DEFAULT_BLUEPRINTS`, on by default) labelled `shoal.dev/bundled`.
+  `POST /v1/blueprints/defaults {dry_run}` (`blueprints:publish` and
+  `blueprints:feature`) adds them to an existing tenant: it creates missing ones
+  and upgrades bundled copies with an older version, keeping their status.
+  A tenant's own blueprint with the same name is never touched. Federating a
+  tenant removes them from the hub, since the member has its own catalogue. (Built.)
 
 ---
 

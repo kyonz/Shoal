@@ -83,9 +83,9 @@ spec:
 
 - [`examples/slack-approval/`](../../examples/slack-approval/): `/shoal ship api` asks for a version in a form, waits
   for a release manager's approval in `#deploys`, then announces the release.
-- [`examples/blueprints/slack-bot.yaml`](../../examples/blueprints/slack-bot.yaml): a channel bot that reacts with
+- [`engine/shoal/blueprints/library/slack-bot.yaml`](../../engine/shoal/blueprints/library/slack-bot.yaml): a channel bot that reacts with
   :eyes:, reads the thread, answers with an agent and asks whether the answer helped.
-- [`examples/blueprints/slack-release-check.yaml`](../../examples/blueprints/slack-release-check.yaml): a custom
+- [`engine/shoal/blueprints/library/slack-release-check.yaml`](../../engine/shoal/blueprints/library/slack-release-check.yaml): a custom
   message with a select menu and Go / Hold buttons, where Hold asks why in a form.
 
 ## Pages in this guide

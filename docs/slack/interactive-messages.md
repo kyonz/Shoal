@@ -146,7 +146,7 @@ Set `signal:` on the action itself to bind every control that has no `shoal:` ke
     text: "Shipping to {{ steps.env.output.payload.value }}"
 ```
 
-This is the [`slack-release-check`](../../examples/blueprints/slack-release-check.yaml) blueprint. The
+This is the [`slack-release-check`](../../engine/shoal/blueprints/library/slack-release-check.yaml) blueprint. The
 [message builder](message-builder.md) writes this kind of step for you.
 
 ### What the run receives

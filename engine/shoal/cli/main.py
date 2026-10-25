@@ -742,6 +742,23 @@ def blueprints_adopt(
         console.print(f"adoption {result['adoption']['id']} of {escape(blueprint)} v{escape(result['adoption']['blueprint_version'])}")
 
 
+@blueprints_app.command("install-defaults")
+def blueprints_install_defaults(
+    ctx: typer.Context,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be added; write nothing.")] = False,
+    output: Output = Format.table,
+) -> None:
+    """Add the blueprints that ship with Shoal to the tenant's catalogue (new tenants already have them)."""
+    with api(ctx) as client:
+        result = client.request("POST", "/v1/blueprints/defaults", json={"dry_run": dry_run})
+    if output is not Format.table:
+        emit(result, output)
+        return
+    suffix = " (dry run)" if dry_run else ""
+    for r in result:
+        console.print(f"blueprint/{escape(r['name'])} v{escape(r['version'])} {r['outcome']}{suffix}")
+
+
 # --------------------------------------------------------------------------- secrets
 
 SECRET_COLUMNS = [("NAME", lambda s: s["name"]), ("NAMESPACE", lambda s: s["namespace"]), ("UPDATED", lambda s: age(s["updated_at"]))]
