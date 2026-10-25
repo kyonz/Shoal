@@ -194,7 +194,12 @@ class BlueprintService:
     ) -> dict[str, Any]:
         blueprint = await self.blueprint(tenant_id, name, version)
         spec = blueprint.spec
-        if spec.status not in ADOPTABLE and not (spec.status == "draft" and can_adopt_drafts):
+        allowed = (
+            spec.status in ADOPTABLE
+            or (spec.status == "draft" and can_adopt_drafts)
+            or (spec.status == "deprecated" and adoption is not None)  # existing adoptions keep working
+        )
+        if not allowed:
             raise Forbidden(f"blueprint '{name}' is {spec.status} and cannot be adopted")
         if spec.namespaces and namespace not in spec.namespaces:
             raise Forbidden(f"blueprint '{name}' is not available to namespace '{namespace}'")
@@ -218,28 +223,42 @@ class BlueprintService:
                     + (f" (from adoption {owner})" if owner else "")
                     + "; adopt with a different prefix"
                 )
-            plan.append({"kind": kind, "name": resource.metadata.name, "plural": resource.plural})
+            outcome = "updated" if existing is not None and owner == adoption_id else "created"
+            plan.append({"kind": kind, "name": resource.metadata.name, "plural": resource.plural, "outcome": outcome})
+        previous = {(r["kind"], r["name"]) for r in (adoption.resources if adoption else [])}
+        dropped = previous - {(r["kind"], r["name"]) for r in plan}  # resources the new version no longer has
         if dry_run:
             return {
                 "blueprint": name,
                 "version": spec.version,
                 "namespace": namespace,
                 "resources": plan,
+                "removed": [
+                    {"kind": k, "name": n}
+                    for k, n in sorted(dropped)
+                    if await self._in_namespace(tenant_id, k, n, namespace)
+                ],
                 "dry_run": True,
             }
 
         labels = {LABEL_BLUEPRINT: name, LABEL_VERSION: spec.version, LABEL_ADOPTION: adoption_id}
-        applied = []
-        for resource, source in rendered:
-            resource.metadata.labels = {**resource.metadata.labels, **labels}
-            row, outcome = await store.apply_resource(
-                tenant_id, resource, actor=actor, namespace=namespace, source=source
-            )
-            applied.append({"kind": row.kind, "name": row.name, "outcome": outcome, "version": row.version})
+        applied: list[dict[str, Any]] = []
+        try:
+            for resource, source in rendered:
+                resource.metadata.labels = {**resource.metadata.labels, **labels}
+                row, outcome = await store.apply_resource(
+                    tenant_id, resource, actor=actor, namespace=namespace, source=source
+                )
+                applied.append({"kind": row.kind, "name": row.name, "outcome": outcome, "version": row.version})
+        except Exception:
+            # Undo what this call created, so a failed adoption leaves nothing behind that blocks a retry.
+            for done in applied:
+                if done["outcome"] == "created":
+                    await store.delete_resource(tenant_id, done["kind"], done["name"], namespace=namespace)
+            raise
 
-        previous = {(r["kind"], r["name"]) for r in (adoption.resources if adoption else [])}
-        removed = previous - {(r["kind"], r["name"]) for r in applied}
-        for kind, rname in removed:  # dropped by the new version
+        removed = dropped
+        for kind, rname in removed:
             if await self._in_namespace(tenant_id, kind, rname, namespace):
                 await store.delete_resource(tenant_id, kind, rname, namespace=namespace)
 
@@ -274,7 +293,9 @@ class BlueprintService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         adoption = await self.adoption(tenant_id, adoption_id)
-        merged = {**adoption.params, **(params or {})}
+        target = await self.blueprint(tenant_id, adoption.blueprint, version)
+        kept = {k: v for k, v in adoption.params.items() if k in target.spec.params}  # params the version dropped go
+        merged = {**kept, **(params or {})}
         return await self.adopt(
             tenant_id,
             adoption.namespace,

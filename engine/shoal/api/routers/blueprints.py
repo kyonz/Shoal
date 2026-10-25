@@ -68,7 +68,7 @@ class AdoptResult(BaseModel):
     adoption: AdoptionOut | None = Field(None, description="Absent on a dry run.")
     resources: list[AppliedResource]
     removed: list[ResourceRef] = Field(
-        default_factory=list, description="Resources the new version no longer has."
+        default_factory=list, description="Resources the new version no longer has (deleted, or to be on a dry run)."
     )
     dry_run: bool = False
 
@@ -88,7 +88,7 @@ async def _authorize_resources(ctx: Ctx, namespace: str, name: str, version: str
 
 def _result(raw: dict[str, Any]) -> AdoptResult:
     if raw.get("dry_run"):
-        return AdoptResult(resources=raw["resources"], dry_run=True)
+        return AdoptResult(resources=raw["resources"], removed=raw["removed"], dry_run=True)
     return AdoptResult(adoption=_out(raw["adoption"]), resources=raw["resources"], removed=raw["removed"])
 
 
