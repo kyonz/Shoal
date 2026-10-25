@@ -1,0 +1,716 @@
+"""Data access. Every tenant-owned query takes ``tenant_id`` explicitly.
+
+There is deliberately no API for unscoped reads of tenant data except the few
+system operations the scheduler needs (claiming runs, due timers), which return
+ids and tenant ids together.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import secrets as pysecrets
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from awm.core.errors import Conflict, NotFound
+from awm.core.ids import new_id
+from awm.core.models import RESOURCE_KINDS, ResourceBase, RunStatus, StepStatus
+from awm.store import tables as t
+from awm.store.tables import utcnow
+
+API_KEY_PREFIX = "awm"
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+class Store:
+    def __init__(self, url: str, *, echo: bool = False):
+        kwargs: dict[str, Any] = {"echo": echo}
+        if url.startswith("sqlite"):
+            kwargs["connect_args"] = {"timeout": 30}
+        else:
+            kwargs.update(pool_size=10, max_overflow=20, pool_pre_ping=True)
+        self.engine: AsyncEngine = create_async_engine(url, **kwargs)
+        self.is_sqlite = url.startswith("sqlite")
+        self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        async with self.engine.begin() as conn:
+            if self.is_sqlite:
+                await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.run_sync(t.Base.metadata.create_all)
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        async with self._sessions() as session, session.begin():
+            yield session
+
+    # ------------------------------------------------------------------ tenants
+
+    async def create_tenant(self, slug: str, name: str | None = None) -> t.Tenant:
+        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug)
+        try:
+            async with self.session() as s:
+                s.add(tenant)
+        except IntegrityError as exc:
+            raise Conflict(f"tenant '{slug}' already exists") from exc
+        return tenant
+
+    async def get_tenant(self, tenant_id: str) -> t.Tenant:
+        async with self.session() as s:
+            tenant = await s.get(t.Tenant, tenant_id)
+        if tenant is None:
+            raise NotFound(f"tenant '{tenant_id}' not found")
+        return tenant
+
+    async def get_tenant_by_slug(self, slug: str) -> t.Tenant | None:
+        async with self.session() as s:
+            return (await s.execute(select(t.Tenant).where(t.Tenant.slug == slug))).scalar_one_or_none()
+
+    async def list_tenants(self) -> Sequence[t.Tenant]:
+        async with self.session() as s:
+            return (await s.execute(select(t.Tenant).order_by(t.Tenant.created_at))).scalars().all()
+
+    # ------------------------------------------------------------------ api keys
+
+    async def create_api_key(
+        self,
+        tenant_id: str,
+        name: str,
+        scopes: list[str],
+        *,
+        expires_at: datetime | None = None,
+        created_by: str | None = None,
+    ) -> tuple[t.ApiKey, str]:
+        """Returns the stored key and the plaintext token (shown once)."""
+        prefix = pysecrets.token_hex(6)
+        secret = pysecrets.token_urlsafe(32)
+        token = f"{API_KEY_PREFIX}_{prefix}_{secret}"
+        key = t.ApiKey(
+            id=new_id("key"),
+            tenant_id=tenant_id,
+            name=name,
+            prefix=prefix,
+            hash=hash_token(token),
+            scopes=scopes,
+            expires_at=expires_at,
+            created_by=created_by,
+        )
+        async with self.session() as s:
+            s.add(key)
+        return key, token
+
+    async def authenticate_api_key(self, token: str) -> t.ApiKey | None:
+        parts = token.split("_", 2)
+        if len(parts) != 3 or parts[0] != API_KEY_PREFIX:
+            return None
+        async with self.session() as s:
+            key = (await s.execute(select(t.ApiKey).where(t.ApiKey.prefix == parts[1]))).scalar_one_or_none()
+            if key is None or not pysecrets.compare_digest(key.hash, hash_token(token)):
+                return None
+            now = utcnow()
+            if key.revoked_at or (key.expires_at and key.expires_at < now):
+                return None
+            if key.last_used_at is None or now - key.last_used_at > timedelta(minutes=1):
+                key.last_used_at = now
+            return key
+
+    async def list_api_keys(self, tenant_id: str) -> Sequence[t.ApiKey]:
+        async with self.session() as s:
+            q = select(t.ApiKey).where(t.ApiKey.tenant_id == tenant_id).order_by(t.ApiKey.created_at.desc())
+            return (await s.execute(q)).scalars().all()
+
+    async def revoke_api_key(self, tenant_id: str, key_id: str) -> None:
+        async with self.session() as s:
+            key = await s.get(t.ApiKey, key_id)
+            if key is None or key.tenant_id != tenant_id:
+                raise NotFound(f"api key '{key_id}' not found")
+            key.revoked_at = utcnow()
+
+    # ------------------------------------------------------------------ resources
+
+    async def apply_resource(
+        self, tenant_id: str, resource: ResourceBase, *, actor: str | None = None
+    ) -> tuple[t.Resource, str]:
+        """Create or update. Returns (row, 'created' | 'updated' | 'unchanged')."""
+        document = resource.to_document()
+        kind = document["kind"]
+        name = resource.metadata.name
+        async with self.session() as s:
+            row = (
+                await s.execute(
+                    select(t.Resource).where(
+                        t.Resource.tenant_id == tenant_id, t.Resource.kind == kind, t.Resource.name == name
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is not None and row.document == document:
+                return row, "unchanged"
+            if row is None:
+                row = t.Resource(
+                    id=new_id("res"),
+                    tenant_id=tenant_id,
+                    kind=kind,
+                    name=name,
+                    version=1,
+                    document=document,
+                    labels=resource.metadata.labels,
+                    updated_by=actor,
+                )
+                s.add(row)
+                outcome = "created"
+            else:
+                row.version += 1
+                row.document = document
+                row.labels = resource.metadata.labels
+                row.updated_at = utcnow()
+                row.updated_by = actor
+                outcome = "updated"
+            await s.flush()
+            s.add(
+                t.ResourceVersion(
+                    resource_id=row.id,
+                    tenant_id=tenant_id,
+                    version=row.version,
+                    document=document,
+                    created_by=actor,
+                )
+            )
+        return row, outcome
+
+    async def get_resource_row(self, tenant_id: str, kind: str, name: str) -> t.Resource:
+        async with self.session() as s:
+            row = (
+                await s.execute(
+                    select(t.Resource).where(
+                        t.Resource.tenant_id == tenant_id, t.Resource.kind == kind, t.Resource.name == name
+                    )
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            raise NotFound(f"{kind} '{name}' not found")
+        return row
+
+    async def get_resource(self, tenant_id: str, kind: str, name: str) -> ResourceBase:
+        row = await self.get_resource_row(tenant_id, kind, name)
+        return RESOURCE_KINDS[kind].model_validate(row.document)
+
+    async def find_resource(self, tenant_id: str, kind: str, name: str) -> ResourceBase | None:
+        try:
+            return await self.get_resource(tenant_id, kind, name)
+        except NotFound:
+            return None
+
+    async def list_resources(
+        self, tenant_id: str, kind: str, *, label: dict[str, str] | None = None
+    ) -> Sequence[t.Resource]:
+        async with self.session() as s:
+            q = select(t.Resource).where(t.Resource.tenant_id == tenant_id, t.Resource.kind == kind)
+            rows = (await s.execute(q.order_by(t.Resource.name))).scalars().all()
+        if label:
+            rows = [r for r in rows if all(r.labels.get(k) == v for k, v in label.items())]
+        return rows
+
+    async def list_resources_all_tenants(self, kind: str) -> Sequence[t.Resource]:
+        """System use only (scheduler): all resources of a kind with their tenant ids."""
+        async with self.session() as s:
+            return (await s.execute(select(t.Resource).where(t.Resource.kind == kind))).scalars().all()
+
+    async def resource_versions(self, tenant_id: str, kind: str, name: str) -> Sequence[t.ResourceVersion]:
+        row = await self.get_resource_row(tenant_id, kind, name)
+        async with self.session() as s:
+            q = (
+                select(t.ResourceVersion)
+                .where(t.ResourceVersion.resource_id == row.id)
+                .order_by(t.ResourceVersion.version.desc())
+            )
+            return (await s.execute(q)).scalars().all()
+
+    async def get_resource_version(self, tenant_id: str, kind: str, name: str, version: int) -> dict[str, Any]:
+        row = await self.get_resource_row(tenant_id, kind, name)
+        async with self.session() as s:
+            q = select(t.ResourceVersion).where(
+                t.ResourceVersion.resource_id == row.id, t.ResourceVersion.version == version
+            )
+            ver = (await s.execute(q)).scalar_one_or_none()
+        if ver is None:
+            raise NotFound(f"{kind} '{name}' version {version} not found")
+        return ver.document
+
+    async def delete_resource(self, tenant_id: str, kind: str, name: str) -> None:
+        row = await self.get_resource_row(tenant_id, kind, name)
+        async with self.session() as s:
+            await s.execute(delete(t.Resource).where(t.Resource.id == row.id))
+
+    # ------------------------------------------------------------------ runs
+
+    async def create_run(self, run: t.Run, steps: list[t.StepRun]) -> t.Run:
+        async with self.session() as s:
+            s.add(run)
+            await s.flush()
+            for step in steps:
+                s.add(step)
+        return run
+
+    async def get_run(self, tenant_id: str | None, run_id: str) -> t.Run:
+        async with self.session() as s:
+            run = await s.get(t.Run, run_id)
+        if run is None or (tenant_id is not None and run.tenant_id != tenant_id):
+            raise NotFound(f"run '{run_id}' not found")
+        return run
+
+    async def list_runs(
+        self,
+        tenant_id: str,
+        *,
+        workflow: str | None = None,
+        status: str | None = None,
+        campaign_id: str | None = None,
+        trigger: str | None = None,
+        parent_run_id: str | None = None,
+        limit: int = 50,
+        before: str | None = None,
+    ) -> Sequence[t.Run]:
+        q = select(t.Run).where(t.Run.tenant_id == tenant_id)
+        if workflow:
+            q = q.where(t.Run.workflow_name == workflow)
+        if status:
+            q = q.where(t.Run.status.in_(status.split(",")))
+        if campaign_id:
+            q = q.where(t.Run.campaign_id == campaign_id)
+        if trigger:
+            q = q.where(t.Run.trigger_name == trigger)
+        if parent_run_id:
+            q = q.where(t.Run.parent_run_id == parent_run_id)
+        if before:
+            q = q.where(t.Run.id < before)
+        q = q.order_by(t.Run.id.desc()).limit(limit)
+        async with self.session() as s:
+            return (await s.execute(q)).scalars().all()
+
+    async def count_runs(self, tenant_id: str, *, statuses: list[str] | None = None, **filters: Any) -> int:
+        q = select(func.count()).select_from(t.Run).where(t.Run.tenant_id == tenant_id)
+        if statuses:
+            q = q.where(t.Run.status.in_(statuses))
+        for key, value in filters.items():
+            q = q.where(getattr(t.Run, key) == value)
+        async with self.session() as s:
+            return int((await s.execute(q)).scalar_one())
+
+    async def run_stats(self, tenant_id: str, since: datetime) -> dict[str, int]:
+        q = (
+            select(t.Run.status, func.count())
+            .where(t.Run.tenant_id == tenant_id, t.Run.created_at >= since)
+            .group_by(t.Run.status)
+        )
+        async with self.session() as s:
+            return {status: int(n) for status, n in (await s.execute(q)).all()}
+
+    async def update_run(self, run_id: str, **values: Any) -> None:
+        values["updated_at"] = utcnow()
+        async with self.session() as s:
+            await s.execute(update(t.Run).where(t.Run.id == run_id).values(**values))
+
+    async def wake_run(self, run_id: str, at: datetime | None = None) -> None:
+        """Ask a worker to look at a run (no-op for finished runs)."""
+        at = at or utcnow()
+        async with self.session() as s:
+            await s.execute(
+                update(t.Run)
+                .where(
+                    t.Run.id == run_id,
+                    t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+                    or_(t.Run.next_wake_at.is_(None), t.Run.next_wake_at > at),
+                )
+                .values(next_wake_at=at)
+            )
+
+    async def claim_runs(self, worker_id: str, *, limit: int, lease: timedelta) -> list[str]:
+        """Claim runs that are due. Optimistic per-row claim works on SQLite and Postgres."""
+        now = utcnow()
+        q = (
+            select(t.Run.id)
+            .where(
+                t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+                t.Run.next_wake_at.is_not(None),
+                t.Run.next_wake_at <= now,
+                or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
+            )
+            .order_by(t.Run.next_wake_at)
+            .limit(limit * 2)
+        )
+        claimed: list[str] = []
+        async with self.session() as s:
+            if not self.is_sqlite:
+                q = q.with_for_update(skip_locked=True)
+            candidates = (await s.execute(q)).scalars().all()
+            for run_id in candidates:
+                if len(claimed) >= limit:
+                    break
+                result = await s.execute(
+                    update(t.Run)
+                    .where(
+                        t.Run.id == run_id,
+                        or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
+                    )
+                    .values(lease_owner=worker_id, lease_expires_at=now + lease)
+                )
+                if result.rowcount:
+                    claimed.append(run_id)
+        return claimed
+
+    async def extend_lease(self, run_id: str, worker_id: str, lease: timedelta) -> bool:
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.Run)
+                .where(t.Run.id == run_id, t.Run.lease_owner == worker_id)
+                .values(lease_expires_at=utcnow() + lease)
+            )
+            return bool(result.rowcount)
+
+    async def release_lease(self, run_id: str, worker_id: str) -> None:
+        async with self.session() as s:
+            await s.execute(
+                update(t.Run)
+                .where(t.Run.id == run_id, t.Run.lease_owner == worker_id)
+                .values(lease_owner=None, lease_expires_at=None)
+            )
+
+    # ------------------------------------------------------------------ steps
+
+    async def get_steps(self, run_id: str) -> list[t.StepRun]:
+        async with self.session() as s:
+            q = select(t.StepRun).where(t.StepRun.run_id == run_id)
+            return list((await s.execute(q)).scalars().all())
+
+    async def get_step(self, run_id: str, step_id: str) -> t.StepRun:
+        async with self.session() as s:
+            q = select(t.StepRun).where(t.StepRun.run_id == run_id, t.StepRun.step_id == step_id)
+            step = (await s.execute(q)).scalar_one_or_none()
+        if step is None:
+            raise NotFound(f"step '{step_id}' not found")
+        return step
+
+    async def save_step(self, step: t.StepRun) -> None:
+        step.updated_at = utcnow()
+        async with self.session() as s:
+            await s.merge(step)
+
+    # ------------------------------------------------------------------ events
+
+    async def add_event(
+        self, tenant_id: str, run_id: str, type: str, data: dict[str, Any] | None = None, step_id: str | None = None
+    ) -> t.RunEvent:
+        event = t.RunEvent(tenant_id=tenant_id, run_id=run_id, step_id=step_id, type=type, data=data or {})
+        async with self.session() as s:
+            s.add(event)
+        return event
+
+    async def list_events(
+        self, tenant_id: str, run_id: str, *, after: int = 0, limit: int = 500, step_id: str | None = None
+    ) -> Sequence[t.RunEvent]:
+        q = select(t.RunEvent).where(
+            t.RunEvent.tenant_id == tenant_id, t.RunEvent.run_id == run_id, t.RunEvent.id > after
+        )
+        if step_id:
+            q = q.where(t.RunEvent.step_id == step_id)
+        async with self.session() as s:
+            return (await s.execute(q.order_by(t.RunEvent.id).limit(limit))).scalars().all()
+
+    # ------------------------------------------------------------------ wait subscriptions
+
+    async def set_wait_keys(self, tenant_id: str, run_id: str, step_id: str, keys: list[str]) -> None:
+        async with self.session() as s:
+            await s.execute(
+                delete(t.WaitSubscription).where(
+                    t.WaitSubscription.run_id == run_id, t.WaitSubscription.step_id == step_id
+                )
+            )
+            for key in sorted(set(keys)):
+                s.add(t.WaitSubscription(tenant_id=tenant_id, key=key, run_id=run_id, step_id=step_id))
+
+    async def clear_wait_keys(self, run_id: str, step_id: str | None = None) -> None:
+        q = delete(t.WaitSubscription).where(t.WaitSubscription.run_id == run_id)
+        if step_id:
+            q = q.where(t.WaitSubscription.step_id == step_id)
+        async with self.session() as s:
+            await s.execute(q)
+
+    async def wake_by_keys(self, tenant_id: str, keys: list[str]) -> list[str]:
+        if not keys:
+            return []
+        async with self.session() as s:
+            q = select(t.WaitSubscription.run_id, t.WaitSubscription.step_id).where(
+                t.WaitSubscription.tenant_id == tenant_id, t.WaitSubscription.key.in_(keys)
+            )
+            matches = (await s.execute(q)).all()
+            now = utcnow()
+            for run_id, step_id in matches:
+                await s.execute(
+                    update(t.StepRun)
+                    .where(t.StepRun.run_id == run_id, t.StepRun.step_id == step_id)
+                    .values(wake_at=now)
+                )
+        run_ids = sorted({m[0] for m in matches})
+        for run_id in run_ids:
+            await self.wake_run(run_id)
+        return run_ids
+
+    # ------------------------------------------------------------------ webhooks & triggers
+
+    async def webhook_for_connection(self, tenant_id: str, connection_name: str) -> t.WebhookEndpoint:
+        async with self.session() as s:
+            q = select(t.WebhookEndpoint).where(
+                t.WebhookEndpoint.tenant_id == tenant_id, t.WebhookEndpoint.connection_name == connection_name
+            )
+            endpoint = (await s.execute(q)).scalar_one_or_none()
+            if endpoint is None:
+                endpoint = t.WebhookEndpoint(
+                    id=f"wh_{pysecrets.token_urlsafe(18)}", tenant_id=tenant_id, connection_name=connection_name
+                )
+                s.add(endpoint)
+            return endpoint
+
+    async def resolve_webhook(self, webhook_id: str) -> t.WebhookEndpoint | None:
+        async with self.session() as s:
+            endpoint = await s.get(t.WebhookEndpoint, webhook_id)
+            if endpoint is not None:
+                endpoint.last_received_at = utcnow()
+            return endpoint
+
+    async def record_delivery(self, delivery: t.TriggerDelivery) -> bool:
+        """Insert a delivery; returns False when the dedupe key was already seen."""
+        try:
+            async with self.session() as s:
+                s.add(delivery)
+            return True
+        except IntegrityError:
+            return False
+
+    async def update_delivery(self, delivery_id: str, **values: Any) -> None:
+        async with self.session() as s:
+            await s.execute(update(t.TriggerDelivery).where(t.TriggerDelivery.id == delivery_id).values(**values))
+
+    async def list_deliveries(self, tenant_id: str, trigger_name: str, limit: int = 50) -> Sequence[t.TriggerDelivery]:
+        q = (
+            select(t.TriggerDelivery)
+            .where(t.TriggerDelivery.tenant_id == tenant_id, t.TriggerDelivery.trigger_name == trigger_name)
+            .order_by(t.TriggerDelivery.created_at.desc())
+            .limit(limit)
+        )
+        async with self.session() as s:
+            return (await s.execute(q)).scalars().all()
+
+    async def get_trigger_state(self, tenant_id: str, trigger_name: str) -> t.TriggerState:
+        async with self.session() as s:
+            q = select(t.TriggerState).where(
+                t.TriggerState.tenant_id == tenant_id, t.TriggerState.trigger_name == trigger_name
+            )
+            state = (await s.execute(q)).scalar_one_or_none()
+            if state is None:
+                state = t.TriggerState(id=new_id("trs"), tenant_id=tenant_id, trigger_name=trigger_name)
+                s.add(state)
+            return state
+
+    async def save_trigger_state(self, state: t.TriggerState) -> None:
+        async with self.session() as s:
+            await s.merge(state)
+
+    async def claim_trigger_tick(self, state_id: str, expected_next: datetime | None, new_next: datetime) -> bool:
+        """Advance a schedule exactly once across workers (compare-and-set on next_fire_at)."""
+        cond = t.TriggerState.next_fire_at.is_(None) if expected_next is None else (
+            t.TriggerState.next_fire_at == expected_next
+        )
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.TriggerState)
+                .where(t.TriggerState.id == state_id, cond)
+                .values(next_fire_at=new_next, last_fired_at=utcnow(), fire_count=t.TriggerState.fire_count + 1)
+            )
+            return bool(result.rowcount)
+
+    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None) -> None:
+        async with self.session() as s:
+            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(next_fire_at=next_fire_at))
+
+    # ------------------------------------------------------------------ campaigns
+
+    async def create_campaign(self, row: t.CampaignRow) -> t.CampaignRow:
+        async with self.session() as s:
+            s.add(row)
+        return row
+
+    async def get_campaign(self, tenant_id: str | None, campaign_id: str) -> t.CampaignRow:
+        async with self.session() as s:
+            row = await s.get(t.CampaignRow, campaign_id)
+        if row is None or (tenant_id is not None and row.tenant_id != tenant_id):
+            raise NotFound(f"campaign '{campaign_id}' not found")
+        return row
+
+    async def list_campaigns(self, tenant_id: str, status: str | None = None) -> Sequence[t.CampaignRow]:
+        q = select(t.CampaignRow).where(t.CampaignRow.tenant_id == tenant_id)
+        if status:
+            q = q.where(t.CampaignRow.status == status)
+        async with self.session() as s:
+            return (await s.execute(q.order_by(t.CampaignRow.created_at.desc()))).scalars().all()
+
+    async def update_campaign(self, campaign_id: str, **values: Any) -> None:
+        async with self.session() as s:
+            await s.execute(update(t.CampaignRow).where(t.CampaignRow.id == campaign_id).values(**values))
+
+    async def due_campaigns(self, limit: int = 50) -> Sequence[t.CampaignRow]:
+        now = utcnow()
+        q = (
+            select(t.CampaignRow)
+            .where(
+                t.CampaignRow.status == "running",
+                or_(t.CampaignRow.next_tick_at.is_(None), t.CampaignRow.next_tick_at <= now),
+                or_(t.CampaignRow.lease_expires_at.is_(None), t.CampaignRow.lease_expires_at < now),
+            )
+            .limit(limit)
+        )
+        async with self.session() as s:
+            return (await s.execute(q)).scalars().all()
+
+    async def claim_campaign(self, campaign_id: str, lease: timedelta) -> bool:
+        now = utcnow()
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.CampaignRow)
+                .where(
+                    t.CampaignRow.id == campaign_id,
+                    or_(t.CampaignRow.lease_expires_at.is_(None), t.CampaignRow.lease_expires_at < now),
+                )
+                .values(lease_expires_at=now + lease)
+            )
+            return bool(result.rowcount)
+
+    async def add_targets(self, targets: list[t.CampaignTarget]) -> int:
+        added = 0
+        for target in targets:
+            try:
+                async with self.session() as s:
+                    s.add(target)
+                added += 1
+            except IntegrityError:
+                continue
+        return added
+
+    async def list_targets(
+        self, tenant_id: str, campaign_id: str, *, status: str | None = None, limit: int = 1000, offset: int = 0
+    ) -> Sequence[t.CampaignTarget]:
+        q = select(t.CampaignTarget).where(
+            t.CampaignTarget.tenant_id == tenant_id, t.CampaignTarget.campaign_id == campaign_id
+        )
+        if status:
+            q = q.where(t.CampaignTarget.status.in_(status.split(",")))
+        async with self.session() as s:
+            return (await s.execute(q.order_by(t.CampaignTarget.key).offset(offset).limit(limit))).scalars().all()
+
+    async def target_counts(self, campaign_id: str) -> dict[str, int]:
+        q = (
+            select(t.CampaignTarget.status, func.count())
+            .where(t.CampaignTarget.campaign_id == campaign_id)
+            .group_by(t.CampaignTarget.status)
+        )
+        async with self.session() as s:
+            return {status: int(n) for status, n in (await s.execute(q)).all()}
+
+    async def campaign_cost(self, campaign_id: str) -> float:
+        q = select(func.coalesce(func.sum(t.CampaignTarget.cost_usd), 0.0)).where(
+            t.CampaignTarget.campaign_id == campaign_id
+        )
+        async with self.session() as s:
+            return float((await s.execute(q)).scalar_one())
+
+    async def runs_started_since(self, campaign_id: str, since: datetime) -> int:
+        q = select(func.count()).select_from(t.CampaignTarget).where(
+            t.CampaignTarget.campaign_id == campaign_id, t.CampaignTarget.started_at >= since
+        )
+        async with self.session() as s:
+            return int((await s.execute(q)).scalar_one())
+
+    async def update_target(self, target_id: str, **values: Any) -> None:
+        values["updated_at"] = utcnow()
+        async with self.session() as s:
+            await s.execute(update(t.CampaignTarget).where(t.CampaignTarget.id == target_id).values(**values))
+
+    async def reset_targets(self, campaign_id: str, statuses: list[str]) -> int:
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.CampaignTarget)
+                .where(and_(t.CampaignTarget.campaign_id == campaign_id, t.CampaignTarget.status.in_(statuses)))
+                .values(status="pending", run_id=None, result=None, updated_at=utcnow())
+            )
+            return int(result.rowcount or 0)
+
+    # ------------------------------------------------------------------ secrets
+
+    async def put_secret(self, tenant_id: str, name: str, ciphertext: str) -> None:
+        async with self.session() as s:
+            q = select(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.name == name)
+            row = (await s.execute(q)).scalar_one_or_none()
+            if row is None:
+                s.add(t.Secret(id=new_id("sec"), tenant_id=tenant_id, name=name, ciphertext=ciphertext))
+            else:
+                row.ciphertext = ciphertext
+                row.updated_at = utcnow()
+
+    async def get_secret(self, tenant_id: str, name: str) -> str | None:
+        async with self.session() as s:
+            q = select(t.Secret.ciphertext).where(t.Secret.tenant_id == tenant_id, t.Secret.name == name)
+            return (await s.execute(q)).scalar_one_or_none()
+
+    async def list_secrets(self, tenant_id: str) -> Sequence[t.Secret]:
+        async with self.session() as s:
+            q = select(t.Secret).where(t.Secret.tenant_id == tenant_id).order_by(t.Secret.name)
+            return (await s.execute(q)).scalars().all()
+
+    async def delete_secret(self, tenant_id: str, name: str) -> None:
+        async with self.session() as s:
+            result = await s.execute(delete(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.name == name))
+            if not result.rowcount:
+                raise NotFound(f"secret '{name}' not found")
+
+    # ------------------------------------------------------------------ audit
+
+    async def audit(
+        self, tenant_id: str | None, actor: str | None, action: str, target: str | None = None, **data: Any
+    ) -> None:
+        async with self.session() as s:
+            s.add(t.AuditEntry(tenant_id=tenant_id, actor=actor, action=action, target=target, data=data))
+
+    async def list_audit(self, tenant_id: str, limit: int = 100) -> Sequence[t.AuditEntry]:
+        q = (
+            select(t.AuditEntry)
+            .where(t.AuditEntry.tenant_id == tenant_id)
+            .order_by(t.AuditEntry.id.desc())
+            .limit(limit)
+        )
+        async with self.session() as s:
+            return (await s.execute(q)).scalars().all()
+
+
+def new_step_row(tenant_id: str, run_id: str, step_id: str, step_type: str) -> t.StepRun:
+    return t.StepRun(
+        id=new_id("stp"),
+        tenant_id=tenant_id,
+        run_id=run_id,
+        step_id=step_id,
+        type=step_type,
+        status=StepStatus.pending,
+        attempt=0,
+        state={},
+        usage={},
+    )

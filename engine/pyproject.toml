@@ -60,6 +60,7 @@ scripted = "awm.agents.providers.scripted:ScriptedProvider"
 [project.entry-points."awm.agent_runtimes"]
 tool-loop = "awm.agents.tool_loop:ToolLoopRuntime"
 cli = "awm.agents.cli_runtime:CliRuntime"
+a2a = "awm.agents.a2a_runtime:A2ARuntime"
 
 [project.entry-points."awm.secrets"]
 env = "awm.secrets.providers:EnvSecretProvider"
