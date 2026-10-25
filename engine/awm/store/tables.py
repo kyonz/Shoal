@@ -61,6 +61,125 @@ class Tenant(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class Namespace(Base):
+    __tablename__ = "namespaces"
+    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(63))
+    display_name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class User(Base):
+    """A human (OIDC / SCIM) or a service account (owns API keys for automation)."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "username"),
+        Index("ix_users_subject", "tenant_id", "oidc_issuer", "oidc_subject"),
+    )
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="user")  # user | service
+    username: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(String(320))
+    display_name: Mapped[str] = mapped_column(String(200))
+    external_id: Mapped[str | None] = mapped_column(String(200), doc="SCIM externalId from the IdP.")
+    oidc_issuer: Mapped[str | None] = mapped_column(String(500))
+    oidc_subject: Mapped[str | None] = mapped_column(String(200))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    attributes: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column()
+
+
+class Group(Base):
+    __tablename__ = "groups"
+    __table_args__ = (UniqueConstraint("tenant_id", "display_name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    source: Mapped[str] = mapped_column(String(20), default="local")  # local | scim | oidc
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+    __table_args__ = (UniqueConstraint("group_id", "user_id"),)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    group_id: Mapped[str] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+
+class Role(Base):
+    """A custom role. Built-in roles live in code (awm.auth.permissions)."""
+
+    __tablename__ = "roles"
+    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(63))
+    description: Mapped[str | None] = mapped_column(Text)
+    permissions: Mapped[list[Any]] = mapped_column(default=list)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class RoleBinding(Base):
+    """Grants a role to a user or group, tenant-wide (namespace NULL) or in one namespace."""
+
+    __tablename__ = "role_bindings"
+    __table_args__ = (UniqueConstraint("tenant_id", "role", "subject_kind", "subject_id", "namespace"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(63))
+    subject_kind: Mapped[str] = mapped_column(String(20))  # user | group
+    subject_id: Mapped[str] = mapped_column(String(40), index=True)
+    namespace: Mapped[str | None] = mapped_column(String(63), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OIDCProvider(Base):
+    __tablename__ = "oidc_providers"
+    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(63))
+    display_name: Mapped[str] = mapped_column(String(200))
+    issuer: Mapped[str] = mapped_column(String(500))
+    client_id: Mapped[str] = mapped_column(String(300))
+    client_secret: Mapped[str | None] = mapped_column(Text, doc="Encrypted with the secrets cipher.")
+    scopes: Mapped[list[Any]] = mapped_column(default=lambda: ["openid", "email", "profile"])
+    groups_claim: Mapped[str | None] = mapped_column(String(100))
+    allowed_domains: Mapped[list[Any]] = mapped_column(default=list)
+    auto_provision: Mapped[bool] = mapped_column(Boolean, default=True)
+    default_role: Mapped[str | None] = mapped_column(String(63))
+    default_namespace: Mapped[str | None] = mapped_column(String(63))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class LoginState(Base):
+    """Pending OIDC authorization requests (state, nonce, PKCE verifier)."""
+
+    __tablename__ = "login_states"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # the `state` parameter
+    tenant_id: Mapped[str] = mapped_column(String(40))
+    provider: Mapped[str] = mapped_column(String(63))
+    nonce: Mapped[str] = mapped_column(String(64))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    redirect_to: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -68,7 +187,9 @@ class ApiKey(Base):
     name: Mapped[str] = mapped_column(String(200))
     prefix: Mapped[str] = mapped_column(String(32), unique=True)
     hash: Mapped[str] = mapped_column(String(128))
-    scopes: Mapped[list[Any]] = mapped_column(default=list)
+    scopes: Mapped[list[Any]] = mapped_column(default=list, doc="Permission patterns the key is limited to.")
+    owner_id: Mapped[str | None] = mapped_column(String(40), index=True, doc="User or service account the key acts as.")
+    namespaces: Mapped[list[Any]] = mapped_column(default=list, doc="Namespaces the key is limited to (empty: all).")
     created_by: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     expires_at: Mapped[datetime | None] = mapped_column()
@@ -80,9 +201,10 @@ class Resource(Base):
     """Current version of a declarative resource (Workflow, Agent, ...)."""
 
     __tablename__ = "resources"
-    __table_args__ = (UniqueConstraint("tenant_id", "kind", "name"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "kind", "name"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
     kind: Mapped[str] = mapped_column(String(40))
     name: Mapped[str] = mapped_column(String(63))
     version: Mapped[int] = mapped_column(Integer, default=1)
@@ -113,6 +235,7 @@ class Run(Base):
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default", index=True)
     workflow_name: Mapped[str] = mapped_column(String(63), index=True)
     workflow_version: Mapped[int] = mapped_column(Integer)
     workflow: Mapped[dict[str, Any]] = mapped_column(doc="Snapshot of the workflow spec for this run.")
@@ -186,9 +309,10 @@ class WaitSubscription(Base):
 
 class WebhookEndpoint(Base):
     __tablename__ = "webhook_endpoints"
-    __table_args__ = (UniqueConstraint("tenant_id", "connection_name"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "connection_name"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
     connection_name: Mapped[str] = mapped_column(String(63))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     last_received_at: Mapped[datetime | None] = mapped_column()
@@ -196,9 +320,10 @@ class WebhookEndpoint(Base):
 
 class TriggerState(Base):
     __tablename__ = "trigger_state"
-    __table_args__ = (UniqueConstraint("tenant_id", "trigger_name"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "trigger_name"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
     trigger_name: Mapped[str] = mapped_column(String(63))
     next_fire_at: Mapped[datetime | None] = mapped_column(index=True)
     last_fired_at: Mapped[datetime | None] = mapped_column()
@@ -209,9 +334,10 @@ class TriggerState(Base):
 
 class TriggerDelivery(Base):
     __tablename__ = "trigger_deliveries"
-    __table_args__ = (UniqueConstraint("tenant_id", "trigger_name", "dedupe_key"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "trigger_name", "dedupe_key"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
     trigger_name: Mapped[str] = mapped_column(String(63), index=True)
     dedupe_key: Mapped[str | None] = mapped_column(String(500))
     event_type: Mapped[str] = mapped_column(String(100))
@@ -226,6 +352,7 @@ class CampaignRow(Base):
     __table_args__ = (Index("ix_campaign_status", "status"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default", index=True)
     name: Mapped[str] = mapped_column(String(63))
     spec: Mapped[dict[str, Any]] = mapped_column()
     status: Mapped[str] = mapped_column(String(20), default="draft")
@@ -260,9 +387,10 @@ class CampaignTarget(Base):
 
 class Secret(Base):
     __tablename__ = "secrets"
-    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "name"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
     name: Mapped[str] = mapped_column(String(200))
     ciphertext: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)

@@ -11,6 +11,7 @@ from awm.core.errors import Conflict, InvalidRequest
 from awm.core.expressions import render
 from awm.core.ids import new_id
 from awm.core.models import Campaign, CampaignSpec, CampaignStatus, RunStatus, TargetStatus
+from awm.core.scope import current_namespace, use_namespace
 from awm.store import tables as t
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ class CampaignService:
         row = t.CampaignRow(
             id=new_id("cmp"),
             tenant_id=tenant_id,
+            namespace=current_namespace(),
             name=name,
             spec=spec.model_dump(mode="json", by_alias=True, exclude_none=True),
             status=CampaignStatus.draft,
@@ -169,7 +171,8 @@ class CampaignService:
         for row in await self.store.due_campaigns():
             if await self.store.claim_campaign(row.id, timedelta(seconds=60)):
                 try:
-                    await self.tick(row)
+                    with use_namespace(row.namespace):
+                        await self.tick(row)
                     ticked += 1
                 except Exception:
                     log.exception("campaign %s tick failed", row.id)

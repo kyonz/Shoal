@@ -18,9 +18,16 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from awm.core.errors import Conflict, NotFound
+from awm.core.errors import Conflict, InvalidRequest, NotFound
 from awm.core.ids import new_id
 from awm.core.models import RESOURCE_KINDS, ResourceBase, RunStatus, StepStatus
+from awm.core.scope import (
+    DEFAULT_NAMESPACE,
+    NAMESPACE_PATTERN,
+    SHARED_NAMESPACE,
+    current_namespace,
+    resolve_namespace,
+)
 from awm.store import tables as t
 from awm.store.tables import utcnow
 
@@ -65,6 +72,10 @@ class Store:
                 s.add(tenant)
         except IntegrityError as exc:
             raise Conflict(f"tenant '{slug}' already exists") from exc
+        await self.ensure_namespace(tenant.id, DEFAULT_NAMESPACE, display_name="Default")
+        await self.ensure_namespace(
+            tenant.id, SHARED_NAMESPACE, display_name="Shared", description="Resources every namespace in the tenant can use."
+        )
         return tenant
 
     async def get_tenant(self, tenant_id: str) -> t.Tenant:
@@ -92,6 +103,8 @@ class Store:
         *,
         expires_at: datetime | None = None,
         created_by: str | None = None,
+        owner_id: str | None = None,
+        namespaces: list[str] | None = None,
     ) -> tuple[t.ApiKey, str]:
         """Returns the stored key and the plaintext token (shown once)."""
         prefix = pysecrets.token_hex(6)
@@ -106,6 +119,8 @@ class Store:
             scopes=scopes,
             expires_at=expires_at,
             created_by=created_by,
+            owner_id=owner_id,
+            namespaces=namespaces or [],
         )
         async with self.session() as s:
             s.add(key)
@@ -138,20 +153,79 @@ class Store:
                 raise NotFound(f"api key '{key_id}' not found")
             key.revoked_at = utcnow()
 
+    # ------------------------------------------------------------------ namespaces
+
+    async def ensure_namespace(
+        self, tenant_id: str, name: str, *, display_name: str | None = None, description: str | None = None, actor: str | None = None
+    ) -> t.Namespace:
+        if not NAMESPACE_PATTERN.match(name):
+            raise InvalidRequest(f"invalid namespace name '{name}'")
+        async with self.session() as s:
+            q = select(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name)
+            row = (await s.execute(q)).scalar_one_or_none()
+            if row is None:
+                row = t.Namespace(
+                    id=new_id("ns"), tenant_id=tenant_id, name=name, display_name=display_name or name,
+                    description=description, created_by=actor,
+                )
+                s.add(row)
+            return row
+
+    async def get_namespace(self, tenant_id: str, name: str) -> t.Namespace:
+        async with self.session() as s:
+            q = select(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name)
+            row = (await s.execute(q)).scalar_one_or_none()
+        if row is None:
+            raise NotFound(f"namespace '{name}' not found")
+        return row
+
+    async def list_namespaces(self, tenant_id: str) -> Sequence[t.Namespace]:
+        async with self.session() as s:
+            q = select(t.Namespace).where(t.Namespace.tenant_id == tenant_id).order_by(t.Namespace.name)
+            return (await s.execute(q)).scalars().all()
+
+    async def update_namespace(self, tenant_id: str, name: str, **values: Any) -> t.Namespace:
+        row = await self.get_namespace(tenant_id, name)
+        async with self.session() as s:
+            await s.execute(update(t.Namespace).where(t.Namespace.id == row.id).values(**values))
+        return await self.get_namespace(tenant_id, name)
+
+    async def delete_namespace(self, tenant_id: str, name: str) -> None:
+        if name in (DEFAULT_NAMESPACE, SHARED_NAMESPACE):
+            raise InvalidRequest(f"the '{name}' namespace cannot be deleted")
+        async with self.session() as s:
+            count = (
+                await s.execute(
+                    select(func.count()).select_from(t.Resource).where(t.Resource.tenant_id == tenant_id, t.Resource.namespace == name)
+                )
+            ).scalar_one()
+            if count:
+                raise Conflict(f"namespace '{name}' still contains {count} resource(s)")
+            await s.execute(delete(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name))
+
     # ------------------------------------------------------------------ resources
 
     async def apply_resource(
-        self, tenant_id: str, resource: ResourceBase, *, actor: str | None = None
+        self, tenant_id: str, resource: ResourceBase, *, actor: str | None = None, namespace: str | None = None
     ) -> tuple[t.Resource, str]:
-        """Create or update. Returns (row, 'created' | 'updated' | 'unchanged')."""
+        """Create or update. Returns (row, 'created' | 'updated' | 'unchanged').
+
+        The namespace is ``metadata.namespace``, else ``namespace``, else the
+        current one; it is stored as a column, not in the document.
+        """
         document = resource.to_document()
         kind = document["kind"]
         name = resource.metadata.name
+        ns = resolve_namespace(document["metadata"].pop("namespace", None) or namespace, kind)
+        await self.ensure_namespace(tenant_id, ns)
         async with self.session() as s:
             row = (
                 await s.execute(
                     select(t.Resource).where(
-                        t.Resource.tenant_id == tenant_id, t.Resource.kind == kind, t.Resource.name == name
+                        t.Resource.tenant_id == tenant_id,
+                        t.Resource.namespace == ns,
+                        t.Resource.kind == kind,
+                        t.Resource.name == name,
                     )
                 )
             ).scalar_one_or_none()
@@ -161,6 +235,7 @@ class Store:
                 row = t.Resource(
                     id=new_id("res"),
                     tenant_id=tenant_id,
+                    namespace=ns,
                     kind=kind,
                     name=name,
                     version=1,
@@ -189,46 +264,66 @@ class Store:
             )
         return row, outcome
 
-    async def get_resource_row(self, tenant_id: str, kind: str, name: str) -> t.Resource:
+    async def _resource_row(self, tenant_id: str, namespace: str, kind: str, name: str) -> t.Resource | None:
         async with self.session() as s:
-            row = (
+            return (
                 await s.execute(
                     select(t.Resource).where(
-                        t.Resource.tenant_id == tenant_id, t.Resource.kind == kind, t.Resource.name == name
+                        t.Resource.tenant_id == tenant_id,
+                        t.Resource.namespace == namespace,
+                        t.Resource.kind == kind,
+                        t.Resource.name == name,
                     )
                 )
             ).scalar_one_or_none()
+
+    async def get_resource_row(
+        self, tenant_id: str, kind: str, name: str, *, namespace: str | None = None, fallback: bool = True
+    ) -> t.Resource:
+        """Look up in the namespace, then (``fallback``) in the tenant's shared namespace."""
+        ns = resolve_namespace(namespace, kind)
+        row = await self._resource_row(tenant_id, ns, kind, name)
+        if row is None and fallback and ns != SHARED_NAMESPACE:
+            row = await self._resource_row(tenant_id, SHARED_NAMESPACE, kind, name)
         if row is None:
             raise NotFound(f"{kind} '{name}' not found")
         return row
 
-    async def get_resource(self, tenant_id: str, kind: str, name: str) -> ResourceBase:
-        row = await self.get_resource_row(tenant_id, kind, name)
+    async def get_resource(self, tenant_id: str, kind: str, name: str, *, namespace: str | None = None) -> ResourceBase:
+        row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace)
         return RESOURCE_KINDS[kind].model_validate(row.document)
 
-    async def find_resource(self, tenant_id: str, kind: str, name: str) -> ResourceBase | None:
+    async def find_resource(self, tenant_id: str, kind: str, name: str, *, namespace: str | None = None) -> ResourceBase | None:
         try:
-            return await self.get_resource(tenant_id, kind, name)
+            return await self.get_resource(tenant_id, kind, name, namespace=namespace)
         except NotFound:
             return None
 
     async def list_resources(
-        self, tenant_id: str, kind: str, *, label: dict[str, str] | None = None
+        self,
+        tenant_id: str,
+        kind: str,
+        *,
+        label: dict[str, str] | None = None,
+        namespace: str | None = None,
+        all_namespaces: bool = False,
     ) -> Sequence[t.Resource]:
         async with self.session() as s:
             q = select(t.Resource).where(t.Resource.tenant_id == tenant_id, t.Resource.kind == kind)
-            rows = (await s.execute(q.order_by(t.Resource.name))).scalars().all()
+            if not all_namespaces:
+                q = q.where(t.Resource.namespace == resolve_namespace(namespace, kind))
+            rows = (await s.execute(q.order_by(t.Resource.namespace, t.Resource.name))).scalars().all()
         if label:
             rows = [r for r in rows if all(r.labels.get(k) == v for k, v in label.items())]
         return rows
 
     async def list_resources_all_tenants(self, kind: str) -> Sequence[t.Resource]:
-        """System use only (scheduler): all resources of a kind with their tenant ids."""
+        """System use only (scheduler): all resources of a kind with their tenant ids and namespaces."""
         async with self.session() as s:
             return (await s.execute(select(t.Resource).where(t.Resource.kind == kind))).scalars().all()
 
-    async def resource_versions(self, tenant_id: str, kind: str, name: str) -> Sequence[t.ResourceVersion]:
-        row = await self.get_resource_row(tenant_id, kind, name)
+    async def resource_versions(self, tenant_id: str, kind: str, name: str, *, namespace: str | None = None) -> Sequence[t.ResourceVersion]:
+        row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace, fallback=False)
         async with self.session() as s:
             q = (
                 select(t.ResourceVersion)
@@ -237,8 +332,10 @@ class Store:
             )
             return (await s.execute(q)).scalars().all()
 
-    async def get_resource_version(self, tenant_id: str, kind: str, name: str, version: int) -> dict[str, Any]:
-        row = await self.get_resource_row(tenant_id, kind, name)
+    async def get_resource_version(
+        self, tenant_id: str, kind: str, name: str, version: int, *, namespace: str | None = None
+    ) -> dict[str, Any]:
+        row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace)
         async with self.session() as s:
             q = select(t.ResourceVersion).where(
                 t.ResourceVersion.resource_id == row.id, t.ResourceVersion.version == version
@@ -248,8 +345,8 @@ class Store:
             raise NotFound(f"{kind} '{name}' version {version} not found")
         return ver.document
 
-    async def delete_resource(self, tenant_id: str, kind: str, name: str) -> None:
-        row = await self.get_resource_row(tenant_id, kind, name)
+    async def delete_resource(self, tenant_id: str, kind: str, name: str, *, namespace: str | None = None) -> None:
+        row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace, fallback=False)
         async with self.session() as s:
             await s.execute(delete(t.Resource).where(t.Resource.id == row.id))
 
@@ -279,10 +376,13 @@ class Store:
         campaign_id: str | None = None,
         trigger: str | None = None,
         parent_run_id: str | None = None,
+        namespace: str | None = None,
         limit: int = 50,
         before: str | None = None,
     ) -> Sequence[t.Run]:
         q = select(t.Run).where(t.Run.tenant_id == tenant_id)
+        if namespace:
+            q = q.where(t.Run.namespace == namespace)
         if workflow:
             q = q.where(t.Run.workflow_name == workflow)
         if status:
@@ -469,15 +569,20 @@ class Store:
 
     # ------------------------------------------------------------------ webhooks & triggers
 
-    async def webhook_for_connection(self, tenant_id: str, connection_name: str) -> t.WebhookEndpoint:
+    async def webhook_for_connection(
+        self, tenant_id: str, connection_name: str, *, namespace: str | None = None
+    ) -> t.WebhookEndpoint:
+        ns = namespace or current_namespace()
         async with self.session() as s:
             q = select(t.WebhookEndpoint).where(
-                t.WebhookEndpoint.tenant_id == tenant_id, t.WebhookEndpoint.connection_name == connection_name
+                t.WebhookEndpoint.tenant_id == tenant_id,
+                t.WebhookEndpoint.namespace == ns,
+                t.WebhookEndpoint.connection_name == connection_name,
             )
             endpoint = (await s.execute(q)).scalar_one_or_none()
             if endpoint is None:
                 endpoint = t.WebhookEndpoint(
-                    id=f"wh_{pysecrets.token_urlsafe(18)}", tenant_id=tenant_id, connection_name=connection_name
+                    id=f"wh_{pysecrets.token_urlsafe(18)}", tenant_id=tenant_id, namespace=ns, connection_name=connection_name
                 )
                 s.add(endpoint)
             return endpoint
@@ -502,24 +607,33 @@ class Store:
         async with self.session() as s:
             await s.execute(update(t.TriggerDelivery).where(t.TriggerDelivery.id == delivery_id).values(**values))
 
-    async def list_deliveries(self, tenant_id: str, trigger_name: str, limit: int = 50) -> Sequence[t.TriggerDelivery]:
+    async def list_deliveries(
+        self, tenant_id: str, trigger_name: str, limit: int = 50, *, namespace: str | None = None
+    ) -> Sequence[t.TriggerDelivery]:
         q = (
             select(t.TriggerDelivery)
-            .where(t.TriggerDelivery.tenant_id == tenant_id, t.TriggerDelivery.trigger_name == trigger_name)
+            .where(
+                t.TriggerDelivery.tenant_id == tenant_id,
+                t.TriggerDelivery.namespace == (namespace or current_namespace()),
+                t.TriggerDelivery.trigger_name == trigger_name,
+            )
             .order_by(t.TriggerDelivery.created_at.desc())
             .limit(limit)
         )
         async with self.session() as s:
             return (await s.execute(q)).scalars().all()
 
-    async def get_trigger_state(self, tenant_id: str, trigger_name: str) -> t.TriggerState:
+    async def get_trigger_state(self, tenant_id: str, trigger_name: str, *, namespace: str | None = None) -> t.TriggerState:
+        ns = namespace or current_namespace()
         async with self.session() as s:
             q = select(t.TriggerState).where(
-                t.TriggerState.tenant_id == tenant_id, t.TriggerState.trigger_name == trigger_name
+                t.TriggerState.tenant_id == tenant_id,
+                t.TriggerState.namespace == ns,
+                t.TriggerState.trigger_name == trigger_name,
             )
             state = (await s.execute(q)).scalar_one_or_none()
             if state is None:
-                state = t.TriggerState(id=new_id("trs"), tenant_id=tenant_id, trigger_name=trigger_name)
+                state = t.TriggerState(id=new_id("trs"), tenant_id=tenant_id, namespace=ns, trigger_name=trigger_name)
                 s.add(state)
             return state
 
@@ -558,8 +672,12 @@ class Store:
             raise NotFound(f"campaign '{campaign_id}' not found")
         return row
 
-    async def list_campaigns(self, tenant_id: str, status: str | None = None) -> Sequence[t.CampaignRow]:
+    async def list_campaigns(
+        self, tenant_id: str, status: str | None = None, *, namespace: str | None = None
+    ) -> Sequence[t.CampaignRow]:
         q = select(t.CampaignRow).where(t.CampaignRow.tenant_id == tenant_id)
+        if namespace:
+            q = q.where(t.CampaignRow.namespace == namespace)
         if status:
             q = q.where(t.CampaignRow.status == status)
         async with self.session() as s:
@@ -656,30 +774,37 @@ class Store:
             return int(result.rowcount or 0)
 
     # ------------------------------------------------------------------ secrets
+    # Secrets never fall back to the shared namespace: a namespace only reads its own.
 
-    async def put_secret(self, tenant_id: str, name: str, ciphertext: str) -> None:
+    async def put_secret(self, tenant_id: str, name: str, ciphertext: str, *, namespace: str | None = None) -> None:
+        ns = namespace or current_namespace()
         async with self.session() as s:
-            q = select(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.name == name)
+            q = select(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.namespace == ns, t.Secret.name == name)
             row = (await s.execute(q)).scalar_one_or_none()
             if row is None:
-                s.add(t.Secret(id=new_id("sec"), tenant_id=tenant_id, name=name, ciphertext=ciphertext))
+                s.add(t.Secret(id=new_id("sec"), tenant_id=tenant_id, namespace=ns, name=name, ciphertext=ciphertext))
             else:
                 row.ciphertext = ciphertext
                 row.updated_at = utcnow()
 
-    async def get_secret(self, tenant_id: str, name: str) -> str | None:
+    async def get_secret(self, tenant_id: str, name: str, *, namespace: str | None = None) -> str | None:
+        ns = namespace or current_namespace()
         async with self.session() as s:
-            q = select(t.Secret.ciphertext).where(t.Secret.tenant_id == tenant_id, t.Secret.name == name)
+            q = select(t.Secret.ciphertext).where(t.Secret.tenant_id == tenant_id, t.Secret.namespace == ns, t.Secret.name == name)
             return (await s.execute(q)).scalar_one_or_none()
 
-    async def list_secrets(self, tenant_id: str) -> Sequence[t.Secret]:
+    async def list_secrets(self, tenant_id: str, *, namespace: str | None = None) -> Sequence[t.Secret]:
+        ns = namespace or current_namespace()
         async with self.session() as s:
-            q = select(t.Secret).where(t.Secret.tenant_id == tenant_id).order_by(t.Secret.name)
+            q = select(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.namespace == ns).order_by(t.Secret.name)
             return (await s.execute(q)).scalars().all()
 
-    async def delete_secret(self, tenant_id: str, name: str) -> None:
+    async def delete_secret(self, tenant_id: str, name: str, *, namespace: str | None = None) -> None:
+        ns = namespace or current_namespace()
         async with self.session() as s:
-            result = await s.execute(delete(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.name == name))
+            result = await s.execute(
+                delete(t.Secret).where(t.Secret.tenant_id == tenant_id, t.Secret.namespace == ns, t.Secret.name == name)
+            )
             if not result.rowcount:
                 raise NotFound(f"secret '{name}' not found")
 

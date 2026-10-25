@@ -28,6 +28,7 @@ from awm.core.models import (
     WorkflowSpec,
     validate_params,
 )
+from awm.core.scope import current_namespace, use_namespace
 from awm.integrations.base import IntegrationError
 from awm.runtime.context import Completed, StepContext, Suspended
 from awm.secrets.providers import Redactor
@@ -82,14 +83,18 @@ class Executor:
             document = await self.store.get_resource_version(tenant_id, "Workflow", workflow_name, version)
         spec = WorkflowSpec.model_validate(document["spec"])
         values = validate_params(spec.inputs, inputs)
-        if initiator is None and parent_run_id:
-            initiator = (await self.store.get_run(tenant_id, parent_run_id)).initiator
+        namespace = current_namespace()
+        if parent_run_id:
+            parent = await self.store.get_run(tenant_id, parent_run_id)
+            namespace = parent.namespace
+            initiator = initiator if initiator is not None else parent.initiator
         if initiator is None:
             initiator = await self.engine.identities.resolve(tenant_id, actor=started_by, source="api")
         now = clock.now()
         run = t.Run(
             id=new_id("run"),
             tenant_id=tenant_id,
+            namespace=namespace,
             workflow_name=workflow_name,
             workflow_version=version or row.version,
             workflow=spec.model_dump(mode="json", by_alias=True, exclude_none=True),
@@ -150,6 +155,10 @@ class Executor:
         if RunStatus(run.status).terminal:
             await self.store.update_run(run.id, next_wake_at=None)
             return
+        with use_namespace(run.namespace):
+            await self._advance_run(run)
+
+    async def _advance_run(self, run: t.Run) -> None:
         spec = WorkflowSpec.model_validate(run.workflow)
 
         if run.cancel_requested:
@@ -262,6 +271,7 @@ class Executor:
             },
             "run": {
                 "id": run.id,
+                "namespace": run.namespace,
                 "workflow": run.workflow_name,
                 "version": run.workflow_version,
                 "started_by": run.started_by,

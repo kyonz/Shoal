@@ -19,6 +19,9 @@ from typing import Any
 
 import httpx
 
+from awm.auth.directory import Directory
+from awm.auth.oidc import OIDCService
+from awm.auth.rbac import Authorizer
 from awm.campaigns.service import CampaignService
 from awm.config import Settings, get_settings
 from awm.decisions.service import DecisionService
@@ -86,6 +89,9 @@ class Engine:
         self.worker_id = self.settings.worker_id or f"{socket.gethostname()}-{os.getpid()}"
         self._setup_done: set[int] = set()
 
+        self.directory = Directory(self.store)
+        self.authz = Authorizer(self)
+        self.oidc = OIDCService(self)
         self.events = EventBus(self.store)
         self.secrets = SecretManager(self)
         self.sandboxes = SandboxManager(self)

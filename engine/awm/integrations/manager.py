@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from awm.core.errors import InvalidRequest, NotFound
 from awm.core.models import Connection
+from awm.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from awm.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
 
 if TYPE_CHECKING:
@@ -28,17 +29,17 @@ class IntegrationManager:
     async def connection(
         self, tenant_id: str, name: str, *, initiator: dict[str, Any] | None = None, run_id: str | None = None
     ) -> ConnectionContext:
-        resource = await self.engine.store.find_resource(tenant_id, "Connection", name)
-        if resource is None:
-            raise NotFound(f"connection '{name}' not found")
-        assert isinstance(resource, Connection)
+        row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
+        resource = Connection.model_validate(row.document)
         integration = self.get(resource.spec.integration)
         values: dict[str, Any] = dict(resource.spec.config)
-        for field, secret_name in resource.spec.secrets.items():
-            value = await self.engine.secrets.get(tenant_id, secret_name)
-            if value is None:
-                raise InvalidRequest(f"connection '{name}': secret '{secret_name}' for field '{field}' is not set")
-            values[field] = value
+        # A connection shared from the `shared` namespace reads its secrets there, where its owners keep them.
+        with use_namespace(row.namespace):
+            for field, secret_name in resource.spec.secrets.items():
+                value = await self.engine.secrets.get(tenant_id, secret_name)
+                if value is None:
+                    raise InvalidRequest(f"connection '{name}': secret '{secret_name}' for field '{field}' is not set")
+                values[field] = value
         config = integration.connection_model.model_validate(values)
         return ConnectionContext(
             engine=self.engine,
@@ -54,8 +55,11 @@ class IntegrationManager:
         """Pick a connection: explicit/default name, else the only one for that integration."""
         if preferred:
             return preferred
-        rows = await self.engine.store.list_resources(tenant_id, "Connection")
-        matches = [r.name for r in rows if r.document["spec"]["integration"] == integration]
+        rows = [
+            *await self.engine.store.list_resources(tenant_id, "Connection"),
+            *await self.engine.store.list_resources(tenant_id, "Connection", namespace=SHARED_NAMESPACE),
+        ]
+        matches = list(dict.fromkeys(r.name for r in rows if r.document["spec"]["integration"] == integration))
         if len(matches) == 1:
             return matches[0]
         if not matches:
@@ -109,7 +113,8 @@ class IntegrationManager:
         return items[:max_items]
 
     async def webhook_url(self, tenant_id: str, connection_name: str) -> str:
-        endpoint = await self.engine.store.webhook_for_connection(tenant_id, connection_name)
+        row = await self.engine.store.get_resource_row(tenant_id, "Connection", connection_name)
+        endpoint = await self.engine.store.webhook_for_connection(tenant_id, connection_name, namespace=row.namespace)
         return f"{self.engine.settings.public_url.rstrip('/')}/v1/hooks/{endpoint.id}"
 
     async def handle_webhook(self, webhook_id: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
@@ -117,20 +122,23 @@ class IntegrationManager:
         endpoint = await self.engine.store.resolve_webhook(webhook_id)
         if endpoint is None:
             raise NotFound("unknown webhook")
-        ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
-        headers = {k.lower(): v for k, v in headers.items()}
-        if not await ctx.integration.verify_webhook(ctx, headers, body):
-            raise InvalidRequest("webhook signature verification failed")
-        events = await ctx.integration.parse_webhook(ctx, headers, body)
+        with use_namespace(endpoint.namespace):
+            ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
+            headers = {k.lower(): v for k, v in headers.items()}
+            if not await ctx.integration.verify_webhook(ctx, headers, body):
+                raise InvalidRequest("webhook signature verification failed")
+            events = await ctx.integration.parse_webhook(ctx, headers, body)
         woken: list[str] = []
         fired: list[dict[str, Any]] = []
         for event in events:
             woken += await self.engine.store.wake_by_keys(endpoint.tenant_id, event.wake_keys)
-            fired += await self.engine.triggers.dispatch_event(endpoint.tenant_id, endpoint.connection_name, event)
+            fired += await self.engine.triggers.dispatch_event(
+                endpoint.tenant_id, endpoint.connection_name, event, connection_namespace=endpoint.namespace
+            )
         return {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
 
     async def inject_event(self, tenant_id: str, connection: str, event: IntegrationEvent) -> dict[str, Any]:
         """Process an already-parsed event (polling integrations, tests, replays)."""
         woken = await self.engine.store.wake_by_keys(tenant_id, event.wake_keys)
-        fired = await self.engine.triggers.dispatch_event(tenant_id, connection, event)
+        fired = await self.engine.triggers.dispatch_event(tenant_id, connection, event, connection_namespace=current_namespace())
         return {"woken_runs": woken, "triggers": fired}

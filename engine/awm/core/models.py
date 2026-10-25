@@ -632,6 +632,7 @@ class EvalSpec(Model):
 
 class Metadata(Model):
     name: str = Field(pattern=NAME_PATTERN)
+    namespace: str | None = Field(None, pattern=NAME_PATTERN, description="Namespace (defaults to the current one).")
     description: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
 

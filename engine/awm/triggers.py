@@ -11,9 +11,11 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from awm.core import clock
+from awm.core.errors import NotFound
 from awm.core.expressions import ExpressionError, render, truthy
 from awm.core.ids import new_id
 from awm.core.models import RunStatus, Trigger
+from awm.core.scope import current_namespace, use_namespace
 from awm.integrations.base import IntegrationEvent
 from awm.store import tables as t
 
@@ -88,16 +90,28 @@ class TriggerService:
         answers = {k: a.to_dict() for k, a in result.answers.items()}
         return {"answers": answers, "passed": truthy(spec.when, {**scope, "answers": answers}), "provider": result.provider}
 
-    async def dispatch_event(self, tenant_id: str, connection: str, event: IntegrationEvent) -> list[dict[str, Any]]:
+    async def dispatch_event(
+        self, tenant_id: str, connection: str, event: IntegrationEvent, *, connection_namespace: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Fire matching triggers in every namespace whose ``connection`` resolves to this one."""
         fired = []
-        for trigger in await self._triggers(tenant_id):
+        for row in await self.engine.store.list_resources(tenant_id, "Trigger", all_namespaces=True):
+            trigger = Trigger.model_validate(row.document)
             spec = trigger.spec
             if not spec.enabled or spec.event == "schedule" or spec.connection != connection:
                 continue
-            outcome = self.evaluate(trigger, event)
-            if not outcome["matched"] and not outcome.get("error"):
-                continue
-            fired.append(await self._fire(tenant_id, trigger, event, outcome))
+            with use_namespace(row.namespace):
+                if connection_namespace is not None:
+                    try:
+                        conn_row = await self.engine.store.get_resource_row(tenant_id, "Connection", connection)
+                    except NotFound:
+                        conn_row = None
+                    if conn_row is not None and conn_row.namespace != connection_namespace:
+                        continue
+                outcome = self.evaluate(trigger, event)
+                if not outcome["matched"] and not outcome.get("error"):
+                    continue
+                fired.append({**await self._fire(tenant_id, trigger, event, outcome), "namespace": row.namespace})
         return fired
 
     async def _fire(
@@ -108,6 +122,7 @@ class TriggerService:
         delivery = t.TriggerDelivery(
             id=new_id("dlv"),
             tenant_id=tenant_id,
+            namespace=current_namespace(),
             trigger_name=name,
             dedupe_key=outcome.get("dedupe_key"),
             event_type=event.type,
@@ -186,38 +201,42 @@ class TriggerService:
 
     async def tick_schedules(self) -> int:
         fired = 0
-        now = clock.now()
         for row in await self.engine.store.list_resources_all_tenants("Trigger"):
-            trigger = Trigger.model_validate(row.document)
-            spec = trigger.spec
-            if spec.event != "schedule" or not spec.schedule:
-                continue
-            state = await self.engine.store.get_trigger_state(row.tenant_id, trigger.metadata.name)
-            if not spec.enabled:
-                if state.next_fire_at is not None:
-                    await self.engine.store.set_trigger_next(state.id, None)
-                continue
-            if state.next_fire_at is None:
-                await self.engine.store.set_trigger_next(state.id, next_fire(spec.schedule, spec.timezone, now))
-                continue
-            if state.next_fire_at > now:
-                continue
-            upcoming = next_fire(spec.schedule, spec.timezone, now)
-            if not await self.engine.store.claim_trigger_tick(state.id, state.next_fire_at, upcoming):
-                continue  # another worker fired this tick
-            event = IntegrationEvent(
-                type="schedule",
-                id=f"{trigger.metadata.name}:{state.next_fire_at.isoformat()}",
-                data={"scheduled_at": state.next_fire_at.isoformat(), "fired_at": now.isoformat(), "next_at": upcoming.isoformat()},
-            )
-            outcome = self.evaluate(trigger, event)
-            if outcome["matched"] or outcome.get("error"):
-                outcome.setdefault("dedupe_key", event.id)
-                if outcome.get("dedupe_key") is None:
-                    outcome["dedupe_key"] = event.id
-                await self._fire(row.tenant_id, trigger, event, outcome)
-                fired += 1
+            with use_namespace(row.namespace):
+                fired += await self._tick_schedule(row)
         return fired
+
+    async def _tick_schedule(self, row: t.Resource) -> int:
+        now = clock.now()
+        trigger = Trigger.model_validate(row.document)
+        spec = trigger.spec
+        if spec.event != "schedule" or not spec.schedule:
+            return 0
+        state = await self.engine.store.get_trigger_state(row.tenant_id, trigger.metadata.name)
+        if not spec.enabled:
+            if state.next_fire_at is not None:
+                await self.engine.store.set_trigger_next(state.id, None)
+            return 0
+        if state.next_fire_at is None:
+            await self.engine.store.set_trigger_next(state.id, next_fire(spec.schedule, spec.timezone, now))
+            return 0
+        if state.next_fire_at > now:
+            return 0
+        upcoming = next_fire(spec.schedule, spec.timezone, now)
+        if not await self.engine.store.claim_trigger_tick(state.id, state.next_fire_at, upcoming):
+            return 0  # another worker fired this tick
+        event = IntegrationEvent(
+            type="schedule",
+            id=f"{trigger.metadata.name}:{state.next_fire_at.isoformat()}",
+            data={"scheduled_at": state.next_fire_at.isoformat(), "fired_at": now.isoformat(), "next_at": upcoming.isoformat()},
+        )
+        outcome = self.evaluate(trigger, event)
+        if not (outcome["matched"] or outcome.get("error")):
+            return 0
+        if outcome.get("dedupe_key") is None:
+            outcome["dedupe_key"] = event.id
+        await self._fire(row.tenant_id, trigger, event, outcome)
+        return 1
 
     async def schedule_preview(self, cron: str, tz: str, count: int = 5) -> list[str]:
         validate_cron(cron, tz)
