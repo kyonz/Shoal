@@ -61,6 +61,7 @@ async def start_run(namespace: str, name: str, body: StartRunIn, ctx: CtxDep) ->
             )
         except ValueError as exc:
             raise InvalidRequest(str(exc)) from exc
+    await ctx.audit("run.started", run.id, namespace=namespace, workflow=name, version=run.workflow_version)
     return run
 
 
@@ -129,7 +130,7 @@ async def run_events(run_id: str, request: Request, ctx: CtxDep, after: int = 0,
 async def cancel_run(run_id: str, ctx: CtxDep) -> Any:
     run = await _run(ctx, run_id, "runs:cancel")
     await ctx.engine.executor.request_cancel(ctx.tenant_id, run.id)
-    await ctx.audit("run.cancel_requested", run.id)
+    await ctx.audit("run.cancel_requested", run.id, namespace=run.namespace)
     return await ctx.engine.store.get_run(ctx.tenant_id, run.id)
 
 
@@ -139,7 +140,7 @@ async def approve_step(run_id: str, step_id: str, body: ApprovalIn, ctx: CtxDep)
     row = await ctx.engine.executor.submit_approval(
         ctx.tenant_id, run.id, step_id, approved=body.approved, by=ctx.principal.display_name or ctx.actor, comment=body.comment
     )
-    await ctx.audit("run.approval", f"{run.id}/{step_id}", approved=body.approved)
+    await ctx.audit("run.approval", f"{run.id}/{step_id}", namespace=run.namespace, approved=body.approved, comment=body.comment)
     return row
 
 
@@ -147,10 +148,12 @@ async def approve_step(run_id: str, step_id: str, body: ApprovalIn, ctx: CtxDep)
 async def rerun(run_id: str, ctx: CtxDep) -> Any:
     run = await _run(ctx, run_id, "runs:create")
     with use_namespace(run.namespace):
-        return await ctx.engine.executor.start_run(
+        new = await ctx.engine.executor.start_run(
             ctx.tenant_id, run.workflow_name, run.inputs, version=run.workflow_version, started_by=ctx.actor,
             labels={**run.labels, "rerun_of": run.id}, initiator=await _initiator(ctx),
         )
+    await ctx.audit("run.started", new.id, namespace=run.namespace, workflow=run.workflow_name, rerun_of=run.id)
+    return new
 
 
 # --------------------------------------------------------------------------- campaign runs
@@ -171,7 +174,7 @@ async def launch_campaign(namespace: str, name: str, body: CampaignLaunchIn, ctx
             ctx.tenant_id, name, name=body.name, started_by=ctx.actor, extra_inputs=body.inputs, start=body.start,
             initiator=await _initiator(ctx),
         )
-    await ctx.audit("campaign.launched", row.id, campaign=name)
+    await ctx.audit("campaign.launched", row.id, namespace=namespace, campaign=name)
     return row
 
 
@@ -186,7 +189,7 @@ async def launch_inline(namespace: str, body: CampaignInlineIn, ctx: CtxDep) -> 
         row = await ctx.engine.campaigns.launch(
             ctx.tenant_id, spec, name=body.name, started_by=ctx.actor, start=body.start, initiator=await _initiator(ctx)
         )
-    await ctx.audit("campaign.launched", row.id, inline=True)
+    await ctx.audit("campaign.launched", row.id, namespace=namespace, inline=True)
     return row
 
 
@@ -231,7 +234,7 @@ async def campaign_operation(campaign_id: str, operation: str, ctx: CtxDep) -> A
             await service.retry_failed(ctx.tenant_id, row.id)
         else:
             raise InvalidRequest("operation must be pause, resume, cancel or retry")
-    await ctx.audit(f"campaign.{operation}", row.id)
+    await ctx.audit(f"campaign.{operation}", row.id, namespace=row.namespace)
     return await ctx.engine.store.get_campaign(ctx.tenant_id, row.id)
 
 

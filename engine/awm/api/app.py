@@ -22,6 +22,8 @@ from awm import __version__
 from awm.api.routers import a2a, admin, auth, hooks, resources, runs, scim, system
 from awm.config import Settings
 from awm.core.errors import AWMError
+from awm.core.ids import new_id
+from awm.core.requestctx import RequestInfo, reset_request, set_request
 from awm.engine import Engine
 from awm.integrations.base import IntegrationError
 
@@ -72,6 +74,58 @@ def install_error_handlers(app: FastAPI) -> None:
         return problem(request, 422, "invalid_request", f"invalid {exc.title}", errors=_errors(exc))
 
 
+MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
+UNAUDITED_PREFIXES = ("/v1/hooks/", "/v1/auth/")  # webhook deliveries and sign-in keep their own records
+
+
+def install_request_context(app: FastAPI) -> None:
+    """Request ids, and an audit entry for every mutating call that no handler audited itself
+    (so failed, rejected and unexpected writes are recorded too)."""
+
+    @app.middleware("http")
+    async def request_context(request: Request, call_next: Any) -> Any:
+        request_id = request.headers.get("x-request-id") or new_id("req")
+        client = request.headers.get("x-awm-client", "")
+        info = RequestInfo(
+            request_id=request_id[:64],
+            method=request.method,
+            path=request.url.path,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            source="scim" if request.url.path.startswith("/scim/") else ("ui" if client == "ui" else "api"),
+        )
+        token = set_request(info)
+        try:
+            response = await call_next(request)
+            status = response.status_code
+        except Exception:
+            status = 500
+            raise
+        finally:
+            if (
+                request.method in MUTATING
+                and not info.audited
+                and not request.url.path.startswith(UNAUDITED_PREFIXES)
+            ):
+                principal = getattr(request.state, "principal", None)
+                if principal is not None or status >= 400:
+                    outcome = "success" if status < 400 else ("denied" if status in (401, 403) else "error")
+                    try:
+                        await app.state.engine.store.audit(
+                            principal.tenant_id if principal else None,
+                            principal.actor if principal else None,
+                            f"api.{request.method.lower()}",
+                            request.url.path,
+                            outcome=outcome,
+                            status=status,
+                        )
+                    except Exception:  # auditing must never break the request
+                        log.exception("could not write audit entry")
+            reset_request(token)
+        response.headers["X-Request-Id"] = info.request_id
+        return response
+
+
 def _mount_frontend(app: FastAPI, static_dir: str) -> None:
     root = Path(static_dir).resolve()
     index = root / "index.html"
@@ -120,13 +174,14 @@ def create_app(
     )
     app.state.engine = engine
     install_error_handlers(app)
+    install_request_context(app)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=engine.settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["Location"],
+        expose_headers=["Location", "X-Request-Id"],
     )
     for module in (system, auth, hooks, scim, admin, runs, a2a, resources):
         app.include_router(module.router)

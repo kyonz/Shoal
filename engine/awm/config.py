@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     default_sandbox_backend: str = "local"
     default_decision_provider: str = Field("llm", description="Decision provider for decide/grade steps: llm or jev.")
 
+    audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
+
     log_level: str = "INFO"
     log_json: bool = False
 

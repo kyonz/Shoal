@@ -103,8 +103,8 @@ class Ctx:
         await self.require(permission, name)
         return name
 
-    async def audit(self, action: str, target: str | None = None, **data: object) -> None:
-        await self.engine.store.audit(self.principal.tenant_id, self.actor, action, target, **data)
+    async def audit(self, action: str, target: str | None = None, *, namespace: str | None = None, **data: object) -> None:
+        await self.engine.store.audit(self.principal.tenant_id, self.actor, action, target, namespace=namespace, **data)
 
 
 async def get_ctx(request: Request, engine: EngineDep) -> Ctx:

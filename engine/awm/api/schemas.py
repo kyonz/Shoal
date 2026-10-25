@@ -282,6 +282,9 @@ class ApiKeyCreated(BaseModel):
 class ResourceMetadataIn(BaseModel):
     description: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] | None = Field(
+        None, description="Free-form tool metadata (e.g. 'ui.shoal.dev/layout'). Not versioned; omit to keep the current value."
+    )
 
 
 class ResourceIn(BaseModel):
@@ -296,6 +299,7 @@ class ResourceMetadataOut(BaseModel):
     namespace: str
     description: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] = Field(default_factory=dict)
     version: int
     created_at: datetime
     updated_at: datetime
@@ -484,5 +488,11 @@ class AuditOut(Out):
     actor: str | None
     action: str
     target: str | None
+    namespace: str | None = None
+    outcome: str = "success"
+    source: str | None = None
+    request_id: str | None = None
+    ip: str | None = None
+    user_agent: str | None = None
     data: dict[str, Any]
     created_at: datetime

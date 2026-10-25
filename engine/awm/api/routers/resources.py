@@ -56,6 +56,7 @@ async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
         kind=row.kind,
         metadata=ResourceMetadataOut(
             name=row.name, namespace=row.namespace, description=meta.get("description"), labels=meta.get("labels") or {},
+            annotations=row.annotations or {},
             version=row.version, created_at=row.created_at, updated_at=row.updated_at, updated_by=row.updated_by,
         ),
         spec=row.source if row.source is not None else doc["spec"],
@@ -106,7 +107,7 @@ async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn,
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec)
     )
     if outcome != "unchanged":
-        await ctx.audit(f"{kind.lower()}.{outcome}", f"{row.namespace}/{name}", version=row.version)
+        await ctx.audit(f"{kind.lower()}.{outcome}", f"{row.namespace}/{name}", namespace=row.namespace, version=row.version)
     if outcome == "created":
         response.status_code = 201
     return await to_out(ctx, row)
@@ -144,7 +145,7 @@ def _namespaced_routes(plural: str, kind: str) -> None:
     async def delete_one(namespace: str, name: str, ctx: CtxDep) -> None:
         await ctx.namespace(namespace, f"{plural}:delete")
         await ctx.engine.store.delete_resource(ctx.tenant_id, kind, name, namespace=namespace)
-        await ctx.audit(f"{kind.lower()}.deleted", f"{namespace}/{name}")
+        await ctx.audit(f"{kind.lower()}.deleted", f"{namespace}/{name}", namespace=namespace)
 
     @router.get(f"{base}/{{name}}/versions", tags=tag, response_model=list[ResourceVersionOut], name=f"versions_{plural}")
     async def versions(namespace: str, name: str, ctx: CtxDep) -> Any:
@@ -232,7 +233,7 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
             continue
         row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, resource, actor=ctx.actor, namespace=ns, source=source)
         if outcome != "unchanged":
-            await ctx.audit(f"{row.kind.lower()}.{outcome}", f"{row.namespace}/{row.name}", version=row.version)
+            await ctx.audit(f"{row.kind.lower()}.{outcome}", f"{row.namespace}/{row.name}", namespace=row.namespace, version=row.version)
         results.append(ApplyResult(kind=row.kind, name=row.name, namespace=row.namespace, outcome=outcome, version=row.version))  # type: ignore[arg-type]
     return results
 
@@ -253,7 +254,7 @@ async def put_secret(namespace: str, name: str, body: SecretIn, ctx: CtxDep, res
         response.status_code = 201
     with use_namespace(namespace):
         await ctx.engine.secrets.writable().put(ctx.tenant_id, name, body.value)
-    await ctx.audit("secret.set", f"{namespace}/{name}")
+    await ctx.audit("secret.set", f"{namespace}/{name}", namespace=namespace)
     for row in await ctx.engine.store.list_secrets(ctx.tenant_id, namespace=namespace):
         if row.name == name:
             return row
@@ -273,7 +274,7 @@ async def get_secret(namespace: str, name: str, ctx: CtxDep) -> Any:
 async def delete_secret(namespace: str, name: str, ctx: CtxDep) -> None:
     await ctx.namespace(namespace, "secrets:write")
     await ctx.engine.store.delete_secret(ctx.tenant_id, name, namespace=namespace)
-    await ctx.audit("secret.deleted", f"{namespace}/{name}")
+    await ctx.audit("secret.deleted", f"{namespace}/{name}", namespace=namespace)
 
 
 # --------------------------------------------------------------------------- connections

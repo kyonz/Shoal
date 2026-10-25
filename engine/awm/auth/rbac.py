@@ -78,6 +78,10 @@ class Authorizer:
     async def authorize(self, principal: Principal, permission: str, namespace: str | None = None) -> None:
         if not await self.allowed(principal, permission, namespace):
             where = f" in namespace '{namespace}'" if namespace and permission not in TENANT_PERMISSIONS else ""
+            await self.engine.store.audit(
+                principal.tenant_id, principal.actor, "access.denied", permission, outcome="denied",
+                namespace=namespace if permission not in TENANT_PERMISSIONS else None,
+            )
             raise Forbidden(f"{principal.display_name or principal.actor} lacks '{permission}'{where}")
 
     async def visible_namespaces(self, principal: Principal) -> list[str]:

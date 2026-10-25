@@ -635,6 +635,9 @@ class Metadata(Model):
     namespace: str | None = Field(None, pattern=NAME_PATTERN, description="Namespace (defaults to the current one).")
     description: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] | None = Field(
+        None, description="Free-form notes for tools (e.g. the builder's layout). Not versioned; omitted means keep."
+    )
 
 
 class ResourceBase(Model):

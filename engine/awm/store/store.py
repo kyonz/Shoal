@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from awm.core.errors import Conflict, InvalidRequest, NotFound
 from awm.core.ids import new_id
 from awm.core.models import RESOURCE_KINDS, ResourceBase, RunStatus, StepStatus
+from awm.core.requestctx import current_request
 from awm.core.scope import (
     DEFAULT_NAMESPACE,
     NAMESPACE_PATTERN,
@@ -235,6 +236,7 @@ class Store:
         kind = document["kind"]
         name = resource.metadata.name
         ns = resolve_namespace(document["metadata"].pop("namespace", None) or namespace, kind)
+        annotations = document["metadata"].pop("annotations", None)  # unversioned; None keeps the current ones
         await self.ensure_namespace(tenant_id, ns)
         async with self.session() as s:
             row = (
@@ -250,6 +252,8 @@ class Store:
             if row is not None and row.document == document:
                 if source is not None and row.source != source:
                     row.source = source  # same meaning, different spelling: no new version
+                if annotations is not None and row.annotations != annotations:
+                    row.annotations = annotations
                 return row, "unchanged"
             if row is None:
                 row = t.Resource(
@@ -261,6 +265,7 @@ class Store:
                     version=1,
                     document=document,
                     source=source,
+                    annotations=annotations or {},
                     labels=resource.metadata.labels,
                     updated_by=actor,
                 )
@@ -270,6 +275,8 @@ class Store:
                 row.version += 1
                 row.document = document
                 row.source = source
+                if annotations is not None:
+                    row.annotations = annotations
                 row.labels = resource.metadata.labels
                 row.updated_at = utcnow()
                 row.updated_by = actor
@@ -853,20 +860,70 @@ class Store:
     # ------------------------------------------------------------------ audit
 
     async def audit(
-        self, tenant_id: str | None, actor: str | None, action: str, target: str | None = None, **data: Any
+        self,
+        tenant_id: str | None,
+        actor: str | None,
+        action: str,
+        target: str | None = None,
+        *,
+        outcome: str = "success",
+        namespace: str | None = None,
+        **data: Any,
     ) -> None:
-        async with self.session() as s:
-            s.add(t.AuditEntry(tenant_id=tenant_id, actor=actor, action=action, target=target, data=data))
-
-    async def list_audit(self, tenant_id: str, limit: int = 100) -> Sequence[t.AuditEntry]:
-        q = (
-            select(t.AuditEntry)
-            .where(t.AuditEntry.tenant_id == tenant_id)
-            .order_by(t.AuditEntry.id.desc())
-            .limit(limit)
+        """Append an audit entry; request id, client and source come from the request context."""
+        req = current_request()
+        if req is not None:
+            req.audited = True
+            if req.via:
+                data.setdefault("via", req.via)
+        entry = t.AuditEntry(
+            tenant_id=tenant_id, actor=actor, action=action, target=target, data=data, outcome=outcome,
+            namespace=namespace, source=req.source if req else "engine", request_id=req.request_id if req else None,
+            ip=req.ip if req else None, user_agent=(req.user_agent or "")[:300] if req else None,
         )
         async with self.session() as s:
-            return (await s.execute(q)).scalars().all()
+            s.add(entry)
+
+    def _audit_query(
+        self,
+        tenant_id: str,
+        *,
+        action: str | None = None,
+        actor: str | None = None,
+        target: str | None = None,
+        namespace: str | None = None,
+        outcome: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        before: int | None = None,
+    ) -> Any:
+        q = select(t.AuditEntry).where(t.AuditEntry.tenant_id == tenant_id)
+        if action:
+            q = q.where(t.AuditEntry.action.startswith(action))
+        if actor:
+            q = q.where(t.AuditEntry.actor == actor)
+        if target:
+            q = q.where(t.AuditEntry.target.startswith(target))
+        if namespace:
+            q = q.where(t.AuditEntry.namespace == namespace)
+        if outcome:
+            q = q.where(t.AuditEntry.outcome == outcome)
+        if since:
+            q = q.where(t.AuditEntry.created_at >= since)
+        if until:
+            q = q.where(t.AuditEntry.created_at < until)
+        if before:
+            q = q.where(t.AuditEntry.id < before)
+        return q.order_by(t.AuditEntry.id.desc())
+
+    async def list_audit(self, tenant_id: str, limit: int = 100, **filters: Any) -> Sequence[t.AuditEntry]:
+        async with self.session() as s:
+            return (await s.execute(self._audit_query(tenant_id, **filters).limit(limit))).scalars().all()
+
+    async def prune_audit(self, older_than: datetime) -> int:
+        async with self.session() as s:
+            result = await s.execute(delete(t.AuditEntry).where(t.AuditEntry.created_at < older_than))
+            return result.rowcount or 0
 
 
 def new_step_row(tenant_id: str, run_id: str, step_id: str, step_type: str) -> t.StepRun:

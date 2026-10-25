@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -252,3 +254,49 @@ async def test_reads_return_the_spec_as_written(admin):
     r = await admin.put("/v1/namespaces/default/agents/fixer", json={"spec": respelled})
     assert r.json()["metadata"]["version"] == 1  # same meaning: no new version
     assert r.json()["spec"]["limits"]["timeout"] == "1h30m" and "skills" not in r.json()["spec"]
+
+
+async def test_annotations_are_kept_and_unversioned(admin):
+    url = "/v1/namespaces/default/workflows/hello"
+    layout = {"ui.shoal.dev/layout": '{"greet":[120,80]}'}
+    r = await admin.put(url, json={**HELLO, "metadata": {**HELLO["metadata"], "annotations": layout}})
+    assert r.json()["metadata"]["annotations"] == layout and r.json()["metadata"]["version"] == 1
+    r = await admin.put(url, json=HELLO)  # a client that does not know about annotations
+    assert r.json()["metadata"]["annotations"] == layout
+    moved = {"ui.shoal.dev/layout": '{"greet":[300,80]}'}
+    r = await admin.put(url, json={**HELLO, "metadata": {**HELLO["metadata"], "annotations": moved}})
+    assert r.json()["metadata"]["annotations"] == moved and r.json()["metadata"]["version"] == 1
+
+
+async def test_audit_covers_writes_denials_and_failures(admin, api):
+    await admin.put("/v1/namespaces/team-a", json={})
+    await admin.put("/v1/namespaces/team-a/workflows/hello", json=HELLO)
+    await admin.put("/v1/namespaces/team-a/workflows/broken", json={"spec": {"steps": []}})  # rejected write
+    token = await _key_for(admin, "val", "viewer", "team-a")
+    viewer = httpx.AsyncClient(transport=api._transport, base_url="http://awm.test", headers={"Authorization": f"Bearer {token}"})
+    async with viewer:
+        r = await viewer.delete("/v1/namespaces/team-a/workflows/hello")
+        assert r.status_code == 403 and r.headers["x-request-id"]
+
+    page = (await admin.get("/v1/audit", params={"namespace": "team-a", "action": "workflow."})).json()
+    assert [e["action"] for e in page["items"]] == ["workflow.created"]
+    created = page["items"][0]
+    assert created["actor"] == "sa:admin" and created["source"] == "api" and created["request_id"]
+
+    denied = (await admin.get("/v1/audit", params={"outcome": "denied"})).json()["items"]
+    assert denied[0]["actor"] == "sa:val"
+    assert denied[0]["action"] == "access.denied" and denied[0]["target"] == "workflows:delete"
+
+    failed = (await admin.get("/v1/audit", params={"outcome": "error"})).json()["items"]
+    assert failed[0]["action"] == "api.put" and failed[0]["data"]["status"] == 422
+    assert failed[0]["target"] == "/v1/namespaces/team-a/workflows/broken"
+
+    first = (await admin.get("/v1/audit", params={"limit": 2})).json()
+    assert first["next_cursor"]
+    second = (await admin.get("/v1/audit", params={"limit": 2, "before": first["next_cursor"]})).json()
+    assert {e["id"] for e in first["items"]}.isdisjoint({e["id"] for e in second["items"]})
+
+    export = await admin.get("/v1/audit/export", params={"namespace": "team-a"})
+    assert export.headers["content-type"].startswith("application/x-ndjson")
+    lines = [json.loads(line) for line in export.text.splitlines()]
+    assert any(e["action"] == "workflow.created" for e in lines)

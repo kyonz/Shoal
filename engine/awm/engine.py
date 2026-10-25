@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import socket
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -24,6 +24,7 @@ from awm.auth.oidc import OIDCService
 from awm.auth.rbac import Authorizer
 from awm.campaigns.service import CampaignService
 from awm.config import Settings, get_settings
+from awm.core import clock
 from awm.decisions.service import DecisionService
 from awm.identity import IdentityService
 from awm.integrations.manager import IntegrationManager
@@ -88,6 +89,7 @@ class Engine:
         self.http_transport = http_transport
         self.worker_id = self.settings.worker_id or f"{socket.gethostname()}-{os.getpid()}"
         self._setup_done: set[int] = set()
+        self._last_audit_prune: datetime | None = None
 
         self.directory = Directory(self.store)
         self.authz = Authorizer(self)
@@ -146,6 +148,16 @@ class Engine:
     async def scheduler_tick(self) -> None:
         await self.triggers.tick_schedules()
         await self.campaigns.tick_due()
+        await self._prune_audit()
+
+    async def _prune_audit(self) -> None:
+        """Apply audit retention at most once an hour."""
+        days = self.settings.audit_retention_days
+        now = clock.now()
+        if not days or (self._last_audit_prune and now - self._last_audit_prune < timedelta(hours=1)):
+            return
+        self._last_audit_prune = now
+        await self.store.prune_audit(now - timedelta(days=days))
 
     async def run_until_idle(self, max_iterations: int = 1000) -> None:
         """Process everything that is due right now (tests, CLI ``--wait``)."""

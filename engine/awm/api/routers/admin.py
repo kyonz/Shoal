@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import StreamingResponse
 
 from awm.api.deps import Ctx, CtxDep
 from awm.api.schemas import (
@@ -471,8 +474,47 @@ async def revoke_api_key(key_id: str, ctx: CtxDep) -> None:
 # --------------------------------------------------------------------------- audit
 
 
-@router.get("/audit", tags=["audit"], response_model=list[AuditOut])
-async def audit(ctx: CtxDep, limit: int = Query(100, le=1000), action: str | None = None, actor: str | None = None) -> Any:
+def _audit_filters(
+    action: str | None = Query(None, description="Action prefix, e.g. 'workflow.' or 'access.denied'."),
+    actor: str | None = Query(None, description="Exact actor, e.g. 'user:ada@acme.io'."),
+    target: str | None = Query(None, description="Target prefix, e.g. 'payments/'."),
+    namespace: str | None = None,
+    outcome: str | None = Query(None, description="success, denied or error."),
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[str, Any]:
+    return {"action": action, "actor": actor, "target": target, "namespace": namespace, "outcome": outcome, "since": since, "until": until}
+
+
+AuditFilters = Annotated[dict[str, Any], Depends(_audit_filters)]
+
+
+@router.get("/audit", tags=["audit"], response_model=Page[AuditOut], summary="Search the audit log (newest first)")
+async def audit(
+    ctx: CtxDep, filters: AuditFilters, before: int | None = Query(None, description="Cursor: entries older than this id."),
+    limit: int = Query(100, ge=1, le=1000),
+) -> Any:
     await ctx.require("audit:read")
-    entries = await ctx.engine.store.list_audit(ctx.tenant_id, limit=limit)
-    return [e for e in entries if (not action or e.action.startswith(action)) and (not actor or e.actor == actor)]
+    rows = await ctx.engine.store.list_audit(ctx.tenant_id, limit=limit + 1, before=before, **filters)
+    items = list(rows[:limit])
+    return Page(items=[AuditOut.model_validate(r) for r in items], next_cursor=str(items[-1].id) if len(rows) > limit else None)
+
+
+@router.get("/audit/export", tags=["audit"], summary="Export the audit log as JSON Lines (oldest entries last)")
+async def audit_export(ctx: CtxDep, filters: AuditFilters) -> StreamingResponse:
+    await ctx.require("audit:read")
+    await ctx.audit("audit.exported", None, **{k: str(v) for k, v in filters.items() if v})
+    store, tenant_id = ctx.engine.store, ctx.tenant_id
+
+    async def lines() -> AsyncIterator[bytes]:
+        before = None
+        while True:
+            rows = await store.list_audit(tenant_id, limit=1000, before=before, **filters)
+            for row in rows:
+                yield AuditOut.model_validate(row).model_dump_json().encode() + b"\n"
+            if len(rows) < 1000:
+                return
+            before = rows[-1].id
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Content-Disposition": 'attachment; filename="audit.jsonl"'})

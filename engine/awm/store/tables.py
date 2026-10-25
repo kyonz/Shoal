@@ -210,6 +210,7 @@ class Resource(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     document: Mapped[dict[str, Any]] = mapped_column(doc="Validated, normalized document the engine runs.")
     source: Mapped[dict[str, Any] | None] = mapped_column(doc="The spec exactly as submitted (returned by the API).")
+    annotations: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="Unversioned tool metadata (UI layout, ...).")
     labels: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
@@ -399,11 +400,21 @@ class Secret(Base):
 
 
 class AuditEntry(Base):
+    """Append-only record of who did what. Written for every mutating API call,
+    sign-in, denied request and governance decision."""
+
     __tablename__ = "audit_log"
+    __table_args__ = (Index("ix_audit_tenant_id", "tenant_id", "id"),)
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     tenant_id: Mapped[str | None] = mapped_column(String(40), index=True)
-    actor: Mapped[str | None] = mapped_column(String(200))
-    action: Mapped[str] = mapped_column(String(100))
+    actor: Mapped[str | None] = mapped_column(String(200), index=True)
+    action: Mapped[str] = mapped_column(String(100), index=True)
     target: Mapped[str | None] = mapped_column(String(300))
+    namespace: Mapped[str | None] = mapped_column(String(63))
+    outcome: Mapped[str] = mapped_column(String(20), default="success")  # success | denied | error
+    source: Mapped[str | None] = mapped_column(String(20))  # api | ui | scim | hub | system | engine
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
