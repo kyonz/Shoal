@@ -41,6 +41,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { nsPath, useNs } from "@/lib/ns";
 import { Badge, Button, Dialog, EmptyState, Kbd, Popover, Segmented, Spinner, Tooltip, useConfirm } from "@/components/ui";
+import { useAssistant } from "@/features/assistant/store";
 import { edgeTypes } from "@/features/workflow/DependencyEdge";
 import { parseWorkflowYaml, toDocument, toYaml } from "@/features/workflow/document";
 import { ExprVarsContext } from "@/features/workflow/ExpressionInput";
@@ -406,6 +407,18 @@ function Builder() {
     window.addEventListener("beforeunload", onUnload);
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [dirty]);
+
+  // ------------------------------------------------------------------ assistant context
+  // The assistant reads workflows through the API, which can't see unsaved edits: hand it the draft.
+  useEffect(() => {
+    if (!canWrite || (!dirty && !isNew) || !spec.steps.length) {
+      useAssistant.getState().setPageContext(null);
+      return;
+    }
+    const what = isNew ? `a new workflow${meta.name ? ` named \`${meta.name}\`` : ""} that has never been saved` : `workflow \`${meta.name}\` with unsaved edits (the saved version is ${loadedVersion.current ?? "unknown"})`;
+    useAssistant.getState().setPageContext(`The workflow builder has ${what}. Its current YAML:\n\n${yamlText}`);
+  }, [canWrite, dirty, isNew, spec.steps.length, meta.name, yamlText]);
+  useEffect(() => () => useAssistant.getState().setPageContext(null), []);
 
   // ------------------------------------------------------------------ expression context
   const exprVars = useCallback(

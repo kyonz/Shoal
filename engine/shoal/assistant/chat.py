@@ -136,13 +136,13 @@ class Assistant:
     """One chat turn: runs the model and tools until it answers or needs approval."""
 
     def __init__(self, model: ModelClient, api: httpx.AsyncClient, openapi: dict[str, Any], *,
-                 namespace: str, actor: str, page: str | None = None, max_turns: int = 16,
+                 namespace: str, actor: str, page: str | None = None, context: str | None = None, max_turns: int = 16,
                  max_tokens: int = 16000, auto_approve: bool = False):
         self.model = model
         self.api = api
         self.openapi = openapi
         self.namespace = namespace
-        self.system = f"{SYSTEM}\n# Context\n\n{context_note(namespace, page, actor)}\n"
+        self.system = f"{SYSTEM}\n# Context\n\n{context_note(namespace, page, actor, context)}\n"
         self.max_turns = max_turns
         self.max_tokens = max_tokens
         self.auto_approve = auto_approve
