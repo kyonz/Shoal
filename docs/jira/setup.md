@@ -44,7 +44,8 @@ check is `POST /v1/namespaces/{ns}/connections/{name}/test`.
 
 Every connection has its own webhook URL, `https://<shoal>/v1/hooks/<id>`. The connection page shows it with a copy
 button and these instructions, and the API returns it in the connection's `status.webhook_url` and from
-`GET /v1/namespaces/{ns}/connections/{name}/webhook`. Point Jira at it in one of two ways.
+`GET /v1/namespaces/{ns}/connections/{name}/webhook`, which `shoal connections webhook-url <name>` prints. Point Jira at it
+in one of two ways.
 
 ### Option 1: a Jira admin webhook
 

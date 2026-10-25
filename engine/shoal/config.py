@@ -198,6 +198,10 @@ class Settings(BaseSettings):
     model_retry_backoff_seconds: float = Field(2.0, ge=0, description="First wait between rounds; doubles each round.")
     model_retry_max_backoff_seconds: float = Field(60.0, ge=0, description="Longest wait between rounds (Retry-After is capped here).")
     default_sandbox_backend: str = "local"
+    sandbox_reap_interval_seconds: int = Field(
+        600, ge=0, description="How often workers delete sandboxes no live run owns (Kubernetes pods the ttl ended, or "
+        "left by a crashed worker) and their NetworkPolicies (0: never).",
+    )
     default_decision_provider: str = Field("llm", description="Decision provider for decide/grade steps: llm or jev.")
 
     assistant_enabled: bool = Field(True, description="Serve the chat assistant (POST /v1/assistant/chat).")

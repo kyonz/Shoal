@@ -55,9 +55,11 @@ app.add_typer(db_app, name="db")
 triggers_app = typer.Typer(help="Fire triggers by hand.", no_args_is_help=True)
 campaigns_app = typer.Typer(help="Launch campaigns and follow, pause, resume, cancel or retry their runs.", no_args_is_help=True)
 blueprints_app = typer.Typer(help="Adopt blueprints from the tenant's catalogue into a namespace.", no_args_is_help=True)
+connections_app = typer.Typer(help="Connection helpers (create and edit connections with apply).", no_args_is_help=True)
 app.add_typer(triggers_app, name="triggers")
 app.add_typer(campaigns_app, name="campaigns")
 app.add_typer(blueprints_app, name="blueprints")
+app.add_typer(connections_app, name="connections")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -579,6 +581,24 @@ def _parse_pairs(pairs: list[str], what: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- triggers
+
+
+@connections_app.command("webhook-url")
+def connections_webhook_url(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Connection name.")],
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Show the URL to point the service's webhooks at, with its setup instructions."""
+    with api(ctx, namespace) as client:
+        result = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/connections/{quote(name)}/webhook")
+    if output is not Format.table:
+        emit(result, output, name=lambda r: r["url"])
+        return
+    console.print(result["url"], soft_wrap=True)
+    if result.get("instructions"):
+        console.print(escape(result["instructions"]), style="dim")
 
 
 @triggers_app.command("fire")

@@ -100,6 +100,7 @@ Every setting is an environment variable with the `SHOAL_` prefix (or a line in 
 | `SHOAL_AUDIT_RETENTION_DAYS` | `400` | Delete audit entries older than this. `0` keeps them. |
 | `SHOAL_TRUSTED_PROXIES` | | Proxies whose `X-Forwarded-For` is believed, for audit addresses. |
 | `SHOAL_CORS_ORIGINS`, `SHOAL_STATIC_DIR` | | For serving the UI from elsewhere, or from the API process. |
+| `SHOAL_SANDBOX_REAP_INTERVAL_SECONDS` | `600` | How often workers delete [leftover Kubernetes sandboxes](../agents/sandboxes.md#cleanup). `0` turns it off. |
 | `SHOAL_DEFAULT_BLUEPRINTS` | `true` | Install the [bundled blueprints](../blueprints/bundled.md) in new tenants. |
 | `SHOAL_ASSISTANT_*` | | The [assistant](../assistant/README.md): on or off, gateway, model, effort. |
 | `SHOAL_DEFAULT_DECISION_PROVIDER` | `llm` | The provider for [decisions](../agents/decisions.md). |
