@@ -12,6 +12,8 @@ const TriggerEditor = lazy(() => import("./TriggerEditor"));
 const Campaigns = lazy(() => import("./Campaigns"));
 const CampaignEditor = lazy(() => import("./CampaignEditor"));
 const CampaignRun = lazy(() => import("./CampaignRun"));
+const SlackBuilder = lazy(() => import("./SlackBuilder"));
+const AppSetup = lazy(() => import("./AppSetup"));
 
 /** Namespaced: integrations, connections, secrets, triggers, campaigns, campaign-runs. */
 export const connectRoutes: RouteObject[] = [
@@ -20,7 +22,9 @@ export const connectRoutes: RouteObject[] = [
   { path: "connections", element: <Lazy><Connections /></Lazy> },
   { path: "connections/new", element: <Lazy><ConnectionEditor key="new" /></Lazy> },
   { path: "connections/:name", element: <Lazy><ConnectionEditor /></Lazy> },
+  { path: "connections/:name/setup", element: <Lazy><AppSetup /></Lazy> },
   { path: "secrets", element: <Lazy><Secrets /></Lazy> },
+  { path: "slack/builder", element: <Lazy><SlackBuilder /></Lazy> },
   { path: "triggers", element: <Lazy><Triggers /></Lazy> },
   { path: "triggers/new", element: <Lazy><TriggerEditor key="new" /></Lazy> },
   { path: "triggers/:name", element: <Lazy><TriggerEditor /></Lazy> },

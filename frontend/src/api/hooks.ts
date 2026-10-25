@@ -92,6 +92,10 @@ export interface IntegrationCatalog {
   actions: IntegrationAction[];
   resources: { name: string; description: string; filter_schema: JsonSchema }[];
   events: { name: string; description: string; example: unknown }[];
+  approvals?: boolean;
+  install?: boolean;
+  trigger_filter_schema?: JsonSchema | null;
+  setup_features?: { key: string; title: string; description: string; required: boolean }[];
 }
 
 export interface JsonSchema {

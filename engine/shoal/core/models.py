@@ -276,12 +276,33 @@ class WaitStep(StepBase):
         return self
 
 
+class ApprovalNotify(Model):
+    """Also ask for the decision through an integration (e.g. Slack buttons); answers resolve the step."""
+
+    integration: str | None = Field(None, description="Integration key, e.g. 'slack' (or name a `connection`).")
+    connection: str | None = Field(None, description="Connection to use; defaults to the workflow's for the integration.")
+    to: str | None = Field(None, description="Where to ask: a channel ('#deploys', 'C0123') or a person ('U0123', an email). "
+                                             "Expressions allowed.")
+    with_: dict[str, Any] = Field(default_factory=dict, alias="with", description="Integration-specific options.")
+
+    @model_validator(mode="after")
+    def _target(self) -> ApprovalNotify:
+        if not (self.integration or self.connection):
+            raise ValueError("notify entries need an `integration` or a `connection`")
+        return self
+
+
 class ApprovalStep(StepBase):
-    """Human-in-the-loop gate resolved through the API or UI."""
+    """Human-in-the-loop gate resolved through the API, the UI or an integration (`notify`)."""
 
     type: Literal["approval"] = "approval"  # type: ignore[misc]
     message: str
-    approvers: list[str] = Field(default_factory=list)
+    approvers: list[str] = Field(
+        default_factory=list,
+        description="Who may decide, besides needing 'runs:approve': identity names, usernames, emails or "
+        "'group:<name>'. Empty: anyone with 'runs:approve'.",
+    )
+    notify: list[ApprovalNotify] = Field(default_factory=list, description="Ask through integrations too (Slack).")
     max_wait: Duration | None = None
     on_timeout: Literal["reject", "approve"] = "reject"
     on_reject: Literal["fail", "continue"] = Field(
@@ -582,6 +603,14 @@ class TriageSpec(Model):
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
 
 
+class TriggerRateLimit(Model):
+    """Fire at most ``max`` times per ``per``, overall or per ``key`` (e.g. per Slack user or channel)."""
+
+    max: int = Field(ge=1)
+    per: Duration
+    key: str | None = Field(None, description="Expression over `event`, e.g. '{{ event.user }}'; omitted, the whole trigger.")
+
+
 class TriggerSpec(Model):
     description: str | None = None
     workflow: str | None = Field(None, description="Workflow to start.")
@@ -597,6 +626,12 @@ class TriggerSpec(Model):
         "allow", description="'skip' does not fire while a run started by this trigger is still active."
     )
     filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
+    match: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured filters the connection's integration understands (Slack: channels, mentioned, "
+        "contains, regex, users, groups, threads, ...). See the integration's `trigger_filter_schema`.",
+    )
+    rate_limit: TriggerRateLimit | None = None
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
     triage: TriageSpec | None = None

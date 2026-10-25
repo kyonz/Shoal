@@ -62,6 +62,39 @@ class TriggerService:
             return {"matched": False, "reason": f"expression error: {exc}", "error": True}
         return {"matched": True, "inputs": inputs, "dedupe_key": None if dedupe is None else str(dedupe)}
 
+    async def integration_match(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> str | None:
+        """The connection integration's structured filters (``match``); None when the event passes."""
+        assert trigger.spec.connection is not None
+        try:
+            ctx = await self.engine.integrations.connection(tenant_id, trigger.spec.connection)
+        except NotFound:  # an injected or replayed event for a connection that is gone: only `match` needs it
+            return f"invalid match: connection '{trigger.spec.connection}' not found" if trigger.spec.match else None
+        model = ctx.integration.trigger_filter_model
+        options = None
+        if model is not None:
+            try:
+                options = model.model_validate(trigger.spec.match)
+            except ValueError as exc:
+                return f"invalid match: {exc}"
+        elif trigger.spec.match:
+            return f"invalid match: {ctx.integration.title} triggers take no `match` filters"
+        return await ctx.integration.trigger_matches(ctx, event, options)
+
+    async def _rate_limited(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent, delivery: t.TriggerDelivery) -> bool:
+        """Whether the trigger's rate limit is spent; records the rate key on the delivery."""
+        limit = trigger.spec.rate_limit
+        if limit is None:
+            return False
+        key = None
+        if limit.key:
+            key = str(render(limit.key, {"event": event.data, "event_type": event.type}))
+            delivery.detail = {**delivery.detail, "rate_key": key}
+        since = clock.now() - limit.per
+        recent = await self.engine.store.recent_deliveries(
+            tenant_id, current_namespace(), trigger.metadata.name, since=since, status="fired"
+        )
+        return sum(1 for d in recent if (d.detail or {}).get("rate_key") == key) >= limit.max
+
     async def _initiator(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
         """The person behind an event; for schedules and manual fires, whoever last changed the trigger."""
         if event.actor:
@@ -109,6 +142,10 @@ class TriggerService:
                     if conn_row is not None and conn_row.namespace != connection_namespace:
                         continue
                 outcome = self.evaluate(trigger, event)
+                if outcome["matched"]:
+                    reason = await self.integration_match(tenant_id, trigger, event)
+                    if reason is not None:
+                        outcome = {"matched": False, "reason": reason, "error": reason.startswith("invalid match")}
                 if not outcome["matched"] and not outcome.get("error"):
                     continue
                 fired.append({**await self._fire(tenant_id, trigger, event, outcome), "namespace": row.namespace})
@@ -134,6 +171,10 @@ class TriggerService:
             delivery.detail["reason"] = outcome["reason"]
             await store.record_delivery(delivery)
             return {"trigger": name, "status": "error", "reason": outcome["reason"]}
+        if await self._rate_limited(tenant_id, trigger, event, delivery):
+            delivery.status, delivery.dedupe_key = "rate_limited", None
+            await store.record_delivery(delivery)
+            return {"trigger": name, "status": "rate_limited"}
         if not await store.record_delivery(delivery):
             return {"trigger": name, "status": "duplicate", "dedupe_key": delivery.dedupe_key}
 

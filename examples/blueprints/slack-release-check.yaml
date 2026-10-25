@@ -1,0 +1,124 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: slack-release-check
+  description: An interactive Slack message that drives a workflow
+spec:
+  title: Interactive Slack release check
+  summary: Post a custom Block Kit message whose menu, date picker and buttons feed the workflow, then branch on the
+    answers.
+  version: 1.0.0
+  status: published
+  author: Shoal
+  tags:
+  - slack
+  - interactive
+  - approvals
+  categories:
+  - engineering
+  readme: |
+    Start the workflow (or type `/shoal release <service>` once you wire the trigger). It posts a message with an
+    environment menu and Go / Hold buttons. The menu choice and the button arrive as signals, so the workflow
+    resumes and branches on them: "Hold" asks why in a form, "Go" announces the release in the thread.
+    Design your own messages in Connections > Slack > Message builder.
+  params:
+    slack:
+      type: connection
+      integration: slack
+      description: Slack connection.
+    channel:
+      type: string
+      default: '#releases'
+      description: Where to post.
+  resources:
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}release-check'
+      description: Ask in Slack where and whether to release, and branch on the answers.
+    spec:
+      inputs:
+        service:
+          type: string
+      connections:
+        slack: '{{ params.slack }}'
+      steps:
+      - id: ask
+        type: action
+        action: slack.post_message
+        with:
+          channel: '{{ params.channel }}'
+          text: 'Release check for {{ inputs.service }}'
+          blocks:
+          - type: header
+            text:
+              type: plain_text
+              text: 'Release {{ inputs.service }}?'
+          - type: section
+            text:
+              type: mrkdwn
+              text: 'Started by *{{ run.initiator.display_name or "Shoal" }}*. Pick the environment first.'
+            accessory:
+              type: static_select
+              action_id: env
+              placeholder:
+                type: plain_text
+                text: Environment
+              options:
+              - text: {type: plain_text, text: Staging}
+                value: staging
+              - text: {type: plain_text, text: Production}
+                value: production
+              shoal:
+                signal: env
+                after: keep
+          - type: actions
+            elements:
+            - type: button
+              action_id: go
+              style: primary
+              text: {type: plain_text, text: Go}
+              value: go
+              shoal:
+                signal: decision
+            - type: button
+              action_id: hold
+              style: danger
+              text: {type: plain_text, text: Hold}
+              shoal:
+                signal: decision
+                modal:
+                  title: {type: plain_text, text: Hold the release}
+                  blocks:
+                  - type: input
+                    block_id: reason
+                    label: {type: plain_text, text: 'Why?'}
+                    element: {type: plain_text_input, action_id: reason, multiline: true}
+      - id: env
+        type: wait
+        signal: {name: env}
+        max_wait: 1d
+        on_timeout: fail
+      - id: decision
+        type: wait
+        signal: {name: decision}
+        max_wait: 1d
+        on_timeout: fail
+      - id: announce
+        type: action
+        if: "{{ steps.decision.output.payload.value == 'go' }}"
+        action: slack.reply
+        with:
+          channel: '{{ steps.ask.output.channel }}'
+          ts: '{{ steps.ask.output.ts }}'
+          text: ':rocket: Releasing {{ inputs.service }} to {{ steps.env.output.payload.value }}.'
+      - id: held
+        type: action
+        if: "{{ steps.decision.output.payload['values'] }}"
+        action: slack.reply
+        with:
+          channel: '{{ steps.ask.output.channel }}'
+          ts: '{{ steps.ask.output.ts }}'
+          text: ':pause_button: Held: {{ steps.decision.output.payload["values"]["reason"] }}'
+      outputs:
+        environment: '{{ steps.env.output.payload.value }}'
+        released: "{{ steps.decision.output.payload.value == 'go' }}"

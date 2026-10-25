@@ -263,7 +263,7 @@ class, an entry point and a contract test), so new ones install without engine c
 ([guide](docs/plugins.md)).
 
 ### Integrations, campaigns and blueprints
-- **GitHub, Jira, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
+- **GitHub, Jira, Slack, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Approvals and questions can go to Slack with buttons and forms, custom Block Kit messages can resume the run that posted them, and a channel can be wired to a workflow as a bot ([Slack guide](docs/slack/README.md)). Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
@@ -307,6 +307,7 @@ metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 | [Architecture](docs/architecture.md) | Concepts, the runtime, plugin contracts and the API surface |
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
+| [Slack](docs/slack/README.md) | Setting up Slack, approvals, interactive messages, channel bots and slash commands |
 | [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
 | [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |

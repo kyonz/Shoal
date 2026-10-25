@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound
+from shoal.core import clock
+from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound, Unauthorized
 from shoal.core.models import Connection
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
@@ -15,6 +18,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+INSTALL_STATE_TTL = timedelta(minutes=15)
 # Key spaces the engine itself waits on (signals, approvals, child runs, credentials); never set by an event.
 INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
 
@@ -164,7 +168,10 @@ class IntegrationManager:
         return f"{self.engine.settings.public_url.rstrip('/')}/v1/hooks/{endpoint.id}"
 
     async def handle_webhook(self, webhook_id: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
-        """Verify, parse, wake waiting runs and fire matching triggers."""
+        """Verify, parse, act on interactions, wake waiting runs and fire matching triggers.
+
+        When the integration answers the delivery itself, its ``WebhookReply`` is under ``reply``.
+        """
         endpoint = await self.engine.store.resolve_webhook(webhook_id)
         if endpoint is None:
             raise NotFound("unknown webhook")
@@ -178,13 +185,26 @@ class IntegrationManager:
             event.wake_keys = self.own_wake_keys(ctx.integration.key, event.wake_keys)
         woken: list[str] = []
         fired: list[dict[str, Any]] = []
+        interactions: list[dict[str, Any]] = []
         for event in events:
+            if event.interaction is not None:
+                interactions.append(await self.engine.interactions.handle(
+                    endpoint.tenant_id, endpoint.connection_name, ctx.integration.key, event
+                ))
+                continue
             woken += await self.engine.store.wake_by_keys(endpoint.tenant_id, event.wake_keys)
             woken += await self.engine.signals.deliver_event(endpoint.tenant_id, event)
             fired += await self.engine.triggers.dispatch_event(
                 endpoint.tenant_id, endpoint.connection_name, event, connection_namespace=endpoint.namespace
             )
-        return {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
+        result: dict[str, Any] = {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
+        if interactions:
+            result["interactions"] = interactions
+        with use_namespace(endpoint.namespace):
+            reply = await ctx.integration.webhook_reply(ctx, headers, body, {**result, "parsed": events})
+        if reply is not None:
+            result["reply"] = reply
+        return result
 
     def own_wake_keys(self, integration_key: str, keys: list[str]) -> list[str]:
         """Drop wake keys an integration may not claim, so a delivery cannot steer runs waiting on another system.
@@ -205,3 +225,67 @@ class IntegrationManager:
         woken += await self.engine.signals.deliver_event(tenant_id, event)
         fired = await self.engine.triggers.dispatch_event(tenant_id, connection, event, connection_namespace=current_namespace())
         return {"woken_runs": woken, "triggers": fired}
+
+    # ------------------------------------------------------------------ app install (OAuth, e.g. "Add to Slack")
+
+    @property
+    def install_redirect_uri(self) -> str:
+        return f"{self.engine.settings.public_url.rstrip('/')}/v1/install/callback"
+
+    async def _partial(self, tenant_id: str, namespace: str, name: str) -> tuple[Connection, ConnectionContext]:
+        """The connection with whichever secrets are set: an install runs before the token exists."""
+        with use_namespace(namespace):
+            row = await self.engine.store.get_resource_row(tenant_id, "Connection", name, namespace=namespace)
+            resource = Connection.model_validate(row.document)
+            integration = self.get(resource.spec.integration)
+            values: dict[str, Any] = dict(resource.spec.config)
+            for field, secret_name in resource.spec.secrets.items():
+                value = await self.engine.secrets.get(tenant_id, secret_name)
+                if value is not None:
+                    values[field] = value
+        try:
+            config = integration.connection_model.model_validate(values)
+        except ValueError as exc:
+            raise InvalidRequest(f"connection '{name}' is not ready to install: {exc}") from exc
+        return resource, ConnectionContext(engine=self.engine, tenant_id=tenant_id, name=name, config=config, integration=integration)
+
+    async def install_start(self, tenant_id: str, namespace: str, name: str, actor: str, *, then: str | None = None) -> str:
+        """The URL to send the admin to; ``then`` (e.g. ``"setup"``) is the connection page to come back to."""
+        resource, ctx = await self._partial(tenant_id, namespace, name)
+        if not ctx.integration.install_fields:
+            raise InvalidRequest(f"{ctx.integration.title} connections have no app install")
+        state = self.engine.secrets.cipher.encrypt(json.dumps({
+            "t": tenant_id, "n": namespace, "c": name, "a": actor, "exp": (clock.now() + INSTALL_STATE_TTL).timestamp(),
+            **({"then": then} if then else {}),
+        }))
+        return ctx.integration.install_url(ctx.config, self.install_redirect_uri, state)
+
+    async def install_callback(self, code: str, state: str) -> tuple[str, str, str, str, list[str], str | None]:
+        """Exchange the code and store what the install returns as the connection's secrets.
+
+        Returns (tenant, namespace, connection, actor, fields stored, page to return to). A field with no secret
+        named in the connection gets one (``<connection>-<field>``) and the connection is updated.
+        """
+        try:
+            data = json.loads(self.engine.secrets.cipher.decrypt(state))
+        except Exception as exc:
+            raise Unauthorized("invalid install state") from exc
+        if clock.now().timestamp() > data["exp"]:
+            raise Unauthorized("the install took too long; start again")
+        tenant_id, namespace, name, actor = data["t"], data["n"], data["c"], data["a"]
+        resource, ctx = await self._partial(tenant_id, namespace, name)
+        values = await ctx.integration.complete_install(ctx, code, self.install_redirect_uri)
+        secrets = dict(resource.spec.secrets)
+        stored = []
+        with use_namespace(namespace):
+            for field in ctx.integration.install_fields:
+                if field not in values:
+                    continue
+                secrets.setdefault(field, f"{name}-{field.replace('_', '-')}")
+                await self.engine.secrets.writable().put(tenant_id, secrets[field], values[field])
+                stored.append(field)
+            if secrets != resource.spec.secrets:
+                updated = resource.model_copy(update={"spec": resource.spec.model_copy(update={"secrets": secrets})})
+                await self.engine.store.apply_resource(tenant_id, updated, actor=actor, namespace=namespace,
+                                                       message="secrets added by app install")
+        return tenant_id, namespace, name, actor, stored, data.get("then")

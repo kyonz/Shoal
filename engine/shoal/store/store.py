@@ -731,6 +731,18 @@ class Store:
         except IntegrityError:
             return False
 
+    async def recent_deliveries(
+        self, tenant_id: str, namespace: str, trigger_name: str, *, since: datetime, status: str | None = None
+    ) -> list[t.TriggerDelivery]:
+        q = select(t.TriggerDelivery).where(
+            t.TriggerDelivery.tenant_id == tenant_id, t.TriggerDelivery.namespace == namespace,
+            t.TriggerDelivery.trigger_name == trigger_name, t.TriggerDelivery.created_at >= since,
+        )
+        if status:
+            q = q.where(t.TriggerDelivery.status == status)
+        async with self.session() as s:
+            return list((await s.execute(q.limit(10000))).scalars().all())
+
     async def update_delivery(self, delivery_id: str, **values: Any) -> None:
         async with self.session() as s:
             await s.execute(update(t.TriggerDelivery).where(t.TriggerDelivery.id == delivery_id).values(**values))
