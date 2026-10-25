@@ -89,6 +89,16 @@ class Store:
         async with self.session() as s:
             return (await s.execute(select(t.Tenant).where(t.Tenant.slug == slug))).scalar_one_or_none()
 
+    async def delete_tenant(self, slug: str) -> None:
+        tenant = await self.get_tenant_by_slug(slug)
+        if tenant is None:
+            raise NotFound(f"tenant '{slug}' not found")
+        async with self.session() as s:
+            for table in reversed(t.Base.metadata.sorted_tables):
+                if "tenant_id" in table.c and table.name != "tenants":
+                    await s.execute(table.delete().where(table.c.tenant_id == tenant.id))
+            await s.execute(delete(t.Tenant).where(t.Tenant.id == tenant.id))
+
     async def list_tenants(self) -> Sequence[t.Tenant]:
         async with self.session() as s:
             return (await s.execute(select(t.Tenant).order_by(t.Tenant.created_at))).scalars().all()
@@ -408,14 +418,34 @@ class Store:
         async with self.session() as s:
             return int((await s.execute(q)).scalar_one())
 
-    async def run_stats(self, tenant_id: str, since: datetime) -> dict[str, int]:
-        q = (
-            select(t.Run.status, func.count())
-            .where(t.Run.tenant_id == tenant_id, t.Run.created_at >= since)
-            .group_by(t.Run.status)
-        )
+    async def run_stats(self, tenant_id: str, since: datetime, *, namespace: str | None = None) -> dict[str, int]:
+        q = select(t.Run.status, func.count()).where(t.Run.tenant_id == tenant_id, t.Run.created_at >= since)
+        if namespace:
+            q = q.where(t.Run.namespace == namespace)
+        async with self.session() as s:
+            return {status: int(n) for status, n in (await s.execute(q.group_by(t.Run.status))).all()}
+
+    async def run_status_counts(self, tenant_id: str) -> dict[str, int]:
+        q = select(t.Run.status, func.count()).where(t.Run.tenant_id == tenant_id).group_by(t.Run.status)
         async with self.session() as s:
             return {status: int(n) for status, n in (await s.execute(q)).all()}
+
+    async def run_usage(self, tenant_id: str, since: datetime, *, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Per-workflow run counts and summed usage (for dashboards)."""
+        q = select(t.Run.workflow_name, t.Run.namespace, t.Run.status, t.Run.usage).where(
+            t.Run.tenant_id == tenant_id, t.Run.created_at >= since
+        )
+        if namespace:
+            q = q.where(t.Run.namespace == namespace)
+        out: dict[tuple[str, str], dict[str, Any]] = {}
+        async with self.session() as s:
+            for workflow, ns, status, usage in (await s.execute(q)).all():
+                row = out.setdefault((ns, workflow), {"namespace": ns, "workflow": workflow, "runs": 0, "succeeded": 0, "failed": 0, "cost_usd": 0.0})
+                row["runs"] += 1
+                row["succeeded"] += status == "succeeded"
+                row["failed"] += status == "failed"
+                row["cost_usd"] = round(row["cost_usd"] + float((usage or {}).get("cost_usd", 0)), 6)
+        return sorted(out.values(), key=lambda r: -r["runs"])
 
     async def update_run(self, run_id: str, **values: Any) -> None:
         values["updated_at"] = utcnow()

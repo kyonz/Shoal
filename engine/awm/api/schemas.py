@@ -1,11 +1,26 @@
-"""API request/response models (the public, versioned contract)."""
+"""API request/response models (the public, versioned contract).
+
+Conventions, chosen so the API maps one-to-one onto Terraform resources:
+
+* Declarative resources are addressed by ``/v1/namespaces/{namespace}/{plural}/{name}``;
+  ``PUT`` creates or replaces (idempotent), ``GET`` returns the same shape
+  plus server fields under ``metadata``, ``DELETE`` removes.
+* Directory objects that the server names (users, groups, role bindings, API
+  keys) are created with ``POST`` and addressed by ``id`` afterwards; objects
+  that people name (namespaces, roles, service accounts, OIDC providers,
+  secrets) use ``PUT`` by name.
+* Write-only values (secret values, OIDC client secrets, API key tokens) are
+  never returned after creation.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
+
+NAME = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
 
 
 class Out(BaseModel):
@@ -21,9 +36,22 @@ class Problem(BaseModel):
     details: dict[str, Any] | list[Any] | None = None
 
 
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    items: list[T]
+    next_cursor: str | None = None
+    total: int | None = None
+
+
+# --------------------------------------------------------------------------- tenants & identity
+
+
 class TenantIn(BaseModel):
-    slug: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+    slug: str = Field(pattern=NAME)
     name: str | None = None
+    admin_email: str | None = Field(None, description="Optional first human admin (bound to tenant-admin).")
 
 
 class TenantOut(Out):
@@ -35,12 +63,197 @@ class TenantOut(Out):
 
 class TenantCreated(BaseModel):
     tenant: TenantOut
-    api_key: str = Field(description="Admin API key for the new tenant. Shown once.")
+    api_key: str = Field(description="Key for the tenant's bootstrap 'admin' service account. Shown once.")
+
+
+class Me(BaseModel):
+    tenant: TenantOut | None
+    actor: str
+    kind: str
+    user_id: str | None
+    display_name: str | None
+    email: str | None
+    is_system_admin: bool
+    namespaces: list[str]
+
+
+class Permissions(BaseModel):
+    tenant: list[str]
+    namespaces: dict[str, list[str]]
+
+
+# --------------------------------------------------------------------------- namespaces
+
+
+class NamespaceIn(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+
+
+class NamespaceOut(Out):
+    name: str
+    display_name: str
+    description: str | None
+    created_at: datetime
+    created_by: str | None
+
+
+class MemberOut(BaseModel):
+    binding_id: str
+    role: str
+    subject_kind: str
+    subject_id: str
+    subject_name: str
+    namespace: str | None
+
+
+# --------------------------------------------------------------------------- users, groups, service accounts
+
+
+class UserIn(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+    email: str | None = None
+    display_name: str | None = None
+    active: bool = True
+
+
+class UserPatch(BaseModel):
+    email: str | None = None
+    display_name: str | None = None
+    active: bool | None = None
+
+
+class UserOut(Out):
+    id: str
+    kind: str
+    username: str
+    email: str | None
+    display_name: str
+    active: bool
+    external_id: str | None
+    oidc_subject: str | None
+    created_at: datetime
+    last_login_at: datetime | None
+    groups: list[str] = Field(default_factory=list)
+
+
+class ServiceAccountIn(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+
+
+class ServiceAccountOut(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    description: str | None
+    created_at: datetime
+
+
+class GroupIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    members: list[str] = Field(default_factory=list, description="User ids.")
+
+
+class GroupPatch(BaseModel):
+    display_name: str | None = None
+
+
+class GroupMembersIn(BaseModel):
+    members: list[str]
+
+
+class GroupOut(Out):
+    id: str
+    display_name: str
+    source: str
+    external_id: str | None
+    created_at: datetime
+    members: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- roles & bindings
+
+
+class PermissionOut(BaseModel):
+    name: str
+    description: str
+    scope: Literal["tenant", "namespace"]
+
+
+class RoleIn(BaseModel):
+    description: str | None = None
+    permissions: list[str] = Field(min_length=1)
+
+
+class RoleOut(BaseModel):
+    name: str
+    description: str
+    permissions: list[str]
+    builtin: bool
+
+
+class RoleBindingIn(BaseModel):
+    role: str
+    subject_kind: Literal["user", "group"]
+    subject_id: str
+    namespace: str | None = Field(None, description="Omit for a tenant-wide binding.")
+
+
+class RoleBindingOut(Out):
+    id: str
+    role: str
+    subject_kind: str
+    subject_id: str
+    namespace: str | None
+    created_at: datetime
+    created_by: str | None
+
+
+# --------------------------------------------------------------------------- auth configuration
+
+
+class OIDCProviderIn(BaseModel):
+    display_name: str | None = None
+    issuer: str
+    client_id: str
+    client_secret: str | None = Field(None, description="Write-only. Omit for public (PKCE-only) clients.")
+    scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    groups_claim: str | None = Field(None, description="ID token claim with group names, e.g. 'groups'.")
+    allowed_domains: list[str] = Field(default_factory=list)
+    auto_provision: bool = True
+    default_role: str | None = None
+    default_namespace: str | None = None
+    enabled: bool = True
+
+
+class OIDCProviderOut(Out):
+    name: str
+    display_name: str
+    issuer: str
+    client_id: str
+    has_client_secret: bool
+    scopes: list[str]
+    groups_claim: str | None
+    allowed_domains: list[str]
+    auto_provision: bool
+    default_role: str | None
+    default_namespace: str | None
+    enabled: bool
+    created_at: datetime
+
+
+class LoginProvider(BaseModel):
+    name: str
+    display_name: str
+    login_url: str
 
 
 class ApiKeyIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    scopes: list[str] = Field(default_factory=lambda: ["read", "write", "run"])
+    service_account: str | None = Field(None, description="Create the key for this service account instead of yourself.")
+    scopes: list[str] = Field(default_factory=lambda: ["*"], description="Permission patterns the key is limited to.")
+    namespaces: list[str] = Field(default_factory=list, description="Namespaces the key is limited to (empty: all).")
     expires_at: datetime | None = None
 
 
@@ -49,6 +262,8 @@ class ApiKeyOut(Out):
     name: str
     prefix: str
     scopes: list[str]
+    namespaces: list[str]
+    owner_id: str | None
     created_by: str | None
     created_at: datetime
     expires_at: datetime | None
@@ -61,29 +276,49 @@ class ApiKeyCreated(BaseModel):
     token: str = Field(description="The API key. Shown once; store it securely.")
 
 
-class Me(BaseModel):
-    tenant: TenantOut | None
-    actor: str
-    scopes: list[str]
-    is_admin: bool
+# --------------------------------------------------------------------------- declarative resources
 
 
-class ResourceOut(BaseModel):
-    kind: str
+class ResourceMetadataIn(BaseModel):
+    description: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
+class ResourceIn(BaseModel):
+    """Body of ``PUT /v1/namespaces/{ns}/{plural}/{name}`` (name and namespace come from the path)."""
+
+    metadata: ResourceMetadataIn = Field(default_factory=ResourceMetadataIn)
+    spec: dict[str, Any]
+
+
+class ResourceMetadataOut(BaseModel):
     name: str
+    namespace: str
+    description: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
     version: int
-    document: dict[str, Any]
     created_at: datetime
     updated_at: datetime
     updated_by: str | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceOut(BaseModel):
+    api_version: str = Field("awm.dev/v1", alias="apiVersion")
+    kind: str
+    metadata: ResourceMetadataOut
+    spec: dict[str, Any]
+    status: dict[str, Any] = Field(default_factory=dict, description="Server-computed details, e.g. a connection's webhook URL.")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ApplyResult(BaseModel):
     kind: str
     name: str
-    outcome: str
+    namespace: str
+    outcome: Literal["created", "updated", "unchanged", "invalid"]
     version: int | None = None
+    error: str | None = None
 
 
 class ResourceVersionOut(Out):
@@ -91,6 +326,20 @@ class ResourceVersionOut(Out):
     created_at: datetime
     created_by: str | None
     document: dict[str, Any]
+
+
+class SecretIn(BaseModel):
+    value: str = Field(min_length=1, description="Write-only.")
+
+
+class SecretOut(Out):
+    name: str
+    namespace: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------- runs
 
 
 class StartRunIn(BaseModel):
@@ -115,6 +364,7 @@ class StepOut(Out):
 
 class RunOut(Out):
     id: str
+    namespace: str
     workflow_name: str
     workflow_version: int
     status: str
@@ -124,6 +374,7 @@ class RunOut(Out):
     usage: dict[str, Any]
     labels: dict[str, Any]
     started_by: str | None
+    initiator: dict[str, Any]
     trigger_name: str | None
     campaign_id: str | None
     parent_run_id: str | None
@@ -137,11 +388,6 @@ class RunDetail(RunOut):
     workflow: dict[str, Any]
     steps: list[StepOut]
     context: dict[str, Any]
-
-
-class RunList(BaseModel):
-    items: list[RunOut]
-    next_cursor: str | None
 
 
 class EventOut(Out):
@@ -158,6 +404,9 @@ class ApprovalIn(BaseModel):
     comment: str | None = None
 
 
+# --------------------------------------------------------------------------- campaigns
+
+
 class CampaignLaunchIn(BaseModel):
     name: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict, description="Extra/override workflow input expressions.")
@@ -165,19 +414,21 @@ class CampaignLaunchIn(BaseModel):
 
 
 class CampaignInlineIn(BaseModel):
-    name: str
+    name: str = Field(pattern=NAME)
     spec: dict[str, Any]
     start: bool = True
 
 
 class CampaignRunOut(Out):
     id: str
+    namespace: str
     name: str
     spec: dict[str, Any]
     status: str
     stats: dict[str, Any]
     error: dict[str, Any] | None
     created_by: str | None
+    initiator: dict[str, Any]
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -200,18 +451,17 @@ class AddTargetsIn(BaseModel):
     items: list[dict[str, Any]]
 
 
-class SecretIn(BaseModel):
-    value: str = Field(min_length=1)
-
-
-class SecretOut(Out):
-    name: str
-    created_at: datetime
-    updated_at: datetime
+# --------------------------------------------------------------------------- connections & triggers
 
 
 class ActionCallIn(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class QueryIn(BaseModel):
+    filter: dict[str, Any] = Field(default_factory=dict)
+    cursor: str | None = None
+    limit: int = Field(100, ge=1, le=1000)
 
 
 class TriggerTestIn(BaseModel):
