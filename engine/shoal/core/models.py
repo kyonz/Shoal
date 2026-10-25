@@ -284,10 +284,18 @@ class ApprovalStep(StepBase):
     approvers: list[str] = Field(default_factory=list)
     max_wait: Duration | None = None
     on_timeout: Literal["reject", "approve"] = "reject"
+    on_reject: Literal["fail", "continue"] = Field(
+        "fail",
+        description="'fail' ends the run when the step is rejected (or expires rejected); "
+        "'continue' succeeds with approved: false so later steps can branch on it.",
+    )
 
 
 class WorkflowCallStep(StepBase):
-    """Run another workflow as a child run, optionally once per item (fan-out)."""
+    """Run another workflow as a child run, optionally once per item (fan-out).
+
+    A failed child fails the step; with ``retry:``, a retry runs only the failed children again.
+    """
 
     type: Literal["workflow"] = "workflow"  # type: ignore[misc]
     workflow: str

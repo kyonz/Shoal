@@ -63,8 +63,9 @@ shoal triggers fire nightly -d '{"ref": "main"}' # as if the trigger's event had
 ```
 
 `run --wait` and `--follow` print the `shoal approve` command when the run stops at an approval.
-A rejection does not fail the run: the step's output has `approved: false`, so gate the steps after
-it with `if: "{{ steps.<id>.output.approved }}"`.
+A rejection fails the step and the run ("rejected by <who>: <comment>"), so `--wait` exits non-zero.
+Set `on_reject: continue` on the step to keep going with `approved: false` and branch with
+`if: "{{ steps.<id>.output.approved }}"`.
 
 ## Campaigns and blueprints
 

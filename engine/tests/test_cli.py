@@ -198,9 +198,9 @@ def test_approve_and_reject(cli, tenant_key):
     assert result.exit_code == 0, result.output
     assert "step review rejected" in result.output
     run = _wait_for(cli, auth, rejected_id, "succeeded", "failed")
+    assert run["status"] == "failed" and run["error"]["message"].startswith("rejected by")  # a rejection stops the run
     steps = {s["step_id"]: s for s in run["steps"]}
-    assert steps["review"]["output"]["approved"] is False
-    assert steps["done"]["status"] == "skipped"
+    assert steps["review"]["status"] == "failed" and steps["done"]["status"] == "cancelled"
 
 
 FLEET = """

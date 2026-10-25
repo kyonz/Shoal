@@ -43,6 +43,8 @@ log = logging.getLogger(__name__)
 
 # Waits longer than this park run-scoped sandboxes (suspend) to free compute.
 SUSPEND_THRESHOLD = timedelta(minutes=10)
+# A run whose passes keep raising backs off (30s, 1m, 2m, ... up to an hour) and fails after this many.
+MAX_ADVANCE_ERRORS = 10
 _DONE_OK = (StepStatus.succeeded, StepStatus.skipped)
 
 
@@ -135,13 +137,10 @@ class Executor:
         heartbeat = asyncio.create_task(self._heartbeat(run_id, worker_id))
         try:
             await self._advance(run_id)
-        except Exception:
+        except Exception as exc:
             log.exception("error advancing run %s", run_id)
-            # Back off so a poison run does not spin; the error is visible in events.
             with contextlib.suppress(Exception):
-                run = await self.store.get_run(None, run_id)
-                await self.engine.events.emit(run, "run.error", {"message": "internal error while advancing"})
-                await self.store.update_run(run_id, next_wake_at=clock.now() + timedelta(seconds=30))
+                await self._advance_failed(run_id, exc)
         finally:
             heartbeat.cancel()
             await self.store.release_lease(run_id, worker_id)
@@ -160,8 +159,31 @@ class Executor:
         if RunStatus(run.status).terminal:
             await self.store.update_run(run.id, next_wake_at=None)
             return
+        failing = "_advance_errors" in (run.state or {})
         with use_namespace(run.namespace):
             await self._advance_run(run)
+        if failing:  # a pass went through: forget the earlier errors
+            fresh = await self.store.get_run(None, run.id)
+            await self.store.update_run(run.id, state={k: v for k, v in fresh.state.items() if k != "_advance_errors"})
+
+    async def _advance_failed(self, run_id: str, exc: Exception) -> None:
+        """Back off a run whose pass raised, so a poison run does not spin; fail it after repeated errors."""
+        run = await self.store.get_run(None, run_id)
+        if RunStatus(run.status).terminal:
+            return
+        errors = int((run.state or {}).get("_advance_errors", 0)) + 1
+        await self.store.update_run(run_id, state={**(run.state or {}), "_advance_errors": errors})
+        if errors >= MAX_ADVANCE_ERRORS:
+            message = f"internal error while advancing ({type(exc).__name__}), {errors} times in a row"
+            with use_namespace(run.namespace):
+                await self._finish(run, WorkflowSpec.model_validate(run.workflow), RunStatus.failed, {"message": message})
+            return
+        delay = timedelta(seconds=min(30 * 2 ** (errors - 1), 3600))
+        await self.engine.events.emit(
+            run, "run.error",
+            {"message": "internal error while advancing", "attempt": errors, "retry_in_seconds": delay.total_seconds()},
+        )
+        await self.store.update_run(run_id, next_wake_at=clock.now() + delay)
 
     async def _advance_run(self, run: t.Run) -> None:
         spec = WorkflowSpec.model_validate(run.workflow)
@@ -461,8 +483,9 @@ class Executor:
                 details={"approvers": approvers},
             )
         decision = {"approved": approved, "by": by, "comment": comment, "at": clock.now().isoformat()}
-        row.state = {**row.state, "decision": decision}
-        await self.store.save_step(row)
+        if not await self.store.update_step_if_unchanged(row, state={**row.state, "decision": decision}):
+            raise Conflict(f"step '{step_id}' changed while deciding (decided by someone else?); reload and try again")
+        row = await self.store.get_step(run.id, step_id)
         await self.engine.events.emit(run, "approval.decided", decision, step_id=step_id)
         await self.store.wake_by_keys(tenant_id, [f"approval:{run.id}:{step_id}"])
         await self.store.wake_run(run.id)

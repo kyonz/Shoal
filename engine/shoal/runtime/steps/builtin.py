@@ -281,17 +281,17 @@ class ApprovalHandler:
         assert isinstance(step, ApprovalStep)
         decision = ctx.state.get("decision")
         if decision:
-            return Completed(
-                {
-                    "approved": decision["approved"],
-                    "by": decision.get("by"),
-                    "comment": decision.get("comment"),
-                    "timed_out": False,
-                }
-            )
+            return self._outcome(step, {
+                "approved": decision["approved"],
+                "by": decision.get("by"),
+                "comment": decision.get("comment"),
+                "timed_out": False,
+            })
         deadline = ctx.deadline("deadline", step.max_wait) if step.max_wait else None
         if deadline is not None and ctx.now() >= deadline:
-            return Completed({"approved": step.on_timeout == "approve", "by": None, "comment": None, "timed_out": True})
+            return self._outcome(
+                step, {"approved": step.on_timeout == "approve", "by": None, "comment": None, "timed_out": True}
+            )
         if not ctx.state.get("requested"):
             ctx.state["requested"] = True
             ctx.state["message"] = ctx.render(step.message)
@@ -302,6 +302,17 @@ class ApprovalHandler:
         return Suspended(
             wake_at=deadline, wait_keys=[f"approval:{ctx.run.id}:{step.id}"], reason="awaiting approval"
         )
+
+    @staticmethod
+    def _outcome(step: ApprovalStep, output: dict[str, Any]) -> StepResult:
+        """A rejection stops the run unless the step says ``on_reject: continue``."""
+        if output["approved"] or step.on_reject == "continue":
+            return Completed(output)
+        if output["timed_out"]:
+            message = f"not approved within {step.max_wait}"
+        else:
+            message = f"rejected by {output['by'] or 'unknown'}" + (f": {output['comment']}" if output["comment"] else "")
+        raise StepError(message, details=output)
 
 
 class WorkflowHandler:
@@ -326,6 +337,13 @@ class WorkflowHandler:
         statuses: dict[str, Any] = {}
         for run_id in filter(None, children):
             statuses[run_id] = await store.get_run(ctx.tenant_id, run_id)
+        if ctx.state.setdefault("attempt", ctx.attempt) != ctx.attempt:
+            # A retry (retry: max_attempts > 1) starts again only the children that did not succeed.
+            ctx.state["attempt"] = ctx.attempt
+            children = [
+                rid if rid and statuses[rid].status == RunStatus.succeeded else None for rid in children
+            ]
+            statuses = {rid: statuses[rid] for rid in filter(None, children)}
         active = sum(1 for r in statuses.values() if not RunStatus(r.status).terminal)
 
         for index, item in enumerate(items):
@@ -368,9 +386,15 @@ class WorkflowHandler:
         if step.for_each is None:
             child = results[0]
             if child["status"] != RunStatus.succeeded:
-                raise StepError(f"child workflow '{step.workflow}' {child['status']}", details={"run_id": child["run_id"], "error": child["error"]})
+                raise StepError(
+                    f"child workflow '{step.workflow}' {child['status']}",
+                    retryable=child["status"] == RunStatus.failed,
+                    details={"run_id": child["run_id"], "error": child["error"]},
+                )
             return Completed({"run_id": child["run_id"], **child["outputs"]})
         output = {"results": results, "succeeded": len(results) - failed, "failed": failed}
         if failed:
-            raise StepError(f"{failed} of {len(results)} child runs did not succeed", details=output)
+            # Retryable so `retry:` on the step re-runs the failed children (cancelled ones mean someone stopped them).
+            retryable = any(r["status"] == RunStatus.failed for r in results)
+            raise StepError(f"{failed} of {len(results)} child runs did not succeed", retryable=retryable, details=output)
         return Completed(output)
