@@ -240,6 +240,31 @@ def test_remote_urls_must_be_https_except_loopback():
     assert check_url("http://svc.internal", allow_insecure=True) == "http://svc.internal"
 
 
+async def test_connections_cannot_reach_the_metadata_service():
+    reached: list[str] = []
+
+    def anything(request: httpx.Request) -> httpx.Response:
+        reached.append(str(request.url))
+        return httpx.Response(200, json={"protocol": "shoal.integration/v1", "key": "x", "title": "X"})
+
+    async with engine_harness(http=httpx.MockTransport(anything)) as world:
+        for name, url in (("imds", "http://169.254.169.254/latest/meta-data/iam?x="), ("imds6", "http://[fd00:ec2::254]/")):
+            await world.connect(name, "remote", config={"url": url, "allow_insecure": True})
+            ctx = await world.engine.integrations.connection(world.tenant_id, name)
+            with pytest.raises(IntegrationError, match="blocked address"):
+                await ctx.integration.test_connection(ctx)
+        await world.connect("ok", "remote", config={"url": "https://svc.test"})
+        ctx = await world.engine.integrations.connection(world.tenant_id, "ok")
+        assert (await ctx.integration.test_connection(ctx))["ok"]
+        assert reached == ["https://svc.test/manifest"]
+
+        world.engine.settings.integration_blocked_networks = ["10.0.0.0/8"]  # operators can widen it
+        await world.connect("private", "remote", config={"url": "http://10.1.2.3", "allow_insecure": True})
+        ctx = await world.engine.integrations.connection(world.tenant_id, "private")
+        with pytest.raises(IntegrationError, match="blocked address"):
+            await ctx.integration.test_connection(ctx)
+
+
 async def test_remote_connection_end_to_end():
     api = tickets_api()
     transport = HostRouter({"svc.test": served(api), "tickets.example": api.transport})

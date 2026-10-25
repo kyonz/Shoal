@@ -199,6 +199,12 @@ connect to it with an ordinary connection.
 The URL must be `https` (plain `http` is allowed for loopback, or with
 `allow_insecure: true`) because the service receives the connection's secrets.
 
+Connection URLs are set by tenants, so every integration call (remote, MCP,
+GitHub Enterprise and Jira base URLs included) refuses hosts that resolve into
+`SHOAL_INTEGRATION_BLOCKED_NETWORKS`: by default the link-local and cloud
+metadata ranges. A multi-tenant deployment can add its private ranges, e.g.
+`SHOAL_INTEGRATION_BLOCKED_NETWORKS='["169.254.0.0/16", "fe80::/10", "10.0.0.0/8"]'`.
+
 ### Protocol
 
 Every request carries `Authorization: Bearer <token>` and

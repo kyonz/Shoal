@@ -144,6 +144,12 @@ class ConnectionContext:
         kwargs.setdefault("timeout", httpx.Timeout(30.0, connect=10.0))
         if transport is not None:
             kwargs["transport"] = transport
+        settings = getattr(self.engine, "settings", None)  # None outside the engine (shoal.sdk.server, harness)
+        if settings is not None and settings.integration_blocked_networks:
+            from shoal.integrations.egress import guard, networks
+
+            hooks = kwargs.setdefault("event_hooks", {})
+            hooks["request"] = [*hooks.get("request", []), guard(networks(settings.integration_blocked_networks))]
         return httpx.AsyncClient(**kwargs)
 
 
