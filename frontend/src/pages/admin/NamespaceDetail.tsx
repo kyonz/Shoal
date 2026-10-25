@@ -30,7 +30,7 @@ import {
   Tr,
   useConfirm,
 } from "@/components/ui";
-import { adminKeys, Avatar, KV, RoleSelect, SubjectPicker, useAction, useRoles } from "./shared";
+import { adminKeys, Avatar, isGroupKind, KV, RoleSelect, type Subject, type SubjectKind, subjectKindLabel, SubjectPicker, useAction, useRoles } from "./shared";
 
 export default function NamespaceDetail() {
   const { name = "" } = useParams();
@@ -59,7 +59,7 @@ export default function NamespaceDetail() {
     success: "Member removed",
   });
   const changeRole = useAction(
-    async ({ id, kind, subject, role }: { id: string; kind: "user" | "group"; subject: string; role: string }) => {
+    async ({ id, kind, subject, role }: { id: string; kind: SubjectKind; subject: string; role: string }) => {
       await unwrap(client.POST("/v1/role-bindings", { body: { role, subject_kind: kind, subject_id: subject, namespace: name } }));
       await unwrap(client.DELETE("/v1/role-bindings/{binding_id}", { params: { path: { binding_id: id } } }));
     },
@@ -154,10 +154,10 @@ export default function NamespaceDetail() {
                     <Tr key={m.binding_id}>
                       <Td>
                         <div className="flex items-center gap-2.5">
-                          <Avatar name={m.subject_name} group={m.subject_kind === "group"} />
+                          <Avatar name={m.subject_name} group={isGroupKind(m.subject_kind)} />
                           <div>
                             <div className="font-medium">{m.subject_name}</div>
-                            <div className="text-xs text-faint">{m.subject_kind === "group" ? "Group" : "User"}</div>
+                            <div className="text-xs text-faint">{subjectKindLabel(m.subject_kind)}</div>
                           </div>
                         </div>
                       </Td>
@@ -169,7 +169,7 @@ export default function NamespaceDetail() {
                               onChange={(e) =>
                                 changeRole.mutate({
                                   id: m.binding_id,
-                                  kind: m.subject_kind as "user" | "group",
+                                  kind: m.subject_kind as SubjectKind,
                                   subject: m.subject_id,
                                   role: e.target.value,
                                 })
@@ -222,7 +222,7 @@ export default function NamespaceDetail() {
               <div className="flex flex-wrap gap-2 p-4">
                 {inherited.map((m) => (
                   <span key={m.binding_id} className="flex items-center gap-2 rounded-lg border border-border px-2 py-1 text-[13px]">
-                    <Avatar name={m.subject_name} group={m.subject_kind === "group"} className="size-5" />
+                    <Avatar name={m.subject_name} group={isGroupKind(m.subject_kind)} className="size-5" />
                     {m.subject_name}
                     <Badge tone="info">{m.role}</Badge>
                   </span>
@@ -309,7 +309,7 @@ export default function NamespaceDetail() {
 }
 
 function AddMemberDialog({ ns, open, onOpenChange }: { ns: string; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const [subject, setSubject] = useState<{ kind: "user" | "group"; id: string } | null>(null);
+  const [subject, setSubject] = useState<Subject | null>(null);
   const [role, setRole] = useState("editor");
   const roles = useRoles(open);
   const add = useAction(

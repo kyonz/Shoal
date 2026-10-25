@@ -14,7 +14,16 @@ export default defineConfig({
     // The repo's docs/ folder is bundled into the in-app documentation.
     fs: { allow: [".", "../docs"] },
     proxy: {
-      "/v1": { target: api, changeOrigin: false },
+      "/v1": {
+        target: api,
+        changeOrigin: false,
+        // Node holds response headers until the first body byte. A resumed event
+        // stream with nothing new would then look stuck, so send them right away.
+        configure: (proxy) =>
+          proxy.on("proxyRes", (proxyRes, _req, res) => {
+            if (String(proxyRes.headers["content-type"] ?? "").startsWith("text/event-stream")) res.flushHeaders();
+          }),
+      },
       "/scim": { target: api, changeOrigin: false },
     },
   },

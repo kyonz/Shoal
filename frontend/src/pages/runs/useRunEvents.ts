@@ -4,11 +4,13 @@ import { rawJson, type RunEvent } from "@/api/client";
 import { subscribe } from "@/api/sse";
 import { keys } from "@/api/hooks";
 
-export type StreamState = "connecting" | "live" | "ended" | "reconnecting";
+export type StreamState = "connecting" | "live" | "polling" | "ended" | "reconnecting";
 
 /**
  * All events of a run: the history first, then live over SSE. Any step or
  * run event refreshes the run detail (throttled) so statuses stay current.
+ * Where the server cannot stream (a federated tenant answers 501), the
+ * history is polled instead until the run finishes.
  */
 export function useRunEvents(runId: string | undefined, terminal: boolean) {
   const qc = useQueryClient();
@@ -21,6 +23,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
     if (!runId) return;
     let cancelled = false;
     let close: (() => void) | null = null;
+    let poll: ReturnType<typeof setTimeout> | null = null;
     seen.current = new Set();
     setEvents([]);
     setState("connecting");
@@ -58,6 +61,24 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
             setState("ended");
             refresh();
           },
+          onUnsupported: () => {
+            setState("polling");
+            const tick = async () => {
+              try {
+                add(await rawJson<RunEvent[]>(`/v1/runs/${runId}/events`));
+                const run = await rawJson<{ status: string }>(`/v1/runs/${runId}`);
+                void qc.invalidateQueries({ queryKey: keys.run(runId) });
+                if (["succeeded", "failed", "cancelled"].includes(run.status)) {
+                  setState("ended");
+                  return;
+                }
+              } catch {
+                /* keep polling */
+              }
+              if (!cancelled) poll = setTimeout(tick, 3000);
+            };
+            poll = setTimeout(tick, 3000);
+          },
           onMessage: (msg) => {
             if (msg.event === "end") return;
             try {
@@ -77,6 +98,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
     return () => {
       cancelled = true;
       close?.();
+      if (poll) clearTimeout(poll);
       if (pending.current) clearTimeout(pending.current);
       pending.current = null;
     };

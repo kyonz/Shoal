@@ -1,9 +1,10 @@
 /** Queries and small widgets shared by the admin console pages. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, UserRound, Users as UsersIcon } from "lucide-react";
+import { Network, Search, UserRound, Users as UsersIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ApiError, client, unwrap, type Schemas } from "@/api/client";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { Badge, Input, NativeSelect } from "@/components/ui";
 
@@ -15,6 +16,19 @@ export type Binding = Schemas["RoleBindingOut"];
 export type Permission = Schemas["PermissionOut"];
 export type ApiKey = Schemas["ApiKeyOut"];
 export type Namespace = Schemas["NamespaceOut"];
+export type Membership = Schemas["MembershipOut"];
+export type FederationLink = Schemas["LinkOut"];
+
+/** Role-binding subjects: local users and groups, or people and groups from a federation hub. */
+export type SubjectKind = "user" | "group" | "hub_user" | "hub_group";
+export type Subject = { kind: SubjectKind; id: string };
+
+export function subjectKindLabel(kind: string, service?: boolean): string {
+  if (service) return "Service account";
+  return { user: "User", group: "Group", hub_user: "Hub person", hub_group: "Hub group" }[kind] ?? kind;
+}
+
+export const isGroupKind = (kind: string) => kind === "group" || kind === "hub_group";
 
 export const adminKeys = {
   users: (q = "") => ["admin", "users", q] as const,
@@ -26,7 +40,25 @@ export const adminKeys = {
   oidc: ["admin", "oidc"] as const,
   apiKeys: (all: boolean) => ["admin", "api-keys", all] as const,
   members: (ns: string) => ["admin", "members", ns] as const,
+  membership: ["admin", "federation", "membership"] as const,
+  links: ["admin", "federation", "links"] as const,
 };
+
+/** This tenant's federation membership; null when it has not joined a hub. */
+export function useMembership(enabled = true) {
+  return useQuery({
+    queryKey: adminKeys.membership,
+    queryFn: async () => {
+      try {
+        return await unwrap(client.GET("/v1/federation/membership"));
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled,
+  });
+}
 
 export function useUsers(q = "") {
   return useQuery({
@@ -162,10 +194,14 @@ export function SubjectPicker({
   value,
   onChange,
 }: {
-  value: { kind: "user" | "group"; id: string } | null;
-  onChange: (v: { kind: "user" | "group"; id: string } | null) => void;
+  value: Subject | null;
+  onChange: (v: Subject | null) => void;
 }) {
   const [q, setQ] = useState("");
+  const { can } = useAuth();
+  const membership = useMembership(can("federation:manage"));
+  const [hubKind, setHubKind] = useState<"hub_user" | "hub_group">("hub_user");
+  const [hubId, setHubId] = useState("");
   const users = useUsers();
   const groups = useGroups();
   const sas = useServiceAccounts();
@@ -207,6 +243,34 @@ export function SubjectPicker({
         })}
         {!filtered.length && <div className="px-2 py-4 text-center text-xs text-faint">No matches.</div>}
       </div>
+      {membership.data && (
+        <div className="border-t border-border p-2">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-faint uppercase">
+            <Network className="size-3" /> From the federation hub
+          </div>
+          <div className="flex gap-1.5">
+            <NativeSelect value={hubKind} onChange={(e) => {
+                const kind = e.target.value as "hub_user" | "hub_group";
+                setHubKind(kind);
+                if (hubId.trim()) onChange({ kind, id: hubId.trim() });
+              }}
+              className="w-32 shrink-0">
+              <option value="hub_user">Person</option>
+              <option value="hub_group">Group</option>
+            </NativeSelect>
+            <Input
+              value={hubId}
+              onChange={(e) => {
+                setHubId(e.target.value);
+                onChange(e.target.value.trim() ? { kind: hubKind, id: e.target.value.trim() } : null);
+              }}
+              onFocus={() => hubId.trim() && onChange({ kind: hubKind, id: hubId.trim() })}
+              placeholder={hubKind === "hub_user" ? "email@company.com or sa:name" : "Hub group name"}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-faint">People and groups in the hub's directory at {membership.data.hub_url}.</p>
+        </div>
+      )}
     </div>
   );
 }

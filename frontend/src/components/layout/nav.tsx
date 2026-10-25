@@ -6,6 +6,7 @@ import {
   Cable,
   FlaskConical,
   GitBranch,
+  Globe,
   KeyRound,
   LayoutDashboard,
   Network,
@@ -96,5 +97,6 @@ export const ADMIN_NAV: NavItem[] = [
   { label: "Sign-in & SCIM", to: "/admin/auth", icon: KeyRound, namespaced: false, permission: "auth:manage" },
   { label: "API keys", to: "/admin/api-keys", icon: KeyRound, namespaced: false },
   { label: "Identities", to: "/admin/identities", icon: GitBranch, namespaced: false, permission: "identities:read" },
+  { label: "Federation", to: "/admin/federation", icon: Globe, namespaced: false, permission: "federation:manage" },
   { label: "Audit log", to: "/admin/audit", icon: Activity, namespaced: false, permission: "audit:read" },
 ];
