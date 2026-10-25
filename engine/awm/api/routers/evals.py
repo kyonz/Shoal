@@ -139,7 +139,7 @@ async def start_eval_run(namespace: str, name: str, ctx: CtxDep, body: EvalRunIn
         )
     await ctx.audit("eval.run_started", row.id, eval=f"{namespace}/{name}", eval_version=row.eval_version,
                     variants=[{"name": v["name"], "workflow_version": v["workflow_version"]} for v in row.variants],
-                    baseline=row.baseline_id)
+                    baseline=row.baseline_id, namespace=namespace)
     return await _detail(ctx, row)
 
 
@@ -175,7 +175,7 @@ async def cancel_eval_run(eval_run_id: str, ctx: CtxDep) -> Any:
     row = await _eval_run(ctx, eval_run_id, "evals:run")
     with use_namespace(row.namespace):
         row = await ctx.engine.evals.cancel(ctx.tenant_id, row.id)
-    await ctx.audit("eval.run_cancelled", row.id)
+    await ctx.audit("eval.run_cancelled", row.id, namespace=row.namespace)
     return row
 
 
@@ -190,7 +190,7 @@ async def compare_eval_runs(eval_run_id: str, ctx: CtxDep, baseline: str) -> dic
 async def export_eval_run(eval_run_id: str, body: SinkIn, ctx: CtxDep) -> Any:
     row = await _eval_run(ctx, eval_run_id, "evals:run")
     result = await ctx.engine.evals.export(ctx.tenant_id, row.id, body.sink, body.config)
-    await ctx.audit("eval.exported", row.id, sink=body.sink, url=result.url)
+    await ctx.audit("eval.exported", row.id, namespace=row.namespace, sink=body.sink, url=result.url)
     return ExportOut(sink=body.sink, url=result.url, ids=result.ids)
 
 
@@ -221,7 +221,7 @@ async def import_eval_dataset(namespace: str, name: str, body: DatasetImportIn, 
         source = updated.to_document()["spec"]
         new_row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, updated, actor=ctx.actor, namespace=namespace, source=source)
     await ctx.audit("eval.dataset_imported", f"{namespace}/{name}", sink=body.sink, dataset=body.dataset,
-                    cases=len(imported), mode=body.mode, version=new_row.version, outcome=outcome)
+                    cases=len(imported), mode=body.mode, version=new_row.version, result=outcome, namespace=namespace)
     return await to_out(ctx, new_row)
 
 
@@ -242,5 +242,5 @@ async def export_run_trace(run_id: str, body: SinkIn, ctx: CtxDep) -> Any:
     await ctx.require("runs:read", run.namespace)
     await ctx.require("evals:run", run.namespace)
     result = await ctx.engine.evals.export_run(ctx.tenant_id, run.id, body.sink, body.config)
-    await ctx.audit("run.exported", run.id, sink=body.sink, url=result.url)
+    await ctx.audit("run.exported", run.id, namespace=run.namespace, sink=body.sink, url=result.url)
     return ExportOut(sink=body.sink, url=result.url, ids=result.ids)

@@ -439,7 +439,11 @@ async def test_eval_api_with_langfuse(engine, admin):
     r = await admin.post(f"/v1/runs/{results[0]['run_id']}/export", json={"sink": "langfuse", "config": lf_config})
     assert r.status_code == 200 and r.json()["ids"] == {"trace_id": results[0]["run_id"]}
 
-    audit = [a["action"] for a in (await admin.get("/v1/audit")).json()["items"]]
+    entries = (await admin.get("/v1/audit")).json()["items"]
+    audit = [a["action"] for a in entries]
+    imported = next(a for a in entries if a["action"] == "eval.dataset_imported")
+    assert imported["outcome"] == "success" and imported["namespace"] == "default"
+    assert imported["data"]["result"] == "updated"
     assert {"eval.dataset_imported", "eval.run_started", "eval.completed", "run.exported"} <= set(audit)
 
 
