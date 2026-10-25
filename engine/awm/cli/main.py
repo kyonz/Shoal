@@ -38,10 +38,12 @@ secrets_app = typer.Typer(help="Manage namespace secrets (values are write-only)
 tenants_app = typer.Typer(help="Create and list tenants (needs the system admin token).", no_args_is_help=True)
 eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_help=True)
 integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_args_is_help=True)
+federation_app = typer.Typer(help="Federated tenants: link them on the hub, join from the member.", no_args_is_help=True)
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(tenants_app, name="tenants")
 app.add_typer(eval_app, name="eval")
 app.add_typer(integrations_app, name="integrations")
+app.add_typer(federation_app, name="federation")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -665,6 +667,79 @@ def tenants_list(ctx: typer.Context, output: Output = Format.table) -> None:
     with api(ctx) as client:
         emit(client.get("/v1/tenants"), output, [("SLUG", lambda t: t["slug"]), ("NAME", lambda t: t.get("name")),
                                                   ("AGE", lambda t: age(t.get("created_at")))], name=lambda t: t["slug"])
+
+
+# --------------------------------------------------------------------------- federation
+
+
+def _parse_grant(text: str) -> dict[str, Any]:
+    """``ROLE=hub_user:alice@acme.com`` or ``ROLE=hub_group:platform[@NAMESPACE]``."""
+    role, _, subject = text.partition("=")
+    kind, _, rest = subject.partition(":")
+    subject_id, _, namespace = rest.rpartition("@") if kind == "hub_group" and "@" in rest else (rest, "", "")
+    if not role or kind not in ("hub_user", "hub_group") or not subject_id:
+        raise typer.BadParameter(f"expected ROLE=hub_user:EMAIL or ROLE=hub_group:NAME[@NAMESPACE], got {text!r}")
+    return {"role": role, "subject_kind": kind, "subject_id": subject_id, "namespace": namespace or None}
+
+
+@federation_app.command("link")
+def federation_link(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Argument(help="Slug of an empty tenant on this hub.")],
+    mode: Annotated[str, typer.Option(help="read or read_write (the member can lower it).")] = "read_write",
+    output: Output = Format.table,
+) -> None:
+    """On the hub (operator token): federate a tenant and print its enrollment token."""
+    with api(ctx) as client:
+        created = client.request("POST", "/v1/federation/links", json={"tenant": tenant, "mode": mode})
+    if output is not Format.table:
+        emit(created, output)
+        return
+    console.print(f"tenant [bold]{escape(tenant)}[/bold] is federated ({mode}); waiting for its member to join")
+    console.print(f"enrollment token (single use, expires {created['enrollment_expires_at']}): {created['enrollment_token']}")
+    console.print(f"on the member: awm federation join {escape(client.target.server)} --token <token>", style="dim")
+
+
+@federation_app.command("links")
+def federation_links(ctx: typer.Context, output: Output = Format.table) -> None:
+    """On the hub: list federated tenants and whether their members are connected."""
+    with api(ctx) as client:
+        emit(client.get("/v1/federation/links"), output, [
+            ("TENANT", lambda li: li["tenant"]), ("STATUS", lambda li: li["status"]),
+            ("CONNECTED", lambda li: "yes" if li["connected"] else "no"), ("MODE", lambda li: li["effective_mode"]),
+            ("SEEN", lambda li: age(li.get("last_seen_at"))),
+        ], name=lambda li: li["tenant"])
+
+
+@federation_app.command("join")
+def federation_join(
+    ctx: typer.Context,
+    hub_url: Annotated[str, typer.Argument(help="The hub's base URL.")],
+    token: Annotated[str, typer.Option(help="Enrollment token from the hub operator.")],
+    max_mode: Annotated[str, typer.Option(help="The most the hub may do: read or read_write.")] = "read",
+    namespace: Annotated[list[str] | None, typer.Option(help="Expose only these namespaces (repeatable).")] = None,
+    visibility: Annotated[str, typer.Option(help="full, or metadata to hide run data from the hub.")] = "full",
+    grant: Annotated[list[str] | None, typer.Option(help="ROLE=hub_user:EMAIL or ROLE=hub_group:NAME (repeatable).")] = None,
+    output: Output = Format.table,
+) -> None:
+    """On the member (tenant admin): join this tenant to a hub."""
+    body = {"hub_url": hub_url, "token": token, "max_mode": max_mode, "namespaces": namespace or [],
+            "visibility": visibility, "grants": [_parse_grant(g) for g in grant or []]}
+    with api(ctx) as client:
+        joined = client.request("PUT", "/v1/federation/membership", json=body)
+    if output is not Format.table:
+        emit(joined, output)
+        return
+    console.print(f"joined [bold]{escape(hub_url)}[/bold]: the hub may {joined['effective_mode'].replace('_', '/')}"
+                  f" (ceiling {joined['max_mode']})")
+
+
+@federation_app.command("leave")
+def federation_leave(ctx: typer.Context) -> None:
+    """On the member: leave the hub. This deployment keeps running on its own."""
+    with api(ctx) as client:
+        client.request("DELETE", "/v1/federation/membership")
+    console.print("left the hub")
 
 
 # --------------------------------------------------------------------------- server processes

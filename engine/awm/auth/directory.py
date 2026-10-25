@@ -15,6 +15,8 @@ from awm.store import tables as t
 from awm.store.store import Store
 from awm.store.tables import utcnow
 
+HUB_SUBJECT_KINDS = ("hub_user", "hub_group")
+
 
 class Directory:
     def __init__(self, store: Store):
@@ -247,8 +249,8 @@ class Directory:
             await self.get_user(tenant_id, subject_id)
         elif subject_kind == "group":
             await self.get_group(tenant_id, subject_id)
-        else:
-            raise InvalidRequest("subject_kind must be 'user' or 'group'")
+        elif subject_kind not in HUB_SUBJECT_KINDS:  # hub people and groups live in the hub's directory
+            raise InvalidRequest("subject_kind must be 'user', 'group', 'hub_user' or 'hub_group'")
         if namespace is not None:
             await self.store.get_namespace(tenant_id, namespace)
         async with self.session() as s:
@@ -287,6 +289,16 @@ class Directory:
             q = q.where(t.RoleBinding.subject_id == subject_id)
         async with self.session() as s:
             return (await s.execute(q.order_by(t.RoleBinding.created_at))).scalars().all()
+
+    async def bindings_for_subjects(self, tenant_id: str, subjects: Sequence[tuple[str, str]]) -> list[t.RoleBinding]:
+        """Bindings for hub principals (federation): matched by subject kind and id."""
+        wanted = set(subjects)
+        async with self.session() as s:
+            q = select(t.RoleBinding).where(
+                t.RoleBinding.tenant_id == tenant_id, t.RoleBinding.subject_kind.in_(HUB_SUBJECT_KINDS),
+                t.RoleBinding.subject_id.in_([sid for _, sid in wanted]),
+            )
+            return [b for b in (await s.execute(q)).scalars().all() if (b.subject_kind, b.subject_id) in wanted]
 
     async def bindings_for(self, tenant_id: str, user_id: str) -> Sequence[t.RoleBinding]:
         subjects = [user_id, *await self.groups_of(user_id)]

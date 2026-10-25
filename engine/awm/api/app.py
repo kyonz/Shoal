@@ -6,25 +6,40 @@ stable ``code``; SCIM endpoints use the SCIM error format instead.
 
 from __future__ import annotations
 
+import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
 
 from awm import __version__
-from awm.api.routers import a2a, admin, auth, blueprints, evals, hooks, resources, runs, scim, system
+from awm.api.deps import authenticate
+from awm.api.routers import (
+    a2a,
+    admin,
+    auth,
+    blueprints,
+    evals,
+    federation,
+    hooks,
+    resources,
+    runs,
+    scim,
+    system,
+)
 from awm.config import Settings
 from awm.core.errors import AWMError
 from awm.core.ids import new_id
-from awm.core.requestctx import RequestInfo, reset_request, set_request
+from awm.core.requestctx import RequestInfo, current_request, reset_request, set_request
 from awm.engine import Engine
+from awm.federation.protocol import ASSERTION_HEADER
 from awm.integrations.base import IntegrationError
 
 log = logging.getLogger(__name__)
@@ -95,6 +110,7 @@ def install_request_context(app: FastAPI) -> None:
             source="scim" if request.url.path.startswith("/scim/") else ("ui" if client == "ui" else "api"),
         )
         token = set_request(info)
+        status = 500  # also when the handler is cancelled (BaseException)
         try:
             response = await call_next(request)
             status = response.status_code
@@ -126,6 +142,55 @@ def install_request_context(app: FastAPI) -> None:
         return response
 
 
+# Served by the hub itself even for federated tenants: the hub's own directory, sign-in,
+# federation plumbing and operator APIs. Everything else under /v1 goes to the member.
+HUB_LOCAL_PREFIXES = (
+    "/v1/federation", "/v1/auth", "/v1/tenants", "/v1/hooks", "/v1/users", "/v1/groups", "/v1/service-accounts",
+    "/v1/api-keys", "/v1/oidc-providers", "/v1/openapi.json", "/v1/docs", "/v1/info",
+)
+
+
+def install_federation(app: FastAPI) -> None:
+    """Hub routing: calls for a federated tenant are forwarded to its member deployment."""
+
+    @app.middleware("http")
+    async def federation_router(request: Request, call_next: Any) -> Any:
+        path = request.url.path
+        engine = app.state.engine
+        if (
+            not path.startswith("/v1/")
+            or path == "/v1/me"
+            or path.startswith(HUB_LOCAL_PREFIXES)
+            or request.headers.get(ASSERTION_HEADER)  # already forwarded: this is the member
+        ):
+            return await call_next(request)
+        try:
+            principal = await authenticate(request, engine)
+        except AWMError:
+            return await call_next(request)  # let the route produce the proper error
+        link_id = await engine.federation.federated_link_id(principal.tenant_id) if principal.tenant_id else None
+        if link_id is None:
+            request.state.principal = principal
+            return await call_next(request)
+        info = current_request()
+        try:
+            answer = await engine.federation.forward(
+                link_id, principal, method=request.method, path=path, query=request.url.query,
+                headers=dict(request.headers), body=await request.body(), request_id=info.request_id if info else new_id("req"),
+            )
+        except AWMError as exc:  # raised outside the routes, so render the problem here
+            return problem(request, exc.status_code, exc.code, exc.message, details=exc.details)
+        if info is not None:
+            info.audited = True  # the member audits the action; the hub records the forward below
+        if request.method in MUTATING:
+            await engine.store.audit(principal.tenant_id, principal.actor, f"federation.{request.method.lower()}", path,
+                                     outcome="success" if answer["status"] < 400 else "error", status=answer["status"])
+        return Response(
+            content=base64.b64decode(answer.get("body") or ""), status_code=answer["status"],
+            headers={k: v for k, v in (answer.get("headers") or {}).items() if k.lower() != "content-length"},
+        )
+
+
 def _mount_frontend(app: FastAPI, static_dir: str) -> None:
     root = Path(static_dir).resolve()
     index = root / "index.html"
@@ -153,6 +218,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         eng = app.state.engine
         await eng.start()
+        eng.federation_member.start(app)
         if run_worker:
             eng.start_background_worker()
         try:
@@ -174,7 +240,8 @@ def create_app(
     )
     app.state.engine = engine
     install_error_handlers(app)
-    install_request_context(app)
+    install_federation(app)
+    install_request_context(app)  # outermost: request ids and audit context wrap federation routing too
     app.add_middleware(
         CORSMiddleware,
         allow_origins=engine.settings.cors_origins,
@@ -183,7 +250,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, admin, runs, evals, a2a, blueprints, resources):
+    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:
         _mount_frontend(app, engine.settings.static_dir)

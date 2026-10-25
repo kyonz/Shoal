@@ -506,3 +506,58 @@ class EvalResult(Base):
     duration_ms: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column()
+
+
+# --------------------------------------------------------------------------- federation (architecture §11.2)
+
+
+class FederationLink(Base):
+    """Hub side: a federated tenant whose data and execution live in a member deployment."""
+
+    __tablename__ = "federation_links"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), unique=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | active | revoked
+    requested_mode: Mapped[str] = mapped_column(String(20), default="read_write", doc="What the hub asks for.")
+    member_mode: Mapped[str | None] = mapped_column(String(20), doc="The member's ceiling (read | read_write).")
+    namespaces: Mapped[list[Any]] = mapped_column(default=list, doc="Namespaces the member exposes (empty: all).")
+    visibility: Mapped[str] = mapped_column(String(20), default="full")  # full | metadata
+    enrollment_hash: Mapped[str | None] = mapped_column(String(128))
+    enrollment_expires_at: Mapped[datetime | None] = mapped_column()
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text)
+    member: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="Version, URL, health and rollups the member reports.")
+    last_seen_at: Mapped[datetime | None] = mapped_column()
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class FederationRequest(Base):
+    """Hub side: an API call queued for a member's tenant connector to pick up and answer."""
+
+    __tablename__ = "federation_requests"
+    __table_args__ = (Index("ix_federation_requests_link_status", "link_id", "status"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    link_id: Mapped[str] = mapped_column(ForeignKey("federation_links.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | claimed | done
+    request: Mapped[dict[str, Any]] = mapped_column()
+    response: Mapped[dict[str, Any] | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    claimed_at: Mapped[datetime | None] = mapped_column()
+
+
+class FederationMembership(Base):
+    """Member side: this deployment's tenant is managed from a hub."""
+
+    __tablename__ = "federation_memberships"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), unique=True)
+    hub_url: Mapped[str] = mapped_column(String(500))
+    link_id: Mapped[str] = mapped_column(String(40))
+    secret_ciphertext: Mapped[str] = mapped_column(Text)
+    max_mode: Mapped[str] = mapped_column(String(20), default="read")
+    namespaces: Mapped[list[Any]] = mapped_column(default=list)
+    visibility: Mapped[str] = mapped_column(String(20), default="full")
+    hub_mode: Mapped[str | None] = mapped_column(String(20), doc="Effective mode last agreed with the hub.")
+    last_connected_at: Mapped[datetime | None] = mapped_column()
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)

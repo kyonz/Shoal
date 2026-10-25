@@ -28,6 +28,7 @@ from awm.config import Settings, get_settings
 from awm.core import clock
 from awm.decisions.service import DecisionService
 from awm.evals.service import EvalService
+from awm.federation import FederationHub, FederationMember
 from awm.identity import IdentityService
 from awm.integrations.manager import IntegrationManager
 from awm.integrations.remote import register_remote_integration
@@ -113,6 +114,8 @@ class Engine:
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)
         self.blueprints = BlueprintService(self)
+        self.federation = FederationHub(self)
+        self.federation_member = FederationMember(self)
         self.evals = EvalService(self)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._stopping = asyncio.Event()
@@ -178,6 +181,7 @@ class Engine:
             return
         self._last_audit_prune = now
         await self.store.prune_audit(now - timedelta(days=days))
+        await self.federation.prune(now - timedelta(hours=1))  # forwarded calls are only kept briefly
 
     async def run_until_idle(self, max_iterations: int = 1000) -> None:
         """Process everything that is due right now (tests, CLI ``--wait``)."""

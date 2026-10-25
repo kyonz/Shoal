@@ -92,6 +92,7 @@ class SecretManager:
     def __init__(self, engine: Engine, order: list[str] | None = None):
         self.engine = engine
         self.order = order or ["db", "env"]
+        self.cipher = Cipher(engine.settings.secret_key.get_secret_value())  # for platform credentials (e.g. federation links)
 
     def _providers(self) -> list[SecretProvider]:
         return [self.engine.plugin("secrets", name) for name in self.order]

@@ -195,7 +195,7 @@ class RoleOut(BaseModel):
 
 class RoleBindingIn(BaseModel):
     role: str
-    subject_kind: Literal["user", "group"]
+    subject_kind: Literal["user", "group", "hub_user", "hub_group"] = Field(description="hub_user and hub_group name people and groups from a federation hub (email or service actor, group name).")
     subject_id: str
     namespace: str | None = Field(None, description="Omit for a tenant-wide binding.")
 

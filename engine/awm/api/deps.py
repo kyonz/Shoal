@@ -11,7 +11,10 @@ from fastapi import Depends, Request
 from awm.auth.rbac import Principal
 from awm.auth.sessions import SESSION_PREFIX, verify_session
 from awm.core.errors import Forbidden, InvalidRequest, NotFound, Unauthorized
+from awm.core.requestctx import current_request
 from awm.engine import Engine
+from awm.federation.member import LINK_HEADER
+from awm.federation.protocol import ASSERTION_HEADER
 
 SESSION_COOKIE = "awm_session"
 
@@ -31,6 +34,18 @@ def _bearer(request: Request) -> str | None:
 
 
 async def authenticate(request: Request, engine: Engine) -> Principal:
+    cached = getattr(request.state, "principal", None)
+    if cached is not None:
+        return cached
+    assertion = request.headers.get(ASSERTION_HEADER)
+    if assertion:  # forwarded by this member's federation hub, through the tenant connector
+        principal, claims = await engine.federation_member.principal_for(
+            request.headers.get(LINK_HEADER, ""), assertion, method=request.method, path=request.url.path
+        )
+        info = current_request()
+        if info is not None:
+            info.source, info.via = "hub", f"hub:{claims.get('rid')}"
+        return principal
     token = _bearer(request)
     if not token:
         raise Unauthorized("missing credentials: send 'Authorization: Bearer <api key or session token>'")

@@ -50,6 +50,7 @@ TENANT_PERMISSIONS: dict[str, str] = {
     "audit:read": "Read the audit log",
     "api-keys:manage": "Manage every API key in the tenant",
     "scim:provision": "Provision users and groups over SCIM",
+    "federation:manage": "Join this tenant to a federation hub and set what the hub may do",
 }
 
 ALL_PERMISSIONS: dict[str, str] = {**NAMESPACE_PERMISSIONS, **TENANT_PERMISSIONS}

@@ -752,16 +752,24 @@ one control plane, and a federated deployment can also sit next to the hub.
 ```
 
 - **Same software, two roles.** A member is an ordinary Shoal deployment with
-  federation enabled. The **tenant connector** is a small process in the
-  member that keeps one outbound, mutually authenticated connection to the hub
-  (HTTP/2 or WebSocket over TLS, mTLS client certificate issued at
-  enrollment and rotated). Nothing in the organisation has to accept inbound
-  traffic.
+  federation enabled. The **tenant connector** runs inside the member's API
+  process and keeps an outbound HTTPS long-poll open to the hub
+  (`POST /v1/federation/tunnel`). Each poll returns the answers to earlier
+  calls and picks up newly queued ones. Nothing in the organisation has to
+  accept inbound traffic, and it passes through ordinary egress proxies. The
+  connector authenticates with a link credential issued at enrollment. Hubs
+  that terminate TLS with client certificates can require mTLS as well.
+  (Built. Long-poll over HTTPS was chosen over a WebSocket because it is
+  proxy-friendly, and because the queue lives in the hub's database, any hub
+  replica can take the call and any replica can serve the poll.)
 - **Enrollment.** An operator creates a federated tenant on the hub, which
   returns a single-use enrollment token. The member's admin runs
-  `shoal federation join <hub-url> --token …`, choosing the **maximum access**
-  it grants and which namespaces it exposes. The hub stores the link, never
-  the member's data or secrets.
+  `awm federation join <hub-url> --token … --max-mode read_write --namespace …
+  --grant tenant-admin=hub_group:platform`, choosing the **maximum access** it
+  grants, which namespaces it exposes, and the first role bindings for hub
+  people. The hub stores the link (`awm federation link <tenant>` creates it
+  and `awm federation links` shows connection health), never the member's
+  data or secrets. Only an empty tenant can be federated.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
     evals and audit, and stream run events. Any write returns
@@ -781,16 +789,23 @@ one control plane, and a federated deployment can also sit next to the hub.
   same `/v1` API for hosted and federated tenants; the hub routes by tenant.
   They can also talk to the member directly.
 - **Identity and authorisation, twice.** People sign in at the hub. Each
-  forwarded request carries a short-lived assertion signed by the hub (user,
-  groups, hub roles, request id). The member authorises it again with its own
+  forwarded request carries a one-minute assertion signed with the link secret
+  (HS256). It names the user, their hub groups, the request id, and the
+  method and path it was issued for, so it cannot be replayed against
+  another call. The member authorises it again with its own
   RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
   and are bound to roles like any subject. A call succeeds only if the hub
   allows it, the link mode allows it, and the member's RBAC allows it.
 - **Audit on both sides.** The hub records who asked for what; the member
   records the action with `via: hub`, the hub request id and the user, so
   either side can reconstruct it.
-- **Compatibility.** Hub and member negotiate API versions on connect; the hub
-  hides features a member does not support yet.
+- **Compatibility.** The member reports its version and protocol on every
+  poll, and the hub shows it in `GET /v1/federation/links`.
+- **Hub-local vs forwarded.** The hub serves its own directory, sign-in, API
+  keys, OIDC, SCIM, webhooks and the federation endpoints. Everything else
+  under `/v1` for a federated tenant is forwarded, including `/v1/me/permissions`,
+  so the UI shows what the member allows. Live SSE event streams are not
+  forwarded yet; clients poll the run instead.
 - **Not in scope:** moving a tenant between hosted and federated while
   running (export and re-import instead), and cross-tenant workflows.
 

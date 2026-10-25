@@ -32,6 +32,7 @@ class Principal:
     api_key_id: str | None = None
     key_scopes: tuple[str, ...] = ()
     key_namespaces: tuple[str, ...] = ()
+    hub_subjects: tuple[tuple[str, str], ...] = ()  # (hub_user|hub_group, id) for calls forwarded by a federation hub
     _grants: Grants | None = None
 
     @classmethod
@@ -47,10 +48,15 @@ class Authorizer:
         if principal._grants is not None:
             return principal._grants
         grants = Grants()
-        if principal.user_id and principal.tenant_id:
+        if (principal.user_id or principal.hub_subjects) and principal.tenant_id:
             directory = self.engine.directory
             roles = {r.name: r for r in await directory.list_roles(principal.tenant_id)}
-            for binding in await directory.bindings_for(principal.tenant_id, principal.user_id):
+            bindings = (
+                await directory.bindings_for(principal.tenant_id, principal.user_id)
+                if principal.user_id
+                else await directory.bindings_for_subjects(principal.tenant_id, principal.hub_subjects)
+            )
+            for binding in bindings:
                 role = roles.get(binding.role)
                 if role is None:
                     continue
