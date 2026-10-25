@@ -55,6 +55,7 @@ github = "shoal.integrations.github:GitHubIntegration"
 jira = "shoal.integrations.jira:JiraIntegration"
 webhook = "shoal.integrations.webhook:WebhookIntegration"
 remote = "shoal.integrations.remote:RemoteIntegration"
+mcp = "shoal.integrations.mcp:McpIntegration"
 
 [project.entry-points."shoal.providers"]
 anthropic = "shoal.agents.providers.anthropic:AnthropicProvider"
@@ -73,6 +74,9 @@ langfuse = "shoal.evals.sinks.langfuse:LangfuseSink"
 tool-loop = "shoal.agents.tool_loop:ToolLoopRuntime"
 cli = "shoal.agents.cli_runtime:CliRuntime"
 a2a = "shoal.agents.a2a_runtime:A2ARuntime"
+
+[project.entry-points."shoal.credentials"]
+aws = "shoal.cloud.aws:AwsProvider"
 
 [project.entry-points."shoal.secrets"]
 env = "shoal.secrets.providers:EnvSecretProvider"

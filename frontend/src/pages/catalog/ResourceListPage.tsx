@@ -4,9 +4,9 @@ import { Link, useNavigate } from "react-router";
 import { useResources } from "@/api/hooks";
 import { useCan } from "@/lib/auth";
 import { relTime } from "@/lib/format";
-import { nsPath, useNs } from "@/lib/ns";
+import { useNs } from "@/lib/ns";
 import { Badge, Button, Card, EmptyState, ErrorNotice, Input, Page, PageHeader, Skeleton, Table, Td, Th, Tr } from "@/components/ui";
-import { KINDS } from "./kinds";
+import { KINDS, kindPath, kindPermissions } from "./kinds";
 import { BlueprintBadge } from "./ResourceEditorPage";
 import type { Resource } from "@/api/client";
 
@@ -16,7 +16,8 @@ export default function ResourceListPage({ plural }: { plural: string }) {
   const cfg = KINDS[plural];
   const ns = useNs();
   const navigate = useNavigate();
-  const canWrite = useCan(`${plural}:write`, ns);
+  const perms = kindPermissions(plural);
+  const canWrite = useCan(perms.write, perms.tenant ? undefined : ns);
   const { data, isLoading, error } = useResources(cfg.plural, ns);
   const [q, setQ] = useState("");
 
@@ -35,7 +36,7 @@ export default function ResourceListPage({ plural }: { plural: string }) {
   }, [data, q, cfg]);
 
   const create = canWrite ? (
-    <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(nsPath(ns, plural, "new"))}>
+    <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(kindPath(plural, ns, "new"))}>
       New {cfg.singular}
     </Button>
   ) : null;
@@ -82,9 +83,9 @@ export default function ResourceListPage({ plural }: { plural: string }) {
               {rows.map((r) => {
                 const sub = cfg.summary?.(r.spec);
                 return (
-                  <Tr key={r.metadata.name} onClick={() => navigate(nsPath(ns, plural, r.metadata.name))}>
+                  <Tr key={r.metadata.name} onClick={() => navigate(kindPath(plural, ns, r.metadata.name))}>
                     <Td className="max-w-[340px]">
-                      <Link to={nsPath(ns, plural, r.metadata.name)} className="font-medium hover:text-accent" onClick={(e) => e.stopPropagation()}>
+                      <Link to={kindPath(plural, ns, r.metadata.name)} className="font-medium hover:text-accent" onClick={(e) => e.stopPropagation()}>
                         {r.metadata.name}
                       </Link>
                       <BlueprintBadge labels={r.metadata.labels} />

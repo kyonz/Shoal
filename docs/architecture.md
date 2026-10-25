@@ -63,6 +63,7 @@ first release must satisfy.
 | **Blueprint** | A versioned, parameterised package of resources others install and wire up. |
 | **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
 | **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
+| **Cloud identity** | A cloud role a namespace brings (an AWS IAM role), granted to specific workflows and agents; steps get short-lived credentials for it. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
 
 All of these are pydantic models in `shoal.core.models` and are serialisable to
@@ -353,8 +354,8 @@ kept out of the model's reach.
     connection);
   - `github-app` — short-lived installation tokens, optionally narrowed to the
     target repository and permissions of the current step;
-  - `aws-sts`, `gcp-wif`, `azure-federated` — workload identity: Shoal presents
-    its run identity token and exchanges it for cloud credentials;
+  - `aws` (built), `gcp`, `azure` (later) — cloud workload identity through
+    `CloudIdentity` resources, below;
   - `vault` — dynamic secrets from HashiCorp Vault/OpenBao.
 - **Scoping and lifetime.** Credentials are resolved per step attempt, scoped
   to that step's connections, expire with the step, and are redacted from
@@ -369,6 +370,29 @@ kept out of the model's reach.
   (`iss` = Shoal, `sub` = `tenant/run/step/agent`, audience-restricted). It is
   used to call back into the Shoal API with least privilege, as the subject for
   workload-identity federation, and as the caller identity for A2A and MCP.
+- **Cloud identities** (built, AWS). A namespace admin registers a
+  `CloudIdentity` (`provider: aws`, `aws.role_arn`, region, duration, optional
+  session policy) and grants it with `allow.workflows` (name globs, deny by
+  default; `ns/name` for a `shared` identity) and optionally `allow.agents`.
+  Agents and script steps list `cloud_identities:`. Per step attempt Shoal
+  exchanges a credential that starts from its own deployment for an STS
+  session and injects `AWS_*` env (secret parts redacted). Two trust modes:
+  `web_identity` — Shoal is an OIDC issuer (`/.well-known/openid-configuration`,
+  `/.well-known/jwks.json`, ES256 key derived from `SHOAL_SECRET_KEY` or set
+  with `SHOAL_IDENTITY_SIGNING_KEY`), signs a five-minute token with
+  `sub = tenant:<id>:namespace:<ns>:cloud-identity:<name>` and calls
+  `AssumeRoleWithWebIdentity`, so Shoal holds no cloud credential; and
+  `ambient` (operator opt-in, `SHOAL_AWS_AMBIENT`) — `AssumeRole` signed with
+  the deployment's own identity (env, IRSA, EKS Pod Identity, ECS, IMDSv2)
+  with that subject as ExternalId, so tenants sharing a deployment role
+  cannot use each other's roles. Sessions carry the initiator as
+  SourceIdentity and `shoal:*` session tags (tenant, namespace, workflow, run,
+  step, agent, initiator); `GET …/cloud-identities/{name}/trust-policy`
+  generates the role's trust policy and setup commands. Issues, refusals and
+  failures go to run events and the audit log. Registering roles and changing
+  grants is `namespace-admin` only (editors cannot grant their own
+  workflows). Federated members mint on their own deployment. Guide:
+  `docs/cloud-identities.md`.
 - **Human identity.** When a run is started by a user, the user id is carried
   on the run for audit, and policy can require per-user OAuth connections
   ("act as the requester") instead of a shared service identity.
@@ -385,9 +409,19 @@ kept out of the model's reach.
   Shoal serves its Agent Card (skills derived from the workflow inputs/outputs,
   `securitySchemes` for API keys/OAuth) and maps A2A tasks onto runs,
   including streaming and input-required (approval) states.
-- **MCP.** Agents consume MCP servers as tool sources (stdio inside the
-  sandbox, or remote HTTP with OAuth via the credential providers). Shoal also
-  exposes an MCP server so other agents/IDEs can list and run workflows.
+- **MCP.** MCP servers are an ordinary integration (`mcp`), not a special
+  case: each `Connection` with `integration: mcp` is one server (Streamable
+  HTTP URL, a token secret, a tool allow-list). Its tools are listed per
+  connection (`tools/list`, cached briefly) and become actions
+  (`action: mcp.<tool>` with `connection:`), agent tools (`tools:
+  [mcp:<connection>]` or `mcp:<connection>.<tool>`, exposed as
+  `<connection>__<tool>`), wait-condition actions and API calls, like any
+  dynamic integration. Read-only tools (`readOnlyHint`) are marked
+  non-mutating. Credentials follow the connection's `credentials` mode, so a
+  server can use one team token or each person's own token or OAuth grant
+  (§11.4). Stdio-only servers run behind an MCP HTTP proxy for now; running
+  them inside the agent sandbox is planned. Shoal also exposes an MCP server
+  so other agents/IDEs can list and run workflows (planned).
 
 ### 7.3 LLM gateways and model routing
 
@@ -875,6 +909,33 @@ one control plane, and a federated deployment can also sit next to the hub.
   forwarded yet; clients poll the run instead.
 - **Not in scope:** moving a tenant between hosted and federated while
   running (export and re-import instead), and cross-tenant workflows.
+
+### 11.4 Where secrets live
+
+Every credential is encrypted at rest, write-only through the API, resolved at
+the moment of use and redacted from run logs. There are four scopes:
+
+| Scope | Holds | Managed by |
+|---|---|---|
+| **Deployment** | Platform keys (`SHOAL_SECRET_KEY`, operator LLM keys, federation link secrets), from env or a secret backend (`shoal.secrets` plugins: env, db; Vault/KMS planned) | Operator |
+| **Tenant** (`shared` namespace) | Gateway keys and `secret_headers`, org-wide connections, OAuth client secrets | Tenant admins |
+| **Namespace** | A team's connection secrets | Namespace admins/editors |
+| **User** | A person's own token or OAuth grant for one connection (`user_credentials`) | That person only; admins can list and revoke, never read |
+
+**Per-user credentials.** A connection chooses whose credential calls use:
+`credentials: shared` (default), `per_user` or `per_user_or_shared`, and
+which of its fields people supply (`user_fields`, default: the fields in
+`secrets`). The person a call acts for is the run's initiator, mapped to a
+Shoal user through identities (§11.1), so a run started from a Jira webhook
+acts for the person behind the event. Service accounts and unknown people
+never use personal credentials. When a `per_user` connection meets someone
+who has not connected it, the step **waits** (event `credential.required`
+with a link to connect) and resumes as soon as they save the credential,
+rather than failing. People connect under `/v1/me/credentials` (paste a token,
+or `oauth:` on the connection runs an authorization-code flow with PKCE and
+refreshes access tokens before they expire) or with `shoal credentials
+set|connect`. Every set, removal and revocation is audited. This applies to
+every integration, MCP servers included.
 
 ---
 

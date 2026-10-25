@@ -14,7 +14,9 @@ No single sign-on yet? Choose **Use an API key instead** and paste a key (`shoal
 
 Everything you build lives in a **namespace**: a team's space inside your organisation. Agents, workflows, connections, secrets, triggers, campaigns and runs all belong to exactly one namespace, and every organisation starts with `default`.
 
-Use the switcher at the top left to change namespace. Shoal keeps you on the same section (Workflows, Runs, …) when you switch. Resources published in the tenant-wide `shared` namespace (connections, gateways, skills) can be used from any namespace without exposing their secrets.
+Use the switcher at the top left to change namespace. Shoal keeps you on the same section (Workflows, Runs, …) when you switch. Resources published in the tenant-wide `shared` namespace (connections, skills) can be used from any namespace without exposing their secrets.
+
+Model gateways and model policies are tenant-wide and live in the **Admin console** (**Gateways**, **Model policies**). Everyone can see them and pick a gateway as an agent's provider; creating or changing one needs `gateways:manage` or `model-policies:manage`. A gateway's API key and secret headers are names of secrets in `shared`, so no credential is ever stored in clear text. Agents can still tune a model with `provider_config`, but endpoints and credentials belong on the gateway.
 
 What you can see and change depends on your role in each namespace. Shoal hides actions you are not allowed to take, using the same permission check as the API (`GET /v1/me/permissions`).
 

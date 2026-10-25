@@ -1,6 +1,7 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, FlaskConical, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Cloud, FlaskConical, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
+import { nsPath } from "@/lib/ns";
 
 export interface KindConfig {
   plural: Plural;
@@ -18,6 +19,8 @@ export interface KindConfig {
   template: Record<string, unknown>;
   /** Short subtitle per row. */
   summary?: (spec: Record<string, unknown>) => string | undefined;
+  /** Tenant-wide and managed in the admin console with `<plural>:manage`. */
+  admin?: boolean;
 }
 
 export const KINDS: Record<string, KindConfig> = {
@@ -61,16 +64,37 @@ export const KINDS: Record<string, KindConfig> = {
     template: { backend: "local", scope: "run" },
     summary: (s) => [s.backend, s.image].filter(Boolean).join(" · ") || undefined,
   },
+  "cloud-identities": {
+    plural: "cloud-identities",
+    kind: "CloudIdentity",
+    label: "Cloud identities",
+    singular: "cloud identity",
+    icon: Cloud,
+    blurb: "A cloud role (AWS IAM) your namespace brings, and which workflows and agents may use it. Steps get short-lived credentials.",
+    order: ["description", "provider", "trust", "aws", "allow", "config"],
+    template: {
+      provider: "aws",
+      trust: "web_identity",
+      aws: { role_arn: "arn:aws:iam::123456789012:role/shoal-deploy", region: "us-east-1", duration: "1h" },
+      allow: { workflows: [], agents: [] },
+    },
+    summary: (s) => {
+      const aws = s.aws as { role_arn?: string } | undefined;
+      return [s.provider, aws?.role_arn, s.trust].filter(Boolean).join(" · ") || undefined;
+    },
+  },
   gateways: {
     plural: "gateways",
     kind: "Gateway",
     label: "Gateways",
     singular: "gateway",
     icon: Server,
-    blurb: "How model requests reach a provider: direct API, LiteLLM, Portkey, OpenRouter, Bedrock and more.",
-    order: ["description", "type", "base_url", "api_key_secret", "headers", "config"],
+    blurb: "How model requests reach a provider: direct API, LiteLLM, Portkey, OpenRouter, Bedrock and more. Shared by the whole organisation; keys come from secrets in the shared namespace.",
+    order: ["description", "type", "base_url", "api_key_secret", "config"],
+    hidden: ["headers", "secret_headers"],
     template: { type: "anthropic" },
-    summary: (s) => [s.type, s.base_url].filter(Boolean).join(" · ") || undefined,
+    admin: true,
+    summary: (s) => [s.type, s.base_url, s.api_key_secret ? `key from ${s.api_key_secret}` : null].filter(Boolean).join(" · ") || undefined,
   },
   "model-policies": {
     plural: "model-policies",
@@ -78,9 +102,10 @@ export const KINDS: Record<string, KindConfig> = {
     label: "Model policies",
     singular: "model policy",
     icon: Route,
-    blurb: "Rules that choose which model and gateway run, with allow-lists, fallbacks and A/B splits.",
+    blurb: "Rules that choose which model and gateway run, with allow-lists, fallbacks and A/B splits. They apply across the organisation.",
     order: ["description", "rules", "allow_models", "deny_models"],
     template: { rules: [{ name: "default", candidates: [{ model: "claude-opus-5-5" }] }] },
+    admin: true,
     summary: (s) => (Array.isArray(s.rules) ? `${s.rules.length} rule${s.rules.length === 1 ? "" : "s"}` : undefined),
   },
   evals: {
@@ -120,6 +145,24 @@ export const KINDS: Record<string, KindConfig> = {
     },
   },
 };
+
+/** Where a resource's pages live: the admin console for tenant-wide kinds, else the namespace. */
+export function kindPath(plural: string, ns: string, name?: string) {
+  const parts = name ? [plural, name] : [plural];
+  return KINDS[plural]?.admin ? `/admin/${parts.map(encodeURIComponent).join("/")}` : nsPath(ns, ...parts);
+}
+
+/** The permissions that edit and delete a kind. */
+export function kindPermissions(plural: string) {
+  if (plural === "blueprints") return { write: "blueprints:publish", delete: "blueprints:publish", tenant: true };
+  if (KINDS[plural]?.admin) return { write: `${plural}:manage`, delete: `${plural}:manage`, tenant: true };
+  return { write: `${plural}:write`, delete: `${plural}:delete`, tenant: false };
+}
+
+// Mirrors the engine's check: header and config names that carry credentials must come from secrets.
+const CREDENTIAL_NAME = /(^|[-_])(authorization|auth|api[-_]?key|key|token|secret|password|passwd|cookie|credentials?)($|[-_])/i;
+
+export const looksLikeCredential = (name: string) => CREDENTIAL_NAME.test(name);
 
 export const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 

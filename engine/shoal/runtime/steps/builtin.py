@@ -119,6 +119,8 @@ class ScriptHandler:
         assert isinstance(step, ScriptStep)
         inputs = ctx.render(step.inputs)
         env = {k: str(v) for k, v in ctx.render(step.env).items()}
+        if step.cloud_identities:
+            env = {**await ctx.engine.cloud.environment(ctx, step.cloud_identities), **env}
         profile = step.sandbox or ctx.workflow.defaults.sandbox
         timeout = step.timeout.total_seconds() if step.timeout else None
         async with ctx.engine.sandboxes.acquire(ctx.run, profile) as sandbox:

@@ -82,6 +82,7 @@ async def test_migration_moves_namespaced_gateways_to_shared(engine, admin):
                              document={"kind": "Gateway", "metadata": {"name": name, "namespace": ns}, "spec": {"type": "scripted"}}))
     async with engine.store.engine.begin() as conn:
         await conn.run_sync(lambda c: migrate.stamp(c, "0002"))
-        await conn.run_sync(lambda c: migrate.upgrade(c))
+        await conn.run_sync(lambda c: migrate.upgrade(c, "0003"))
+        await conn.run_sync(lambda c: migrate.stamp(c, "head"))
     names = {(r.namespace, r.name) for r in await engine.store.list_resources(tenant, "Gateway", all_namespaces=True)}
     assert names == {("shared", "llm"), ("shared", "team-a-llm"), ("shared", "other")}

@@ -137,6 +137,7 @@ class ConnectionContext:
     integration: Integration
     initiator: dict[str, Any] | None = None
     run_id: str | None = None
+    acting_as: str | None = None  # the user whose own credential this context holds (None: the connection's)
 
     def http(self, **kwargs: Any) -> httpx.AsyncClient:
         transport = self.engine.http_transport
