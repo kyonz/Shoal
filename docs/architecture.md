@@ -48,7 +48,9 @@ first release must satisfy.
 
 | Concept | What it is |
 |---|---|
-| **Tenant** | Isolation boundary. Owns everything below. Has members, API keys, quotas. |
+| **Tenant** | Organisation and hard isolation boundary. Owns namespaces, users, groups, roles, quotas. |
+| **Namespace** | A team's space inside a tenant. Holds agents, workflows, connections, secrets and runs; users and groups are members with roles. |
+| **Role / binding** | A named set of permissions, granted to a user, group or service account tenant-wide or in one namespace. |
 | **Skill** | A reusable, versioned capability an agent can use: instructions + tools + files (compatible with the Agent Skills `SKILL.md` format). |
 | **Tool** | A callable function exposed to an agent (shell, file edit, HTTP, integration action, MCP server tool). |
 | **Agent** | A named configuration: model/provider, system prompt, skills, tools, sandbox profile, limits. |
@@ -474,6 +476,32 @@ class Integration(Protocol):
 - Built-in integrations in v1: `github`, `jira`, `webhook` (generic, HMAC),
   `schedule`, `http`. Slack/Linear/GitLab follow the same contract.
 
+### 9.1 Open integrations platform (SDK)
+
+Anyone can build an integration; the built-ins use exactly the same public
+contract, so they double as reference implementations.
+
+- **Python SDK** (`awm.sdk`, re-exporting the `Integration` base,
+  `@action`/`@resource` decorators, `IntegrationEvent`, `ConnectionContext` and
+  helpers) plus a **test kit** (`awm.sdk.testing`: an in-memory engine, a
+  mock HTTP transport, webhook signing helpers and contract tests that every
+  integration should pass) and a project template (`awm integrations new
+  linear`) producing a package with entry points, tests and CI.
+- **Out-of-process integrations** over HTTP, so integrations can be written in
+  any language and deployed separately: the service serves a manifest
+  (`GET /manifest`: key, title, connection JSON schema, actions with
+  input/output schemas, resources, events) and endpoints
+  `POST /actions/{name}`, `POST /resources/{name}/query`,
+  `POST /webhooks/verify` and `POST /webhooks/parse`, receiving the resolved
+  connection config per call. Tenants register one with a
+  `RemoteIntegration` connection (`url`, auth token); AWM adapts it to the same
+  `Integration` interface, so actions become steps and agent tools
+  automatically.
+- **Catalogue and marketplace.** Installed integrations (built-in, Python
+  packages, remote) appear in `/v1/integrations` and the UI catalogue with
+  their schemas; community integrations can be listed alongside blueprints
+  (§10.1) with verification status.
+
 ---
 
 ## 10. Campaigns
@@ -548,15 +576,46 @@ someone builds once and others wire up to their own systems.
 
 ## 11. Multi-tenancy, auth and security
 
-- Every row carries `tenant_id`; all repository queries are tenant-scoped by
-  construction (the repository layer takes a `TenantContext`, there is no
-  unscoped query API). Postgres row-level security is enabled as defence in
-  depth.
-- **API keys**: `awm_<prefix>_<secret>`, stored as SHA-256 hashes, with
-  scopes (`workflows:read`, `runs:write`, `admin`, …), expiry, last-used, and
-  revocation. Users authenticate to the UI via OIDC (and a bootstrap admin
-  for local installs); service accounts use API keys.
-- **RBAC**: roles `owner`, `admin`, `editor`, `operator`, `viewer` per tenant.
+- **Tenants and namespaces.** A *tenant* is an organisation (hard isolation:
+  every row carries `tenant_id`, all store queries are tenant-scoped by
+  construction, Postgres row-level security as defence in depth). Inside a
+  tenant, **namespaces** group the things a team owns: agents, skills,
+  workflows, connections, triggers, campaigns, sandbox profiles, gateways,
+  secrets and runs all live in exactly one namespace (`default` exists in every
+  tenant). Users and groups are added to a namespace as members with a role, so
+  a platform team can own `platform` while product teams get their own
+  namespaces. Resource names are unique per (tenant, namespace, kind).
+  Lookups fall back from the run's namespace to a tenant-wide `shared`
+  namespace, so platform teams can publish shared connections, gateways and
+  skills that other namespaces use without being able to see their secrets.
+- **Users, groups and service accounts.** Users come from OIDC sign-in or SCIM
+  provisioning; groups come from SCIM or from an OIDC `groups` claim. Service
+  accounts are non-human principals that own API keys.
+- **RBAC.** Permissions are `resource:verb` strings (`workflows:read`,
+  `workflows:write`, `runs:create`, `runs:approve`, `runs:cancel`,
+  `connections:write`, `secrets:write`, `campaigns:launch`, `members:manage`,
+  `roles:manage`, `blueprints:publish`, `audit:read`, …, `*` for all). A
+  **role** is a named set of permissions; built-in roles are `tenant-admin`,
+  `namespace-admin`, `editor`, `operator` (run, approve, cancel), `viewer`, and
+  admins can define custom roles. A **role binding** grants a role to a
+  subject (user, group or service account) either tenant-wide or in one
+  namespace. Every API call is authorised by `authorize(principal, permission,
+  namespace)`; the UI hides what the principal cannot do using the same check
+  (`GET /v1/me/permissions`).
+- **OIDC sign-in.** Generic OpenID Connect (Okta, Microsoft Entra ID, Google,
+  Keycloak, Auth0, Dex): authorization-code flow with PKCE, ID tokens verified
+  against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
+  AWM session tokens afterwards. Claims map to the user record and optionally
+  to role bindings (`groups` claim → group membership). Configured per tenant
+  (several providers allowed) plus a bootstrap admin token for first setup.
+- **SCIM 2.0 provisioning.** `/scim/v2/Users`, `/scim/v2/Groups`,
+  `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` with filtering
+  (`userName eq "…"`) and PATCH, authenticated by a per-tenant SCIM bearer
+  token. Deactivating a user in the IdP disables their sessions and API keys
+  immediately; group membership changes flow through to role bindings.
+- **API keys**: `awm_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
+  user or service account, restricted to namespaces and a role (never more
+  than the owner holds), with expiry, last-used, and revocation.
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
   KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
   are injected at the last moment and redacted from events and logs.
@@ -680,9 +739,40 @@ first-time user.
   pause/resume/cancel controls.
 - **Integrations** — catalogue, connection forms rendered from schemas, webhook
   URLs to copy, trigger builder with a test-event dry run.
-- **Agents, skills, sandbox profiles, API keys, secrets** — CRUD screens.
+- **Agents, skills, sandbox profiles, API keys, secrets** — CRUD screens,
+  all scoped by a namespace switcher in the top bar.
+- **Admin console** — users and groups (with SCIM status), namespaces and
+  their members, roles (built-in and custom, edited as a permission matrix),
+  role bindings, OIDC providers and SCIM tokens, API keys and service
+  accounts, model policies and gateways, and the audit log with filters.
+- **Sign-in** through the tenant's OIDC provider(s); the UI shows only what
+  the signed-in principal may do.
 - Command palette (⌘K), dark/light themes, responsive layout, accessible
   components.
+
+### 14.1 Built-in documentation
+
+The product ships its own documentation at `/docs` in the UI, so it always
+matches the running version.
+
+- **Source**: Markdown files in `docs/` (guides, concepts, integration and SDK
+  guides, this architecture document), bundled into the frontend at build
+  time and also published as a static site for the open-source project.
+- **Sections**: *Getting started* (install, first workflow, first trigger),
+  *Concepts* (tenants and namespaces, agents, workflows, steps, runs,
+  triggers, campaigns, blueprints, identities), *Guides* (the GitHub uplift and
+  Jira bugfix journeys, schedules, approvals, decisions with Jev, model
+  policies, sandboxes, attribution and governance), *Administration* (OIDC,
+  SCIM, roles, namespaces, API keys, secrets, audit), *Building integrations*
+  (SDK, test kit, remote protocol), *Reference* (resource schemas generated
+  from the pydantic models, step types, expression syntax, the OpenAPI
+  reference rendered from `/v1/openapi.json`, CLI) and *Internals* (the
+  architecture: executor, leases, waits, sandboxes, plugin system).
+- **In the UI**: full-text search (client-side index), a table of contents,
+  code samples with copy buttons, and contextual "Learn more" links from
+  every screen and inspector field to the relevant page. Reference pages are
+  generated from the same schemas the API validates against, so they cannot
+  drift.
 
 ## 15. Observability and operations
 
@@ -723,12 +813,11 @@ new plugin needs no frontend changes.
 4. Agent runtime (tool loop + CLI runtime), Anthropic provider, skills.
 5. Integrations framework + GitHub + Jira + webhook/schedule triggers.
 6. Campaigns.
-7. API server: tenancy, API keys, all resources, SSE.
+7. API server: tenancy, namespaces, RBAC, OIDC, SCIM, API keys, all resources, SSE.
 8. Kubernetes, Docker, E2B and SPACE sandbox backends.
 9. React UI with the drag-and-drop workflow builder.
-10. Journeys as examples + e2e tests; docker-compose, Helm, docs.
+10. Built-in docs, journeys as examples + e2e tests; docker-compose, Helm.
 
 ## 18. Open questions
 
 - Product name (working name: AWM).
-- OIDC provider defaults for the UI (generic OIDC proposed).
