@@ -23,7 +23,16 @@ from sqlalchemy import or_, select, update
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest, NotFound
 from shoal.core.ids import new_id
-from shoal.core.models import Eval, EvalCase, EvalPlatform, endpoint_fields, EvalSpec, EvalVariant, RunStatus, WorkflowSpec
+from shoal.core.models import (
+    Eval,
+    EvalCase,
+    EvalPlatform,
+    EvalSpec,
+    EvalVariant,
+    RunStatus,
+    WorkflowSpec,
+    endpoint_fields,
+)
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.evals.compare import compare, evaluate_gate, summarize
 from shoal.evals.graders import grade_case
