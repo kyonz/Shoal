@@ -66,7 +66,7 @@ apiVersion: shoal.dev/v1
 kind: Trigger
 metadata: { name: on-ticket }
 spec:
-  connection: starter
+  connection: my-starter
   event: ticket.created
   workflow: triage
   inputs: { ticket: "{{ event.ticket.id }}" }
@@ -76,7 +76,7 @@ spec:
 async def test_webhook_fires_a_trigger_in_the_engine(api):
     async with engine_harness(StarterIntegration, http=api) as world:
         await world.connect(
-            "starter",
+            "my-starter",
             "starter",
             config={"base_url": CONFIG["base_url"]},
             secrets={"api_token": "tok_test", "webhook_secret": "whsec_test"},
@@ -86,7 +86,7 @@ async def test_webhook_fires_a_trigger_in_the_engine(api):
             "whsec_test", {"action": "created", "ticket": {"id": "OPS-9"}}, header="X-Starter-Signature"
         )
 
-        result = await world.webhook("starter", headers, body)
+        result = await world.webhook("my-starter", headers, body)
 
         assert [t["trigger"] for t in result["triggers"]] == ["on-ticket"]
         assert len(await world.runs()) == 1

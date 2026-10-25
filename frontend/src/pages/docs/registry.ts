@@ -163,21 +163,28 @@ export function findPage(slug: string): DocPage | undefined {
   return PAGES.find((p) => p.slug === clean);
 }
 
+/** Where repository files that aren't docs pages (examples, deploy/README.md, ...) are linked to. */
+export const REPO_URL = "https://github.com/kyonz/ai-workflow-manager/blob/main";
+
 /**
  * Resolve a Markdown link found on page `from` to an app route. Relative
- * `.md` links (`../guides/x.md#y`) become `/docs/guides/x#y`; external and
- * absolute links are returned unchanged.
+ * `.md` links (`../guides/x.md#y`) become `/docs/guides/x#y`; links to other
+ * repository files (`../examples/x/`, `../deploy/README.md`) go to the
+ * repository; external and absolute links are returned unchanged.
  */
 export function resolveDocHref(href: string, from: string): string {
   if (/^[a-z]+:/i.test(href) || href.startsWith("#") || href.startsWith("/")) return href;
   const [pathPart, hash] = href.split("#");
-  const dir = from.split("/").slice(0, -1);
+  // Paths are resolved from the repository root: repo docs live in docs/<slug>.md.
+  const dir = ["docs", ...from.split("/").slice(0, -1)];
   for (const seg of pathPart.split("/")) {
     if (seg === "..") dir.pop();
     else if (seg && seg !== ".") dir.push(seg);
   }
-  const slug = dir.join("/").replace(/\.md$/, "");
-  return `/docs/${slug}${hash ? `#${hash}` : ""}`;
+  const anchor = hash ? `#${hash}` : "";
+  const slug = dir.slice(1).join("/").replace(/\.md$/, "");
+  if (dir[0] === "docs" && slug && findPage(slug)) return `/docs/${slug}${anchor}`;
+  return `${REPO_URL}/${dir.join("/")}${anchor}`;
 }
 
 // --------------------------------------------------------------------------- search

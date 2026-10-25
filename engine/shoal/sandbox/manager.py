@@ -7,6 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from shoal.core.errors import StepError
 from shoal.core.models import SandboxProfileSpec
 from shoal.sandbox.base import Sandbox, SandboxBackend, SandboxSpec
 
@@ -55,6 +56,8 @@ class SandboxManager:
         """Yield a sandbox for a step. Run-scoped sandboxes outlive the step."""
         name, profile = await self.profile(run.tenant_id, profile_name)
         backend = self.backend(profile.backend)
+        if gap := backend.network_gap(profile.network):
+            raise StepError(f"sandbox profile '{name}': {gap}; use a backend that can, or relax the profile's network policy")
         spec = self.spec_for(profile, run, env)
         if profile.scope == "step":
             sandbox = await backend.create(spec)

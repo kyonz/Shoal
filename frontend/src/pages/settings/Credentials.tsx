@@ -106,11 +106,16 @@ export default function Credentials() {
           <CheckCircle2 className="size-4" /> Connected <span className="font-mono">{connected}</span>. Runs waiting for it carry on by themselves.
         </Notice>
       )}
-      {failed && (
+      {failed === "sign_in_required" ? (
+        <Notice tone="bad" onDismiss={dismiss}>
+          <XCircle className="size-4" /> That sign-in link was started by someone else, or in another browser, so nothing was saved. Start
+          connecting again from this page while signed in as yourself.
+        </Notice>
+      ) : failed ? (
         <Notice tone="bad" onDismiss={dismiss}>
           <XCircle className="size-4" /> The provider didn't complete the sign-in (<span className="font-mono">{failed}</span>). Try again, or paste a token instead.
         </Notice>
-      )}
+      ) : null}
       {error ? <ErrorNotice error={error} className="mb-4" /> : null}
       <Card>
         {loading || mine.isLoading ? (

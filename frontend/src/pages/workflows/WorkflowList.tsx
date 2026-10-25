@@ -164,7 +164,9 @@ export default function WorkflowList() {
                       </Tooltip>
                     );
                   })}
-                  <span className="ml-1.5 text-xs text-faint">{steps.length} steps</span>
+                  <span className="ml-1.5 text-xs text-faint">
+                    {steps.length} step{steps.length === 1 ? "" : "s"}
+                  </span>
                 </div>
                 <div className="mt-3 flex items-center gap-2 border-t border-border pt-3 text-xs text-faint">
                   <Tooltip content={`Updated ${relTime(w.metadata.updated_at)} by ${w.metadata.updated_by ?? "unknown"}`}>
@@ -230,10 +232,23 @@ function ImportDialog({ open, onOpenChange, ns }: { open: boolean; onOpenChange:
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
+      // Apply creates or replaces: say which existing resources this would replace before doing it.
+      const plan = await applyYaml(text, { namespace: ns, dryRun: true });
+      const replaced = plan.filter((r) => r.outcome === "updated");
+      if (replaced.length) {
+        const ok = await confirm({
+          title: `Replace ${replaced.length === 1 ? `${replaced[0].kind.toLowerCase()} ${replaced[0].name}` : `${replaced.length} resources`}?`,
+          description: `Applying replaces ${replaced.map((r) => `${r.kind} ${r.name}`).join(", ")} in ${ns} with what you pasted. Earlier versions stay in the version history.`,
+          confirmLabel: "Replace",
+          danger: true,
+        });
+        if (!ok) return;
+      }
       const res = await applyYaml(text, { namespace: ns });
       void qc.invalidateQueries({ queryKey: ["resources"] });
       toast.success(`Applied ${res.length} resource${res.length === 1 ? "" : "s"}`, { description: res.map((r) => `${r.kind} ${r.name}: ${r.outcome}`).join("\n") });

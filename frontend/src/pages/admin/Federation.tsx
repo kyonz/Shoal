@@ -259,6 +259,8 @@ function CreateLinkDialog({ open, onOpenChange, onCreated }: { open: boolean; on
   const [tenant, setTenant] = useState("");
   const [mode, setMode] = useState<Mode>("read_write");
   const tenants = useQuery({ queryKey: ["admin", "tenants"], queryFn: () => unwrap(client.GET("/v1/tenants")), enabled: open });
+  const links = useQuery({ queryKey: adminKeys.links, queryFn: () => unwrap(client.GET("/v1/federation/links")), enabled: open });
+  const linked = new Set((links.data ?? []).filter((l) => l.status !== "revoked").map((l) => l.tenant));
   const create = useAction(() => unwrap(client.POST("/v1/federation/links", { body: { tenant, mode } })), {
     invalidate: [adminKeys.links],
     onSuccess: (r) => {
@@ -267,7 +269,7 @@ function CreateLinkDialog({ open, onOpenChange, onCreated }: { open: boolean; on
       onCreated(r);
     },
   });
-  const list = (tenants.data ?? []) as { slug: string; name: string }[];
+  const list = ((tenants.data ?? []) as { slug: string; name: string }[]).filter((t) => !linked.has(t.slug));
   return (
     <Dialog
       open={open}
@@ -344,6 +346,23 @@ function EnrollmentDialog({ created, onClose }: { created: LinkCreated | null; o
 // --------------------------------------------------------------------------- member (tenant admin)
 
 function MembershipPanel() {
+  const { me } = useAuth();
+  if (me?.federated) return <FederatedFromHere />;
+  return <MembershipOfHub />;
+}
+
+/** On the hub, a federated tenant's data and hub access are managed in its member deployment. */
+function FederatedFromHere() {
+  return (
+    <EmptyState
+      icon={<Network className="size-5" />}
+      title="Managed in its own deployment"
+      description="This organisation is federated: its data lives in a member deployment that this hub forwards to. Its admins decide what the hub may see and do from the Federation page there."
+    />
+  );
+}
+
+function MembershipOfHub() {
   const membership = useMembership();
   if (membership.isLoading)
     return (
@@ -559,9 +578,19 @@ function MembershipDetail({ m }: { m: Membership }) {
             <span className="font-mono text-xs">{m.hub_url}</span>
           </KV>
           <KV label="Connection">
-            <Badge tone={recent ? "ok" : "warn"} dot>
-              {m.last_connected_at ? `${recent ? "Connected" : "Last connected"} ${relTime(m.last_connected_at)}` : "Not connected yet"}
-            </Badge>
+            {m.connector_error ? (
+              <Tooltip content={m.connector_error}>
+                <span>
+                  <Badge tone="bad" dot>
+                    {m.last_connected_at ? `Can't reach the hub · last connected ${relTime(m.last_connected_at)}` : "Can't reach the hub"}
+                  </Badge>
+                </span>
+              </Tooltip>
+            ) : (
+              <Badge tone={recent ? "ok" : "warn"} dot>
+                {m.last_connected_at ? `${recent ? "Connected" : "Last connected"} ${relTime(m.last_connected_at)}` : "Not connected yet"}
+              </Badge>
+            )}
           </KV>
           <KV label="Effective access">
             <Tooltip content={`The hub asks for ${m.hub_mode ? MODE_LABEL[m.hub_mode as Mode].toLowerCase() : "—"}; you allow up to ${MODE_LABEL[m.max_mode as Mode].toLowerCase()}.`}>
@@ -572,6 +601,11 @@ function MembershipDetail({ m }: { m: Membership }) {
           </KV>
           <KV label="Joined">{relTime(m.created_at)}</KV>
         </div>
+        {m.connector_error && (
+          <div className="mx-5 mb-4 rounded-lg border border-bad/25 bg-bad-soft px-3 py-2 text-[13px] text-bad first-letter:uppercase">
+            {m.connector_error}. If the hub operator revoked the link, leave the hub here and join again with a new enrollment token.
+          </div>
+        )}
       </Card>
 
       <Card>

@@ -21,6 +21,7 @@ import {
   StatusBadge,
   Table,
   Td,
+  Textarea,
   Th,
   Tr,
 } from "@/components/ui";
@@ -44,14 +45,46 @@ interface Question {
   levels?: string[];
 }
 
+type GraderType = "expression" | "json_schema" | "llm_judge" | "decision";
+
 interface Grader {
   name: string;
-  type?: "expression" | "decision";
+  type?: GraderType;
   check?: string;
   question?: Question;
   state?: unknown;
+  subject?: unknown;
+  schema?: Record<string, unknown>;
+  rubric?: string;
+  levels?: string[];
+  model?: string;
+  gateway?: string;
+  provider?: string;
+  config?: Record<string, unknown>;
   weight?: number;
 }
+
+/** Fields that belong to each grader type; switching type keeps the new type's fields and drops the rest. */
+const GRADER_FIELDS: Record<GraderType, (keyof Grader)[]> = {
+  expression: ["check"],
+  json_schema: ["subject", "schema"],
+  llm_judge: ["subject", "rubric", "levels", "model", "gateway", "config"],
+  decision: ["question", "state", "provider", "config"],
+};
+
+const GRADER_DEFAULTS: Record<GraderType, Partial<Grader>> = {
+  expression: { check: "{{ true }}" },
+  json_schema: { schema: { type: "object", required: [] } },
+  llm_judge: { rubric: "Does the output meet the expectation?", levels: ["fail", "partial", "pass"] },
+  decision: { question: { type: "score", instructions: "How well do the outputs meet the expectation?", levels: ["poor", "fair", "good", "excellent"] } },
+};
+
+function switchType(g: Grader, type: GraderType): Grader {
+  const kept = Object.fromEntries(GRADER_FIELDS[type].filter((k) => g[k] !== undefined).map((k) => [k, g[k]]));
+  return { name: g.name, weight: g.weight, type, ...GRADER_DEFAULTS[type], ...kept };
+}
+
+const asText = (v: unknown) => (v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v));
 
 export const evalExtension: EditorExtension = {
   widgets: ({ ns }) => ({
@@ -125,7 +158,7 @@ function GradersEditor({ ctx }: { ctx: EditorContext }) {
     <Card>
       <CardHeader
         title={`Graders (${graders.length})`}
-        description="Expression checks over outputs, or a decision model scoring against a rubric. Scores are weighted into the case score."
+        description="Expression checks, JSON schema validation, an LLM judge or a decision model. Each scores 0 to 1; scores are weighted into the case score."
         actions={
           canWrite && (
             <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => set([...graders, { name: `grader-${graders.length + 1}`, type: "expression", check: "{{ outputs is defined }}" }])}>
@@ -142,16 +175,10 @@ function GradersEditor({ ctx }: { ctx: EditorContext }) {
                 <Input mono value={g.name} onChange={(e) => update(i, { ...g, name: e.target.value })} />
               </Field>
               <Field label="Type">
-                <NativeSelect
-                  value={g.type ?? "expression"}
-                  onChange={(e) => {
-                    const type = e.target.value as Grader["type"];
-                    update(i, type === "decision"
-                      ? { name: g.name, weight: g.weight, type, question: g.question ?? { type: "score", instructions: "How well do the outputs meet the expectation?", levels: ["poor", "fair", "good", "excellent"] } }
-                      : { name: g.name, weight: g.weight, type, check: g.check ?? "{{ true }}" });
-                  }}
-                >
+                <NativeSelect value={g.type ?? "expression"} onChange={(e) => update(i, switchType(g, e.target.value as GraderType))}>
                   <option value="expression">Expression</option>
+                  <option value="json_schema">JSON schema</option>
+                  <option value="llm_judge">LLM judge</option>
                   <option value="decision">Decision model</option>
                 </NativeSelect>
               </Field>
@@ -162,36 +189,82 @@ function GradersEditor({ ctx }: { ctx: EditorContext }) {
                 <Trash2 className="size-3.5" />
               </Button>
             </div>
-            {(g.type ?? "expression") === "expression" ? (
-              <Field label="Check" description="Evaluated with `outputs`, `expect` and `run`; truthy passes.">
-                <div className="rounded-lg border border-border bg-panel">
-                  <CodeEditor value={g.check ?? ""} language="text" lineNumbers={false} minHeight="36px" onChange={(t) => update(i, { ...g, check: t })} placeholder="{{ outputs.tests_passed }}" />
-                </div>
-              </Field>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
-                <Field label="Question type">
-                  <NativeSelect value={g.question?.type ?? "score"} onChange={(e) => update(i, { ...g, question: { ...(g.question ?? { instructions: "" }), type: e.target.value as Question["type"] } })}>
-                    <option value="score">Score (rubric)</option>
-                    <option value="boolean">Boolean</option>
-                  </NativeSelect>
-                </Field>
-                <Field label="Instructions">
-                  <Input value={g.question?.instructions ?? ""} onChange={(e) => update(i, { ...g, question: { ...(g.question ?? { type: "score" }), instructions: e.target.value } })} />
-                </Field>
-                {g.question?.type !== "boolean" && (
-                  <Field label="Levels" description="Lowest first." className="sm:col-span-2">
-                    <TagInput value={g.question?.levels ?? []} onChange={(levels) => update(i, { ...g, question: { ...(g.question ?? { type: "score", instructions: "" }), levels } })} />
-                  </Field>
-                )}
-              </div>
-            )}
+            <GraderFields key={`${i}-${g.type ?? "expression"}-${graders.length}`} g={g} onChange={(next) => update(i, next)} />
           </div>
         ))}
         {!graders.length && <EmptyState className="py-8" title="No graders" description="Add at least one grader to score each case." />}
       </fieldset>
     </Card>
   );
+}
+
+function SubjectField({ g, onChange, what }: { g: Grader; onChange: (g: Grader) => void; what: string }) {
+  return (
+    <Field label="Subject" hint="optional" description={`What ${what}; defaults to all outputs.`}>
+      <Input mono value={asText(g.subject)} placeholder="{{ outputs }}" onChange={(e) => onChange({ ...g, subject: e.target.value || undefined })} />
+    </Field>
+  );
+}
+
+function GraderFields({ g, onChange }: { g: Grader; onChange: (g: Grader) => void }) {
+  switch (g.type ?? "expression") {
+    case "expression":
+      return (
+        <Field label="Check" description="Evaluated with `outputs`, `expect`, `inputs`, `case` and `run`; true or a number from 0 to 1.">
+          <div className="rounded-lg border border-border bg-panel">
+            <CodeEditor value={g.check ?? ""} language="text" lineNumbers={false} minHeight="36px" onChange={(t) => onChange({ ...g, check: t })} placeholder="{{ outputs.tests_passed }}" />
+          </div>
+        </Field>
+      );
+    case "json_schema":
+      return (
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+          <SubjectField g={g} onChange={onChange} what="must validate" />
+          <Field label="Schema" description="JSON Schema the subject must match (scores 1 or 0).">
+            <JsonField value={g.schema ?? {}} onChange={(v) => onChange({ ...g, schema: (v as Record<string, unknown>) ?? {} })} />
+          </Field>
+        </div>
+      );
+    case "llm_judge":
+      return (
+        <div className="space-y-3">
+          <Field label="Rubric" description="Grading instructions for the judge model. It also sees the case's inputs and `expect`.">
+            <Textarea rows={3} value={g.rubric ?? ""} onChange={(e) => onChange({ ...g, rubric: e.target.value })} />
+          </Field>
+          <Field label="Levels" description="Worst first; the first scores 0 and the last 1. At least two.">
+            <TagInput value={g.levels ?? []} onChange={(levels) => onChange({ ...g, levels })} />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Judge model" hint="optional">
+              <Input mono value={g.model ?? ""} placeholder="claude-sonnet-5-5" onChange={(e) => onChange({ ...g, model: e.target.value || undefined })} />
+            </Field>
+            <Field label="Gateway" hint="optional" description="Gateway resource or provider.">
+              <Input mono value={g.gateway ?? ""} placeholder="anthropic" onChange={(e) => onChange({ ...g, gateway: e.target.value || undefined })} />
+            </Field>
+            <SubjectField g={g} onChange={onChange} what="the judge grades" />
+          </div>
+        </div>
+      );
+    default:
+      return (
+        <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
+          <Field label="Question type">
+            <NativeSelect value={g.question?.type ?? "score"} onChange={(e) => onChange({ ...g, question: { ...(g.question ?? { instructions: "" }), type: e.target.value as Question["type"] } })}>
+              <option value="score">Score (rubric)</option>
+              <option value="boolean">Boolean</option>
+            </NativeSelect>
+          </Field>
+          <Field label="Instructions">
+            <Input value={g.question?.instructions ?? ""} onChange={(e) => onChange({ ...g, question: { ...(g.question ?? { type: "score" }), instructions: e.target.value } })} />
+          </Field>
+          {g.question?.type !== "boolean" && (
+            <Field label="Levels" description="Lowest first." className="sm:col-span-2">
+              <TagInput value={g.question?.levels ?? []} onChange={(levels) => onChange({ ...g, question: { ...(g.question ?? { type: "score", instructions: "" }), levels } })} />
+            </Field>
+          )}
+        </div>
+      );
+  }
 }
 
 // --------------------------------------------------------------------------- runs

@@ -4,7 +4,10 @@ A connection with ``oauth:`` lets each person connect their own account: the API
 hands out an authorize URL, the provider redirects to ``/v1/oauth/callback``, and
 the tokens are stored as that person's credential. Access tokens are refreshed
 when they are about to expire. The flow state is encrypted and expires, so the
-callback needs no session.
+callback needs no API token. It does need the browser that started the flow
+(a cookie set with the authorize URL) or one signed in as the person, so
+nobody can send someone else their authorize link and collect that person's
+account as their own credential.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ if TYPE_CHECKING:
     from shoal.engine import Engine
 
 STATE_TTL = timedelta(minutes=15)
+BINDING_COOKIE = "shoal_oauth"
 REFRESH_MARGIN = timedelta(seconds=60)
 
 
@@ -55,14 +59,23 @@ class OAuthFlows:
         separator = "&" if "?" in oauth.authorize_url else "?"
         return f"{oauth.authorize_url}{separator}{urlencode(params)}"
 
-    async def callback(self, code: str, state: str) -> tuple[str, str, str, str]:
-        """Exchange the code and store the tokens; returns (tenant, owner, namespace, connection)."""
+    @staticmethod
+    def binding(state: str) -> str:
+        """The cookie value that ties a flow to the browser that started it."""
+        return hashlib.sha256(b"shoal-oauth-binding:" + state.encode()).hexdigest()[:32]
+
+    def read_state(self, state: str) -> dict[str, Any]:
         try:
             data = json.loads(self.engine.secrets.cipher.decrypt(state))
         except Exception as exc:
             raise Unauthorized("invalid OAuth state") from exc
         if clock.now().timestamp() > data["exp"]:
             raise Unauthorized("the OAuth sign-in took too long; start again")
+        return data
+
+    async def callback(self, code: str, state: str) -> tuple[str, str, str, str]:
+        """Exchange the code and store the tokens; returns (tenant, owner, namespace, connection)."""
+        data = self.read_state(state)
         tenant_id, owner, namespace, connection = data["t"], data["o"], data["n"], data["c"]
         oauth = await self._spec(tenant_id, namespace, connection)
         tokens = await self._token(tenant_id, namespace, oauth, {
