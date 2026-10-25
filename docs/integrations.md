@@ -28,7 +28,7 @@ There are two ways to ship one:
 ## Quick start
 
 ```bash
-python -m shoal.sdk.scaffold linear --title Linear     # will be `shoal integrations new linear`
+shoal integrations new linear --title Linear     # or: python -m shoal.sdk.scaffold linear
 cd shoal-linear && uv sync && uv run pytest
 ```
 

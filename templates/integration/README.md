@@ -43,7 +43,7 @@ The `Dockerfile` builds that service.
 ```yaml
 apiVersion: shoal.dev/v1
 kind: Connection
-metadata: { name: starter }
+metadata: { name: my-starter }
 spec:
   integration: remote
   config: { url: "https://starter-integration.internal", base_url: "https://api.starter.example" }

@@ -373,6 +373,22 @@ def test_scaffold_creates_a_working_project(tmp_path):
         new_integration("service-now", project)
 
 
+def test_scaffolded_multi_word_project_tests_pass(tmp_path):
+    """Header, host and connection names must stay valid when the key has several words."""
+    project = new_integration("acme-tickets", tmp_path / "shoal-acme-tickets", title="Acme Tickets")
+    source = (project / "src/shoal_acme_tickets/integration.py").read_text()
+    assert 'key = "acme_tickets"' in source
+    assert '"x-acme-tickets-signature"' in source and "https://api.acme-tickets.example" in source
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(project / "tests")],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project / "src")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_template_project_tests_pass():
     template = ROOT / "templates/integration"
     result = subprocess.run(
