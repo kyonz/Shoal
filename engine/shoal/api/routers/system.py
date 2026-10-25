@@ -27,6 +27,16 @@ async def readyz(engine: EngineDep) -> dict[str, str]:
     return {"status": "ready"}
 
 
+@router.get("/.well-known/openid-configuration", tags=["system"], summary="OIDC discovery for workload identity tokens")
+async def openid_configuration(engine: EngineDep) -> dict[str, Any]:
+    return engine.workload.discovery()
+
+
+@router.get("/.well-known/jwks.json", tags=["system"], summary="Keys that verify workload identity tokens")
+async def jwks(engine: EngineDep) -> dict[str, Any]:
+    return engine.workload.jwks()
+
+
 @router.get("/v1/info", tags=["system"], summary="Server version, features and installed plugins")
 async def info(engine: EngineDep) -> dict[str, Any]:
     reg = engine.registry
@@ -35,8 +45,8 @@ async def info(engine: EngineDep) -> dict[str, Any]:
         "version": shoal.__version__,
         "api_version": "v1",
         "public_url": engine.settings.public_url,
-        "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "evals", "decisions", "a2a", "assistant", "script-languages"],
-        "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "steps")},
+        "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "evals", "decisions", "a2a", "assistant", "script-languages", "cloud-identities"],
+        "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "steps", "credentials")},
     }
 
 

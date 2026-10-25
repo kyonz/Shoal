@@ -24,8 +24,10 @@ from shoal.auth.oauth import OAuthFlows
 from shoal.auth.oidc import OIDCService
 from shoal.auth.rbac import Authorizer
 from shoal.auth.user_credentials import UserCredentials
+from shoal.auth.workload import WorkloadIssuer
 from shoal.blueprints import BlueprintService
 from shoal.campaigns.service import CampaignService
+from shoal.cloud import CloudIdentities
 from shoal.config import Settings, get_settings
 from shoal.core import clock
 from shoal.decisions.service import DecisionService
@@ -84,6 +86,9 @@ def _builtin_steps(registry: Registry) -> None:
 
     registry.register("eval_sinks", "braintrust", BraintrustSink, replace=False)
     registry.register("eval_sinks", "langfuse", LangfuseSink, replace=False)
+    from shoal.cloud.aws import AwsProvider
+
+    registry.register("credentials", "aws", AwsProvider, replace=False)
 
 
 class Engine:
@@ -111,6 +116,8 @@ class Engine:
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
         self.identities = IdentityService(self)
+        self.workload = WorkloadIssuer(self.settings)
+        self.cloud = CloudIdentities(self)
         self.models = ModelRouter(self)
         self.decisions = DecisionService(self)
         self.executor = Executor(self)

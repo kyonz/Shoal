@@ -21,7 +21,7 @@ function ToAdmin({ plural }: { plural: string }) {
   return <Navigate to={`/admin/${plural}${name ? `/${encodeURIComponent(name)}` : ""}`} replace />;
 }
 
-const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "evals"];
+const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "cloud-identities", "evals"];
 const admin: CatalogPlural[] = ["gateways", "model-policies"];
 
 /** Tenant-wide kinds edited in the admin console: /admin/gateways, /admin/model-policies. */
@@ -31,7 +31,7 @@ export const adminCatalogRoutes: RouteObject[] = admin.flatMap((plural): RouteOb
   { path: `${plural}/:name`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },
 ]);
 
-/** Namespaced: agents, skills, sandbox-profiles, evals, blueprints. */
+/** Namespaced: agents, skills, sandbox-profiles, cloud-identities, evals, blueprints. */
 export const catalogRoutes: RouteObject[] = [
   ...admin.flatMap((plural): RouteObject[] => [
     { path: plural, element: <ToAdmin plural={plural} /> },

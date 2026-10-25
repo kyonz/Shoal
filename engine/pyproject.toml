@@ -75,6 +75,9 @@ tool-loop = "shoal.agents.tool_loop:ToolLoopRuntime"
 cli = "shoal.agents.cli_runtime:CliRuntime"
 a2a = "shoal.agents.a2a_runtime:A2ARuntime"
 
+[project.entry-points."shoal.credentials"]
+aws = "shoal.cloud.aws:AwsProvider"
+
 [project.entry-points."shoal.secrets"]
 env = "shoal.secrets.providers:EnvSecretProvider"
 db = "shoal.secrets.providers:DatabaseSecretProvider"

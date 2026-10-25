@@ -33,7 +33,7 @@ async def load_skills(ctx: StepContext, names: list[str]) -> dict[str, SkillSpec
     return skills
 
 
-async def resolve_env(ctx: StepContext, agent: AgentSpec) -> dict[str, str]:
+async def resolve_env(ctx: StepContext, agent: AgentSpec, agent_name: str | None = None) -> dict[str, str]:
     """Render agent env (may reference secrets) and register the values for redaction."""
     names = referenced_secrets(agent.env)
     secrets = await ctx.engine.secrets.resolve(ctx.tenant_id, names)
@@ -53,6 +53,8 @@ async def resolve_env(ctx: StepContext, agent: AgentSpec) -> dict[str, str]:
         creds = await provider(conn)
         ctx.redactor.add(*(v for k, v in creds.items() if any(s in k for s in ("TOKEN", "SECRET", "PASSWORD"))))
         env.update(creds)
+    if agent.cloud_identities:
+        env.update(await ctx.engine.cloud.environment(ctx, agent.cloud_identities, agent=agent_name))
     env.update({k: str(v) for k, v in ctx.render(agent.env, secrets={**ctx.expr["secrets"], **secrets}).items()})
     ctx.redactor.add(*secrets.values())
     return env
@@ -85,7 +87,7 @@ async def run_agent(
         skills=await load_skills(ctx, [*agent.skills, *(extra_skills or [])]),
         tools=[*agent.tools, *(extra_tools or [])],
         provider_config=await resolve_provider_config(ctx, agent),
-        env=await resolve_env(ctx, agent),
+        env=await resolve_env(ctx, agent, name),
         depth=depth,
     )
     runtime = ctx.engine.plugin("agent_runtimes", agent.runtime)

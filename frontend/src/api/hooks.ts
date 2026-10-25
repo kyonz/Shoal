@@ -15,6 +15,7 @@ export type Plural =
   | "model-policies"
   | "evals"
   | "identities"
+  | "cloud-identities"
   | "blueprints";
 
 export const TENANT_SCOPED: Plural[] = ["identities", "blueprints", "gateways", "model-policies"];
