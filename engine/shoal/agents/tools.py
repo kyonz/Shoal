@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -62,6 +63,9 @@ class Toolbox:
         for name in requested:
             if name in BUILTIN_TOOLS:
                 getattr(self, f"_add_{name}")()
+            elif name.startswith("mcp:"):  # mcp:<connection> or mcp:<connection>.<tool>
+                connection, _, tool = name[4:].partition(".")
+                await self._add_integration_tools(f"mcp.{tool or '*'}", connection=connection, prefix=connection)
             elif "." in name:
                 await self._add_integration_tools(name)
             else:
@@ -186,14 +190,17 @@ class Toolbox:
             run,
         )
 
-    async def _add_integration_tools(self, pattern: str) -> None:
+    async def _add_integration_tools(self, pattern: str, *, connection: str | None = None, prefix: str | None = None) -> None:
         integration_key, _, action_name = pattern.partition(".")
         engine, run_ctx = self.inv.ctx.engine, self.inv.ctx
         integration = engine.integrations.get(integration_key)
         actions = integration.actions
-        if not actions:  # dynamic integrations (remote) list their actions per connection
-            name = await engine.integrations.resolve_name(run_ctx.tenant_id, integration_key, run_ctx.connection_for(integration_key))
-            actions = await integration.actions_for(await engine.integrations.connection(run_ctx.tenant_id, name))
+        if not actions:  # dynamic integrations (remote, MCP) list their actions per connection
+            name = await engine.integrations.resolve_name(
+                run_ctx.tenant_id, integration_key, connection or run_ctx.connection_for(integration_key)
+            )
+            conn = await engine.integrations.connection(run_ctx.tenant_id, name, initiator=run_ctx.run.initiator, run_id=run_ctx.run.id)
+            actions = await integration.actions_for(conn)
         names = list(actions) if action_name in ("*", "") else [action_name]
         for name in names:
             definition = actions.get(name)
@@ -204,16 +211,17 @@ class Toolbox:
             def make(full: str = full):  # bind loop variable
                 async def run(args: dict[str, Any]) -> str:
                     ctx = self.inv.ctx
-                    connection = ctx.connection_for(full.split(".")[0])
+                    connection_name = connection or ctx.connection_for(full.split(".")[0])
                     await ctx.emit("agent.action", {"action": full, "params": args})
                     result = await ctx.engine.integrations.call(
-                        ctx.tenant_id, full, args, connection=connection, initiator=ctx.run.initiator, run_id=ctx.run.id
+                        ctx.tenant_id, full, args, connection=connection_name, initiator=ctx.run.initiator, run_id=ctx.run.id
                     )
                     return json.dumps(result, default=str)
 
                 return run
 
-            self.add(f"{integration_key}__{name}", definition.description, definition.tool_schema(), make())
+            tool_prefix = re.sub(r"[^A-Za-z0-9_]", "_", prefix) if prefix else integration_key
+            self.add(f"{tool_prefix}__{name}"[:64], definition.description, definition.tool_schema(), make())
 
     def add_finish(self, schema: dict[str, Any], handler: Callable[[dict[str, Any]], Awaitable[str]]) -> None:
         self.add(

@@ -45,6 +45,25 @@ class QuotaExceeded(ShoalError):
     code = "quota_exceeded"
 
 
+class CredentialRequired(ShoalError):
+    """A connection needs the credential of the person a call acts for, and they have not connected it."""
+
+    status_code = 428
+    code = "credential_required"
+
+    def __init__(self, message: str, *, tenant_id: str, owner: str | None, namespace: str, connection: str, fields: list[str]):
+        super().__init__(message, details={"owner": owner, "namespace": namespace, "connection": connection, "fields": fields})
+        self.tenant_id, self.owner, self.namespace, self.connection, self.fields = tenant_id, owner, namespace, connection, fields
+
+    @property
+    def wait_key(self) -> str:
+        return credential_key(self.tenant_id, self.owner or "", self.namespace, self.connection)
+
+
+def credential_key(tenant_id: str, owner: str, namespace: str, connection: str) -> str:
+    return f"credential:{tenant_id}:{owner}:{namespace}/{connection}"
+
+
 class PluginError(ShoalError):
     code = "plugin_error"
 

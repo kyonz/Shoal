@@ -503,11 +503,33 @@ class SandboxProfileSpec(Model):
     config: dict[str, Any] = Field(default_factory=dict, description="Backend-specific settings.")
 
 
+class OAuthSpec(Model):
+    """OAuth 2.0 authorization code flow (with PKCE) for per-user connection credentials."""
+
+    authorize_url: str
+    token_url: str
+    scopes: list[str] = Field(default_factory=list)
+    client_id: str
+    client_secret_secret: str | None = Field(None, description="Secret (in the connection's namespace) with the client secret.")
+    token_field: str = Field("token", description="Connection field the access token fills.")
+    extra_params: dict[str, str] = Field(default_factory=dict, description="Extra authorize parameters, e.g. audience.")
+
+
 class ConnectionSpec(Model):
     integration: str
     description: str | None = None
     config: dict[str, Any] = Field(default_factory=dict, description="Non-secret settings.")
     secrets: dict[str, str] = Field(default_factory=dict, description="Connection field -> secret name.")
+    credentials: Literal["shared", "per_user", "per_user_or_shared"] = Field(
+        "shared",
+        description="Whose credential calls use: the connection's (`shared`), the person the run acts for "
+        "(`per_user`; the step waits until they connect), or theirs when they have one (`per_user_or_shared`).",
+    )
+    user_fields: list[str] = Field(
+        default_factory=list,
+        description="Connection fields each person supplies (default: the fields in `secrets`).",
+    )
+    oauth: OAuthSpec | None = Field(None, description="Lets people connect with OAuth instead of pasting a token.")
 
 
 class TriageSpec(Model):

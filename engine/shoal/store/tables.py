@@ -328,6 +328,24 @@ class RunSignal(Base):
     consumed_at: Mapped[datetime | None] = mapped_column()
 
 
+class UserCredential(Base):
+    """A person's own credential for one connection (token or OAuth), encrypted; used when runs act for them."""
+
+    __tablename__ = "user_credentials"
+    __table_args__ = (UniqueConstraint("tenant_id", "owner", "namespace", "connection"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    owner: Mapped[str] = mapped_column(String(200))  # actor, e.g. user:dana
+    namespace: Mapped[str] = mapped_column(String(63))
+    connection: Mapped[str] = mapped_column(String(63))
+    kind: Mapped[str] = mapped_column(String(20), default="token")  # token or oauth
+    ciphertext: Mapped[str] = mapped_column(Text)  # encrypted JSON: connection field -> value (+ OAuth refresh data)
+    fields: Mapped[list[Any]] = mapped_column(default=list)  # field names held (not values)
+    expires_at: Mapped[datetime | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class WebhookEndpoint(Base):
     __tablename__ = "webhook_endpoints"
     __table_args__ = (UniqueConstraint("tenant_id", "namespace", "connection_name"),)
