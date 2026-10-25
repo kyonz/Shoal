@@ -68,6 +68,7 @@ def describe(questions: dict[str, DecisionQuestion]) -> str:
 
 class LLMDecisionProvider(DecisionProvider):
     name = "llm"
+    description = "Any model through your gateways (default claude-haiku-5-5); self-hostable."
 
     def setup(self, engine: Engine) -> None:
         self.engine = engine
