@@ -492,3 +492,17 @@ async def test_operator_remote_integrations_register_at_start():
         ]
         await world.engine.start()
         assert "tickets" in {c["key"] for c in world.engine.integrations.catalog()}
+
+
+async def test_cli_checks_a_remote_service(node_service):
+    shoal = str(Path(sys.executable).with_name("shoal"))
+    ok = await asyncio.create_subprocess_exec(shoal, "integrations", "check", node_service, "--token", SERVICE_TOKEN,
+                                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, _ = await ok.communicate()
+    assert ok.returncode == 0, out.decode()
+    assert "passes the integration contract" in out.decode()
+
+    bad = await asyncio.create_subprocess_exec(shoal, "integrations", "check", node_service, "--token", "wrong",
+                                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, _ = await bad.communicate()
+    assert bad.returncode == 1 and "FAIL" in out.decode()
