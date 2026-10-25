@@ -197,3 +197,57 @@ def test_input_parsing():
     assert _parse_inputs(["n=3", "flag=true", "s=hello", "obj={\"a\": 1}", "eq=a=b"], None) == {
         "n": 3, "flag": True, "s": "hello", "obj": {"a": 1}, "eq": "a=b",
     }
+
+
+TRIAGE = """
+apiVersion: awm.dev/v1
+kind: Workflow
+metadata: {name: triage}
+spec:
+  inputs: {text: {type: string}}
+  outputs: {label: "{{ steps.classify.output.label }}"}
+  steps:
+    - {id: classify, type: set, values: {label: "{{ 'bug' if 'crash' in inputs.text else 'feature' }}"}}
+---
+apiVersion: awm.dev/v1
+kind: Eval
+metadata: {name: triage-eval}
+spec:
+  workflow: triage
+  cases:
+    - {name: crash, inputs: {text: app crash}, expect: {label: bug}}
+    - {name: error, inputs: {text: error 500}, expect: {label: bug}}
+  graders:
+    - {name: label, check: "outputs.label == expect.label"}
+"""
+
+
+def test_eval_run_gates(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=TRIAGE).exit_code == 0
+
+    passing = cli(*auth, "eval", "run", "triage-eval", "--wait", "--poll", "0.05", "--fail-under", "0.4")
+    assert passing.exit_code == 0, passing.output
+    assert "gate passed" in passing.output and "50%" in passing.output
+
+    failing = cli(*auth, "eval", "run", "triage-eval", "--wait", "--poll", "0.05", "--fail-under", "0.9", "-o", "json")
+    assert failing.exit_code == 1
+    row = json.loads(failing.stdout)
+    assert row["gate"]["passed"] is False and row["gate"]["reasons"]
+    shown = cli(*auth, "eval", "get", row["id"])
+    assert shown.exit_code == 0 and "gate failed" in shown.output
+
+    started = cli(*auth, "eval", "run", "triage-eval", "-o", "name")
+    assert started.exit_code == 0 and started.stdout.strip()
+
+
+def test_integrations_new(tmp_path):
+    runner = CliRunner()
+    dest = tmp_path / "svc"
+    result = runner.invoke(app, ["integrations", "new", "service-now", "--dest", str(dest), "--title", "Service Now"])
+    assert result.exit_code == 0, result.output
+    assert any(dest.rglob("*.py"))
+    again = runner.invoke(app, ["integrations", "new", "service-now", "--dest", str(dest)])
+    assert again.exit_code == 1 and "not empty" in again.output
+    bad = runner.invoke(app, ["integrations", "new", "9lives", "--dest", str(tmp_path / "x")])
+    assert bad.exit_code == 1

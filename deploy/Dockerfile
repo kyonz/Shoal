@@ -33,6 +33,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=engine/pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-dev --no-install-project ${AWM_EXTRAS}
 COPY engine/ /app/
+# The wheel bundles the integration template from ../templates (see pyproject.toml).
+COPY templates/ /templates/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable ${AWM_EXTRAS}
 

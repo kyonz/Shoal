@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 console = Console()
-err = Console(stderr=True)
+err = Console(stderr=True, soft_wrap=True)
 
 
 class Format(enum.StrEnum):

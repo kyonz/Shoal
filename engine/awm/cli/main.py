@@ -36,8 +36,12 @@ app = typer.Typer(
 )
 secrets_app = typer.Typer(help="Manage namespace secrets (values are write-only).", no_args_is_help=True)
 tenants_app = typer.Typer(help="Create and list tenants (needs the system admin token).", no_args_is_help=True)
+eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_help=True)
+integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_args_is_help=True)
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(tenants_app, name="tenants")
+app.add_typer(eval_app, name="eval")
+app.add_typer(integrations_app, name="integrations")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -526,6 +530,111 @@ def secrets_delete(ctx: typer.Context, name: Annotated[str, typer.Argument()], n
     with api(ctx, namespace) as client:
         client.request("DELETE", f"/v1/namespaces/{quote(client.target.namespace)}/secrets/{quote(name)}")
     console.print(f"secret/{escape(name)} deleted")
+
+
+# --------------------------------------------------------------------------- evals
+
+EVAL_DONE = {"completed", "cancelled", "failed"}
+VARIANT_COLUMNS = [
+    ("VARIANT", lambda v: v["name"]),
+    ("VERSION", lambda v: v.get("workflow_version")),
+    ("CASES", lambda v: v.get("cases")),
+    ("ERRORS", lambda v: v.get("errors")),
+    ("SCORE", lambda v: None if v.get("score") is None else f"{v['score']:.3f}"),
+    ("PASS RATE", lambda v: None if v.get("pass_rate") is None else f"{v['pass_rate']:.0%}"),
+]
+
+
+@eval_app.command("run")
+def eval_run(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Eval name.")],
+    version_: Annotated[int | None, typer.Option("--version", help="Workflow version to evaluate (default: current).")] = None,
+    baseline: Annotated[str | None, typer.Option(help="'previous', 'version:N', an eval run id, or 'none'.")] = None,
+    fail_under: Annotated[float | None, typer.Option(help="Fail the gate when a variant scores below this (0-1).")] = None,
+    max_regression: Annotated[float | None, typer.Option(help="Fail the gate when the score drops more than this against the baseline.")] = None,
+    case: Annotated[list[str] | None, typer.Option("--case", help="Only run these cases.")] = None,
+    inputs: Annotated[list[str] | None, typer.Option("--input", "-i", help="Input override key=value for every case.")] = None,
+    label: Annotated[list[str] | None, typer.Option("--label", "-l", help="Eval run label key=value.")] = None,
+    wait: Annotated[bool, typer.Option("--wait", "-w", help="Wait for the result; exit 1 unless the gate passes.")] = False,
+    poll: Annotated[float, typer.Option(help="Seconds between status checks with --wait.", min=0.01)] = 2.0,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Start an eval run. With --wait it is a CI gate: exit 0 only when the gate passes."""
+    import time
+
+    body = {
+        "version": version_, "baseline": baseline, "fail_under": fail_under, "max_regression": max_regression,
+        "cases": case or None, "inputs": _parse_inputs(inputs or [], None),
+        "labels": dict(item.split("=", 1) for item in label or [] if "=" in item),
+    }
+    with api(ctx, namespace) as client:
+        row = client.request("POST", f"/v1/namespaces/{quote(client.target.namespace)}/evals/{quote(name)}/runs",
+                             json={k: v for k, v in body.items() if v is not None})
+        if output is Format.table:
+            err.print(f"eval run [bold]{row['id']}[/bold] started ({escape(name)} v{row['eval_version']}, "
+                      f"{escape(row['workflow_name'])}@v{row['workflow_version']})")
+        if wait:
+            while row["status"] not in EVAL_DONE:
+                time.sleep(poll)
+                row = client.get(f"/v1/eval-runs/{quote(row['id'])}")
+    if output is not Format.table:
+        emit(row, output, name=lambda r: r["id"])
+    elif wait:
+        _print_eval(row)
+    if wait:
+        passed = row["status"] == "completed" and (row.get("gate") or {}).get("passed", True)
+        raise typer.Exit(0 if passed else 1)
+
+
+@eval_app.command("get")
+def eval_get(ctx: typer.Context, eval_run_id: Annotated[str, typer.Argument(help="Eval run id.")], output: Output = Format.table) -> None:
+    """Show an eval run's scores and gate."""
+    with api(ctx) as client:
+        row = client.get(f"/v1/eval-runs/{quote(eval_run_id)}")
+    if output is Format.table:
+        _print_eval(row)
+    else:
+        emit(row, output, name=lambda r: r["id"])
+
+
+def _print_eval(row: dict[str, Any]) -> None:
+    summary = row.get("summary") or {}
+    console.print(f"[bold]{row['id']}[/bold]  {escape(row['eval_name'])} v{row['eval_version']}  "
+                  f"{styled('succeeded' if row['status'] == 'completed' else row['status'])}")
+    variants = [{"name": k, **v} for k, v in (summary.get("variants") or {}).items()]
+    if variants:
+        emit(variants, Format.table, VARIANT_COLUMNS)
+    gate = row.get("gate") or {}
+    if "passed" in gate:
+        verdict = "[green]passed[/green]" if gate["passed"] else "[red]failed[/red]"
+        console.print(f"gate {verdict}")
+        for reason in gate.get("reasons") or []:
+            console.print(f"  - {escape(reason)}")
+    if row.get("error"):
+        console.print(f"[red]error:[/red] {escape(json.dumps(row['error'], default=str))}")
+
+
+# --------------------------------------------------------------------------- integrations
+
+
+@integrations_app.command("new")
+def integrations_new(
+    name: Annotated[str, typer.Argument(help="Integration key, e.g. 'servicenow'.")],
+    dest: Annotated[Path | None, typer.Option("--dest", help="Directory to create (default: awm-<name>).")] = None,
+    title: Annotated[str | None, typer.Option("--title", help="Display name, e.g. 'ServiceNow'.")] = None,
+    force: Annotated[bool, typer.Option("--force", help="Write into a non-empty directory.")] = False,
+) -> None:
+    """Scaffold a new integration project from the SDK template."""
+    from awm.sdk.scaffold import new_integration
+
+    try:
+        target = new_integration(name, dest, title=title, force=force)
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        err.print(f"[red]error:[/red] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+    console.print(f"Created integration project in {escape(str(target))}")
 
 
 # --------------------------------------------------------------------------- tenants
