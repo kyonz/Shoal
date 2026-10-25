@@ -530,34 +530,6 @@ async def test_versions_diff_and_rollback(admin):
     assert any(e["action"] == "workflow.rolled_back" for e in (await admin.get("/v1/audit")).json()["items"])
 
 
-async def test_journey_blueprints_adopt_cleanly(admin):
-    """The shipped journey blueprints (examples/blueprints) adopt into a namespace with real connections."""
-    from pathlib import Path
-
-    from shoal.core.loader import load_path
-
-    for name, integration, config in (
-        ("gh", "github", {}), ("jira", "jira", {"base_url": "https://acme.atlassian.net", "email": "bot@acme.example"}),
-    ):
-        r = await admin.put(f"/v1/namespaces/default/connections/{name}", json={"spec": {"integration": integration, "config": config}})
-        assert r.status_code == 201, r.text
-    assert (await admin.put("/v1/namespaces/default/secrets/anthropic-api-key", json={"value": "k"})).status_code == 201
-
-    params = {"jira-bugfix": {"jira": "jira", "github": "gh"}, "github-uplift": {"github": "gh", "org": "acme"}}
-    for blueprint in load_path(Path(__file__).parents[2] / "examples" / "blueprints"):
-        doc = blueprint.to_document()
-        name = doc["metadata"]["name"]
-        assert (await admin.put(f"/v1/blueprints/{name}", json={"metadata": {"description": doc["metadata"].get("description")},
-                                                                  "spec": doc["spec"]})).status_code == 201
-        r = await admin.post(f"/v1/namespaces/default/blueprints/{name}/adopt", json={"params": params[name], "prefix": "team"})
-        assert r.status_code == 201, r.text
-        assert all(res["name"].startswith("team-") for res in r.json()["resources"])
-    wf = (await admin.get("/v1/namespaces/default/workflows/team-jira-bugfix")).json()
-    assert wf["spec"]["connections"] == {"jira": "jira", "github": "gh"} and wf["spec"]["defaults"]["agent"] == "team-bugfixer"
-    campaign = (await admin.get("/v1/namespaces/default/campaigns/team-coverage-uplift")).json()
-    assert campaign["spec"]["targets"]["filter"]["org"] == "acme" and campaign["spec"]["policy"]["budget_usd"] == 500
-
-
 async def test_sandbox_profile_config_is_checked_against_the_backend(admin):
     r = await admin.put("/v1/namespaces/default/sandbox-profiles/k8s", json={"spec": {
         "backend": "kubernetes", "config": {"namespce": "sbx", "run_as_user": -1}}})

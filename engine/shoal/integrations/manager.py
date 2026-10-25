@@ -1,23 +1,35 @@
-"""Connection resolution, action calls and inbound webhook dispatch."""
+"""Connection resolution, action calls and inbound webhook dispatch.
+
+Integrations come from the process-wide plugin registry (built-ins and installed
+packages) and from each tenant's own registrations (``CustomIntegration``, see
+:mod:`shoal.integrations.custom`); :meth:`IntegrationManager.resolve` looks in both.
+
+Connections live in a namespace (one team's) or in ``shared`` (the organisation's,
+shared to every namespace or only to those in ``spec.namespaces``). Each integration
+says which of the two it allows (``connection_scopes``).
+"""
 
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from shoal.core import clock
-from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound
+from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound, PluginError, Unauthorized
 from shoal.core.models import Connection
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
+from shoal.integrations.custom import CustomIntegrations
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
 
 log = logging.getLogger(__name__)
 
+INSTALL_STATE_TTL = timedelta(minutes=15)
 # Key spaces the engine itself waits on (signals, approvals, child runs, credentials); never set by an event.
 INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
 
@@ -25,12 +37,61 @@ INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
 class IntegrationManager:
     def __init__(self, engine: Engine):
         self.engine = engine
+        self.custom = CustomIntegrations(engine)
 
     def get(self, key: str) -> Integration:
+        """An installed integration (built-in or plugin); tenants' own registrations need :meth:`resolve`."""
         return self.engine.plugin("integrations", key)
 
-    def catalog(self) -> list[dict[str, Any]]:
-        return [type(i).catalog() for i in self.engine.registry.available("integrations").values()]
+    async def resolve(self, tenant_id: str, key: str, *, namespace: str | None = None) -> Integration:
+        """The tenant's registered integration ``key``, else the installed one.
+
+        With ``namespace``, a registration limited to other namespaces is not found."""
+        loaded = await self.custom.load(tenant_id, key)
+        if loaded is None:
+            return self.get(key)
+        if not loaded.resource.spec.enabled:
+            raise PluginError(f"integration '{key}' is turned off for this organisation")
+        if namespace is not None and not self.custom.visible(loaded.resource.spec, namespace):
+            raise PluginError(f"integration '{key}' is not available in namespace '{namespace}'")
+        if loaded.integration is None:
+            raise PluginError(f"custom integration '{key}' is not available: {loaded.error}")
+        return loaded.integration
+
+    async def catalog(self, tenant_id: str | None = None, *, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Installed integrations plus, for a tenant, the ones it registered (those visible to ``namespace``)."""
+        out: dict[str, dict[str, Any]] = {
+            key: {**type(i).catalog(), "source": "installed"} for key, i in self.engine.registry.available("integrations").items()
+        }
+        if tenant_id:
+            for loaded in await self.custom.list(tenant_id):
+                spec = loaded.resource.spec
+                if loaded.integration is None or not spec.enabled or not self.custom.visible(spec, namespace):
+                    out.pop(loaded.resource.metadata.name, None)  # a registration of an installed package governs it
+                    continue
+                out[loaded.resource.metadata.name] = {
+                    **type(loaded.integration).catalog(), "source": "custom",
+                    "custom": {"source": spec.source, "url": spec.url, "package": spec.package, "namespaces": spec.namespaces},
+                }
+        return sorted(out.values(), key=lambda c: c["key"])
+
+    async def check_connection(self, tenant_id: str, connection: Connection, namespace: str) -> None:
+        """Apply-time checks: the integration allows connections at this level, and the namespace may use it."""
+        key, scope = connection.spec.integration, ("org" if namespace == SHARED_NAMESPACE else "namespace")
+        if scope == "namespace" and connection.spec.namespaces:
+            raise InvalidRequest("`namespaces` only applies to organisation connections (in the shared namespace)")
+        try:
+            integration = await self.resolve(tenant_id, key, namespace=namespace)
+        except PluginError as exc:
+            if await self.custom.load(tenant_id, key) is not None:
+                raise InvalidRequest(str(exc)) from exc
+            return  # not installed here: kept as written, as before
+        if scope not in integration.connection_scopes:
+            where = "the organisation (admin console)" if scope == "namespace" else "a namespace"
+            raise InvalidRequest(
+                f"{key} connections cannot be created at the {'organisation' if scope == 'org' else 'namespace'} level; "
+                f"create it in {where}"
+            )
 
     async def connection(
         self,
@@ -44,7 +105,7 @@ class IntegrationManager:
         row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
         resource = Connection.model_validate(row.document)
         spec = resource.spec
-        integration = self.get(spec.integration)
+        integration = await self.resolve(tenant_id, spec.integration, namespace=current_namespace())
         values: dict[str, Any] = dict(spec.config)
         user_fields = set(spec.user_fields or spec.secrets)
         if spec.oauth:
@@ -106,7 +167,10 @@ class IntegrationManager:
             *await self.engine.store.list_resources(tenant_id, "Connection"),
             *await self.engine.store.list_resources(tenant_id, "Connection", namespace=SHARED_NAMESPACE),
         ]
-        matches = list(dict.fromkeys(r.name for r in rows if r.document["spec"]["integration"] == integration))
+        ns = current_namespace()
+        matches = list(dict.fromkeys(
+            r.name for r in rows if r.document["spec"]["integration"] == integration and shared_with(r.document, r.namespace, ns)
+        ))
         if len(matches) == 1:
             return matches[0]
         if not matches:
@@ -177,6 +241,9 @@ class IntegrationManager:
             ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
             if not await ctx.integration.verify_webhook(ctx, headers, body):
                 raise InvalidRequest("webhook signature verification failed")
+        if type(ctx.integration).webhook_reply is not Integration.webhook_reply:
+            # the integration answers the delivery itself (a URL check, an interactive message): it cannot wait
+            return await self.handle_webhook(webhook_id, headers, body, verified=True)
         delivery = await self.engine.store.enqueue_webhook(endpoint, headers, body)
         return {"queued": True, "delivery": delivery}
 
@@ -217,13 +284,26 @@ class IntegrationManager:
             event.wake_keys = self.own_wake_keys(ctx.integration.key, event.wake_keys)
         woken: list[str] = []
         fired: list[dict[str, Any]] = []
+        interactions: list[dict[str, Any]] = []
         for event in events:
+            if event.interaction is not None:
+                interactions.append(await self.engine.interactions.handle(
+                    endpoint.tenant_id, endpoint.connection_name, ctx.integration.key, event
+                ))
+                continue
             woken += await self.engine.store.wake_by_keys(endpoint.tenant_id, event.wake_keys)
             woken += await self.engine.signals.deliver_event(endpoint.tenant_id, event)
             fired += await self.engine.triggers.dispatch_event(
                 endpoint.tenant_id, endpoint.connection_name, event, connection_namespace=endpoint.namespace
             )
-        return {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
+        result: dict[str, Any] = {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
+        if interactions:
+            result["interactions"] = interactions
+        with use_namespace(endpoint.namespace):
+            reply = await ctx.integration.webhook_reply(ctx, headers, body, {**result, "parsed": events})
+        if reply is not None:
+            result["reply"] = reply
+        return result
 
     def own_wake_keys(self, integration_key: str, keys: list[str]) -> list[str]:
         """Drop wake keys an integration may not claim, so a delivery cannot steer runs waiting on another system.
@@ -244,3 +324,75 @@ class IntegrationManager:
         woken += await self.engine.signals.deliver_event(tenant_id, event)
         fired = await self.engine.triggers.dispatch_event(tenant_id, connection, event, connection_namespace=current_namespace())
         return {"woken_runs": woken, "triggers": fired}
+
+    # ------------------------------------------------------------------ app install (OAuth, e.g. "Add to Slack")
+
+    @property
+    def install_redirect_uri(self) -> str:
+        return f"{self.engine.settings.public_url.rstrip('/')}/v1/install/callback"
+
+    async def _partial(self, tenant_id: str, namespace: str, name: str) -> tuple[Connection, ConnectionContext]:
+        """The connection with whichever secrets are set: an install runs before the token exists."""
+        with use_namespace(namespace):
+            row = await self.engine.store.get_resource_row(tenant_id, "Connection", name, namespace=namespace)
+            resource = Connection.model_validate(row.document)
+            integration = await self.resolve(tenant_id, resource.spec.integration, namespace=namespace)
+            values: dict[str, Any] = dict(resource.spec.config)
+            for field, secret_name in resource.spec.secrets.items():
+                value = await self.engine.secrets.get(tenant_id, secret_name)
+                if value is not None:
+                    values[field] = value
+        try:
+            config = integration.connection_model.model_validate(values)
+        except ValueError as exc:
+            raise InvalidRequest(f"connection '{name}' is not ready to install: {exc}") from exc
+        return resource, ConnectionContext(engine=self.engine, tenant_id=tenant_id, name=name, config=config, integration=integration)
+
+    async def install_start(self, tenant_id: str, namespace: str, name: str, actor: str, *, then: str | None = None) -> str:
+        """The URL to send the admin to; ``then`` (e.g. ``"setup"``) is the connection page to come back to."""
+        resource, ctx = await self._partial(tenant_id, namespace, name)
+        if not ctx.integration.install_fields:
+            raise InvalidRequest(f"{ctx.integration.title} connections have no app install")
+        state = self.engine.secrets.cipher.encrypt(json.dumps({
+            "t": tenant_id, "n": namespace, "c": name, "a": actor, "exp": (clock.now() + INSTALL_STATE_TTL).timestamp(),
+            **({"then": then} if then else {}),
+        }))
+        return ctx.integration.install_url(ctx.config, self.install_redirect_uri, state)
+
+    async def install_callback(self, code: str, state: str) -> tuple[str, str, str, str, list[str], str | None]:
+        """Exchange the code and store what the install returns as the connection's secrets.
+
+        Returns (tenant, namespace, connection, actor, fields stored, page to return to). A field with no secret
+        named in the connection gets one (``<connection>-<field>``) and the connection is updated.
+        """
+        try:
+            data = json.loads(self.engine.secrets.cipher.decrypt(state))
+        except Exception as exc:
+            raise Unauthorized("invalid install state") from exc
+        if clock.now().timestamp() > data["exp"]:
+            raise Unauthorized("the install took too long; start again")
+        tenant_id, namespace, name, actor = data["t"], data["n"], data["c"], data["a"]
+        resource, ctx = await self._partial(tenant_id, namespace, name)
+        values = await ctx.integration.complete_install(ctx, code, self.install_redirect_uri)
+        secrets = dict(resource.spec.secrets)
+        stored = []
+        with use_namespace(namespace):
+            for field in ctx.integration.install_fields:
+                if field not in values:
+                    continue
+                secrets.setdefault(field, f"{name}-{field.replace('_', '-')}")
+                await self.engine.secrets.writable().put(tenant_id, secrets[field], values[field])
+                stored.append(field)
+            if secrets != resource.spec.secrets:
+                updated = resource.model_copy(update={"spec": resource.spec.model_copy(update={"secrets": secrets})})
+                await self.engine.store.apply_resource(tenant_id, updated, actor=actor, namespace=namespace,
+                                                       message="secrets added by app install")
+        return tenant_id, namespace, name, actor, stored, data.get("then")
+
+
+def shared_with(document: dict[str, Any], stored_in: str, namespace: str) -> bool:
+    """Whether a connection stored in ``stored_in`` may be used from ``namespace``."""
+    if stored_in != SHARED_NAMESPACE or namespace == SHARED_NAMESPACE:
+        return True
+    allowed = (document.get("spec") or {}).get("namespaces") or []
+    return not allowed or namespace in allowed

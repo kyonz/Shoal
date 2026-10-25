@@ -1,11 +1,11 @@
 import { ChevronRight, Plus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { useIntegrations, useResources, type IntegrationCatalog, type JsonSchema } from "@/api/hooks";
+import { allowsScope, useIntegrations, useResources, type IntegrationCatalog, type JsonSchema } from "@/api/hooks";
 import { resolve, unwrapNullable } from "@/components/forms/SchemaForm";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
-import { nsPath, useNs } from "@/lib/ns";
+import { SHARED_NS, nsPath, useNs } from "@/lib/ns";
 import { Badge, Button, Card, EmptyState, JsonBlock, Page, PageHeader, Skeleton, Table, Tabs, TabsContent, TabsList, TabsTrigger, Td, Th, Tr } from "@/components/ui";
 import { Crumb, IntegrationMark } from "./shared";
 
@@ -81,7 +81,7 @@ export default function IntegrationDetail() {
   const { key = "" } = useParams();
   const navigate = useNavigate();
   const { can } = useAuth();
-  const { data, isLoading } = useIntegrations();
+  const { data, isLoading } = useIntegrations(ns);
   const connections = useResources("connections", ns, { enabled: can("connections:read", ns) });
   const integration: IntegrationCatalog | undefined = data?.find((i) => i.key === key);
   const mine = (connections.data ?? []).filter((c) => c.spec.integration === key);
@@ -108,11 +108,17 @@ export default function IntegrationDetail() {
         title={integration.title}
         description={integration.description}
         actions={
-          can("connections:write", ns) && (
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(`${nsPath(ns, "connections", "new")}?integration=${key}`)}>
-              New connection
-            </Button>
-          )
+          allowsScope(integration, "namespace")
+            ? can("connections:write", ns) && (
+                <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(`${nsPath(ns, "connections", "new")}?integration=${key}`)}>
+                  New connection
+                </Button>
+              )
+            : can("connections:write", SHARED_NS) && (
+                <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(`${nsPath(SHARED_NS, "connections", "new")}?integration=${key}`)}>
+                  New organisation connection
+                </Button>
+              )
         }
       />
       <Tabs defaultValue="actions">

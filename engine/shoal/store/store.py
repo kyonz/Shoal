@@ -409,6 +409,10 @@ class Store:
         row = await self._resource_row(tenant_id, ns, kind, name)
         if row is None and fallback and ns != SHARED_NAMESPACE:
             row = await self._resource_row(tenant_id, SHARED_NAMESPACE, kind, name)
+            if row is not None and kind == "Connection":  # organisation connections can be limited to some namespaces
+                allowed = (row.document.get("spec") or {}).get("namespaces") or []
+                if allowed and ns not in allowed:
+                    row = None
         if row is None:
             raise NotFound(f"{kind} '{name}' not found")
         return row
@@ -743,6 +747,17 @@ class Store:
             raise NotFound(f"step '{step_id}' not found")
         return step
 
+    async def update_step_if_unchanged(self, step: t.StepRun, **values: Any) -> bool:
+        """Compare-and-set: update the step only if nobody saved it since it was read."""
+        values["updated_at"] = utcnow()
+        async with self.session() as s:
+            result = await s.execute(
+                update(t.StepRun)
+                .where(t.StepRun.id == step.id, t.StepRun.updated_at == step.updated_at)
+                .values(**values)
+            )
+            return bool(result.rowcount)
+
     async def save_step(self, step: t.StepRun) -> None:
         step.updated_at = utcnow()
         async with self.session() as s:
@@ -956,6 +971,18 @@ class Store:
         except IntegrityError:
             return False
 
+    async def recent_deliveries(
+        self, tenant_id: str, namespace: str, trigger_name: str, *, since: datetime, status: str | None = None
+    ) -> list[t.TriggerDelivery]:
+        q = select(t.TriggerDelivery).where(
+            t.TriggerDelivery.tenant_id == tenant_id, t.TriggerDelivery.namespace == namespace,
+            t.TriggerDelivery.trigger_name == trigger_name, t.TriggerDelivery.created_at >= since,
+        )
+        if status:
+            q = q.where(t.TriggerDelivery.status == status)
+        async with self.session() as s:
+            return list((await s.execute(q.limit(10000))).scalars().all())
+
     async def update_delivery(self, delivery_id: str, **values: Any) -> None:
         async with self.session() as s:
             await s.execute(update(t.TriggerDelivery).where(t.TriggerDelivery.id == delivery_id).values(**values))
@@ -1104,11 +1131,19 @@ class Store:
             return {status: int(n) for status, n in (await s.execute(q)).all()}
 
     async def campaign_cost(self, campaign_id: str) -> float:
+        """Spend so far: finished targets plus what their runs still in flight have used."""
         q = select(func.coalesce(func.sum(t.CampaignTarget.cost_usd), 0.0)).where(
             t.CampaignTarget.campaign_id == campaign_id
         )
+        running = select(t.Run.usage).where(
+            t.Run.campaign_id == campaign_id,
+            t.Run.campaign_target_id.is_not(None),
+            t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+        )
         async with self.session() as s:
-            return float((await s.execute(q)).scalar_one())
+            finished = float((await s.execute(q)).scalar_one())
+            in_flight = sum(float((usage or {}).get("cost_usd", 0) or 0) for usage in (await s.execute(running)).scalars())
+        return finished + in_flight
 
     async def runs_started_since(self, campaign_id: str, since: datetime) -> int:
         q = select(func.count()).select_from(t.CampaignTarget).where(

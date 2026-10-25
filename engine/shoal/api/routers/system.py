@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, TypeAdapter
 
 import shoal
 from shoal.api.deps import CtxDep, EngineDep, InstanceReaderCtxDep, SystemCtxDep
 from shoal.api.schemas import Me, Permissions, TenantCreated, TenantIn, TenantOut
+from shoal.blueprints.defaults import install as install_default_blueprints
 from shoal.core.models import KIND_BY_PLURAL, RESOURCE_KINDS, Step
 from shoal.core.scope import TENANT_SCOPED_KINDS
 from shoal.limits import TenantQuotas
@@ -79,6 +80,8 @@ async def create_tenant(body: TenantIn, ctx: SystemCtxDep) -> TenantCreated:
     if body.admin_email:  # links their instance account when they have one, so the tenant shows up in their switcher
         await engine.accounts.add_to_tenant(tenant.id, body.admin_email, "tenant-admin", actor=ctx.actor)
     _, token = await engine.store.create_api_key(tenant.id, "bootstrap", ["*"], owner_id=admin.id, created_by=ctx.actor)
+    if engine.settings.default_blueprints:
+        await install_default_blueprints(engine, tenant.id, actor=ctx.actor)
     await engine.store.audit(tenant.id, ctx.actor, "tenant.created", tenant.slug)
     await engine.store.audit(None, ctx.actor, "tenant.created", tenant.slug)
     return TenantCreated(tenant=TenantOut.model_validate(tenant), api_key=token)
@@ -176,14 +179,20 @@ async def my_permissions(ctx: CtxDep) -> Any:
 # --------------------------------------------------------------------------- catalogues
 
 
-@router.get("/v1/integrations", tags=["catalog"])
-async def integrations(ctx: CtxDep) -> list[dict[str, Any]]:
-    return ctx.engine.integrations.catalog()
+@router.get("/v1/integrations", tags=["catalog"], summary="Installed integrations and the ones the organisation registered")
+async def integrations(ctx: CtxDep, namespace: str | None = Query(
+    None, description="Only the registered integrations this namespace may use (default: all of them)."
+)) -> list[dict[str, Any]]:
+    return await ctx.engine.integrations.catalog(ctx.principal.tenant_id, namespace=namespace)
 
 
 @router.get("/v1/integrations/{key}", tags=["catalog"])
 async def integration(key: str, ctx: CtxDep) -> dict[str, Any]:
-    return type(ctx.engine.integrations.get(key)).catalog()
+    if ctx.principal.tenant_id:
+        found = await ctx.engine.integrations.resolve(ctx.principal.tenant_id, key)
+    else:
+        found = ctx.engine.integrations.get(key)
+    return type(found).catalog()
 
 
 @router.get("/v1/plugins", tags=["catalog"], summary="Installed plugins of every kind")

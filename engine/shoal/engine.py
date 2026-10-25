@@ -38,6 +38,7 @@ from shoal.federation import FederationHub, FederationMember
 from shoal.identity import IdentityService
 from shoal.integrations.manager import IntegrationManager
 from shoal.integrations.remote import register_remote_integration
+from shoal.interactions import InteractionService
 from shoal.limits import GatewayLimiter, Quotas
 from shoal.llm.router import ModelRouter
 from shoal.plugins.registry import Registry, factory
@@ -140,6 +141,7 @@ class Engine:
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
         self.identities = IdentityService(self)
+        self.interactions = InteractionService(self)
         self.workload = WorkloadIssuer(self.settings)
         self.cloud = CloudIdentities(self)
         self.quotas = Quotas(self)

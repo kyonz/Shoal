@@ -16,9 +16,10 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 
 from shoal.auth.rbac import Principal
+from shoal.blueprints import defaults
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest, NotFound, ShoalError, Unauthorized
 from shoal.core.ids import new_id
@@ -100,11 +101,14 @@ class FederationHub:
                 await s.execute(delete(t.FederationRequest).where(t.FederationRequest.link_id == existing.id))
                 await s.execute(delete(t.FederationLink).where(t.FederationLink.id == existing.id))
         async with self.store.session() as s:
-            in_use = (await s.execute(select(func.count()).select_from(t.Resource).where(t.Resource.tenant_id == tenant_id))).scalar()
-        if in_use:
+            rows = (await s.execute(select(t.Resource).where(t.Resource.tenant_id == tenant_id))).scalars().all()
+        bundled = [r for r in rows if defaults.is_bundled(r.kind, r.document)]  # put there at creation, not the tenant's data
+        if len(bundled) < len(rows):
             raise Conflict("only an empty tenant can be federated: its data lives in the member deployment")
         if await self.engine.federation_member.membership(tenant_id) is not None:
             raise Conflict("this tenant is itself a member of another hub; it can't also be federated from here")
+        for row in bundled:  # the member deployment has its own catalogue
+            await self.store.delete_resource(tenant_id, row.kind, row.name, namespace=row.namespace)
         token = p.ENROLLMENT_PREFIX + secrets.token_urlsafe(32)
         link = t.FederationLink(
             id=new_id("fed"), tenant_id=tenant_id, requested_mode=mode, created_by=actor,

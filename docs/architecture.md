@@ -190,7 +190,7 @@ spec:
 | `action` | Call an integration action (e.g. `github.create_pull_request`, `jira.transition`). |
 | `script` | Run deterministic code in a sandbox: a shell `run:` line, or a `code:` program in Python, Node, sh or bash with typed `inputs` (JSON in `$SHOAL_INPUTS`) and validated `outputs` (`$SHOAL_OUTPUTS`). See §5.2. |
 | `wait` | Durable wait: for a duration, until a time, until a condition/event (polled or event-driven), or for a **signal** carrying data, with a timeout. |
-| `approval` | Human-in-the-loop gate, resolved via API/UI with optional assignees. |
+| `approval` | Human-in-the-loop gate, resolved via API/UI with optional `approvers`, or from Slack buttons (`notify`, §9.2). |
 | `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
 | `map` | Fan out a sub-list of steps over a list with a concurrency limit. |
 | `workflow` | Call another workflow as a child run. |
@@ -643,12 +643,16 @@ class Integration(Protocol):
   fires exactly once across workers.
   A trigger has a **filter** (expression over the event, e.g. "issue moved to
   column *Ready for AI*") and an **input mapping** into workflow inputs, plus
-  dedupe keys and concurrency (e.g. one run per issue).
+  dedupe keys and concurrency (e.g. one run per issue). Integrations can add
+  structured **`match`** filters on top (`trigger_filter_model` /
+  `trigger_matches`; Slack's channels, mentions, words, regex, people, threads),
+  and a **`rate_limit`** (`{max, per, key}`) caps how often a trigger fires,
+  recording the rest as `rate_limited` deliveries.
 - **Metadata** (`resources`) powers campaign target selection and UI pickers,
   e.g. `github.repository` filtered by `owner`, `topic`, `language`,
   `permission: admin`.
-- Built-in integrations in v1: `github`, `jira`, `webhook` (generic, HMAC),
-  `schedule`, `http`. Slack/Linear/GitLab follow the same contract.
+- Built-in integrations in v1: `github`, `jira`, `slack`, `mcp`, `webhook`
+  (generic, HMAC), `remote` and `schedule`. Linear/GitLab follow the same contract.
 
 ### 9.1 Open integrations platform (SDK)
 
@@ -682,6 +686,35 @@ contract, so they double as reference implementations.
   [integrations.md](integrations.md).
 
 ---
+
+### 9.2 Approvals and input from other tools (Slack)
+
+An `approval` step can also ask through an integration that supports it
+(`notify: [{integration: slack, to: "#deploys"}]`). The integration posts the
+request (Slack: a message with Approve / Reject buttons) and returns a
+reference kept in the step state. Answers come back as webhook events carrying
+an `Interaction` (an approval decision, or a signal for a run). The engine, not
+the integration, decides whether to act on one:
+
+1. the webhook is verified by the integration (Slack signing secret, five-minute
+   replay window);
+2. the actor is resolved to a person: identity hints (`slack_id`, `email` from
+   `users.info`) match an `Identity`, whose `actors` (`user:<username>`) or email
+   find the directory user, and a `Principal` is built for them;
+3. `engine.authz` checks `runs:approve` (or `runs:signal`) in the run's
+   namespace, and the step's `approvers` list (identity names, usernames,
+   emails, `group:<name>`);
+4. only then the decision is recorded (`by` is the person's name, audited as
+   their actor, `via: slack`) or the signal is sent; refusals are shown to the
+   person privately and audited as `access.denied`.
+
+Whatever decides the step (a click, the UI, the API, a timeout), the approval
+handler calls `approval_resolved` on every notification so the message shows the
+outcome. A click is only accepted for approvals that were sent through the same
+connection. Integrations can also answer the webhook themselves
+(`webhook_reply`: Slack URL challenges, slash command answers, modal errors) and
+offer an app install (`install_url` / `complete_install`: "Add to Slack" stores
+the bot token as the connection's secret).
 
 ## 10. Campaigns
 
@@ -756,8 +789,16 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **Catalogue.** Searchable within the tenant, with categories, integration
   filters, which namespaces have adopted it, success rates and eval scores
   from real runs, and the README.
-- The two acceptance journeys ship as the first blueprints:
-  **GitHub org uplift** and **Jira bugfix with writeback**.
+- **Bundled blueprints.** Shoal ships blueprints for the common scenarios
+  (`engine/shoal/blueprints/library`, listed in [blueprints.md](blueprints.md)),
+  starting with the two acceptance journeys, **GitHub org uplift** and **Jira
+  bugfix with writeback**. They are put in every new tenant's catalogue
+  (`SHOAL_DEFAULT_BLUEPRINTS`, on by default) labelled `shoal.dev/bundled`.
+  `POST /v1/blueprints/defaults {dry_run}` (`blueprints:publish` and
+  `blueprints:feature`) adds them to an existing tenant: it creates missing ones
+  and upgrades bundled copies with an older version, keeping their status.
+  A tenant's own blueprint with the same name is never touched. Federating a
+  tenant removes them from the hub, since the member has its own catalogue. (Built.)
 
 ---
 
@@ -768,13 +809,19 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   construction, Postgres row-level security as defence in depth). Inside a
   tenant, **namespaces** group the things a team owns: agents, skills,
   workflows, connections, triggers, campaigns, sandbox profiles, secrets and
-  runs all live in exactly one namespace (gateways, model policies, identities
-  and blueprints are tenant-wide, stored in `shared`) (`default` exists in every
+  runs all live in exactly one namespace (gateways, model policies, identities,
+  skill sources, custom integrations and blueprints are tenant-wide, stored in
+  `shared`, and managed in the admin console) (`default` exists in every
   tenant). Users and groups are added to a namespace as members with a role, so
   a platform team can own `platform` while product teams get their own
   namespaces. Resource names are unique per (tenant, namespace, kind).
   Lookups fall back from the run's namespace to a tenant-wide `shared`
   namespace, so platform teams can publish shared connections and skills that other namespaces use without being able to see their secrets.
+  Connections are either organisation connections (in `shared`, offered to
+  every namespace or only those in `spec.namespaces`) or namespace connections;
+  each integration declares which levels it allows (`connection_scopes`), and
+  organisations register their own integrations as `CustomIntegration`
+  resources (see [integrations.md](integrations.md)).
 - **Many tenants on one instance.** One deployment hosts any number of
   tenants (federation adds tenants on other deployments, §11.2). A person has
   one **account** on the instance, keyed by their identity provider's

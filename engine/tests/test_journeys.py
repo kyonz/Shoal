@@ -70,7 +70,7 @@ def sign(secret: str, body: bytes) -> str:
 async def test_examples_are_valid():
     resources = load_path(EXAMPLES)
     kinds = sorted({r.to_document()["kind"] for r in resources})
-    assert kinds == ["Agent", "Blueprint", "Campaign", "Connection", "Gateway", "SandboxProfile", "Skill", "Trigger", "Workflow"]
+    assert kinds == ["Agent", "Campaign", "Connection", "Gateway", "SandboxProfile", "Skill", "Trigger", "Workflow"]
 
 
 async def test_journey_github_org_uplift_campaign(world):
@@ -247,3 +247,66 @@ async def test_queued_jira_webhook_is_acknowledged_then_processed_by_a_worker(wo
     await engine.run_until_idle()
     run = await engine.store.get_run(tenant.id, delivery.result["triggers"][0]["run_id"])
     assert run.status == "succeeded", run.error
+
+
+async def adopt_bundled(engine: Engine, tenant_id: str, blueprint: str, params: dict, agent_outputs: dict[str, dict]) -> None:
+    """Install Shoal's bundled blueprints, adopt one, and script its agents."""
+    from shoal.blueprints import defaults
+
+    await defaults.install(engine, tenant_id, actor="test")
+    adopted = await engine.blueprints.adopt(tenant_id, "default", blueprint, params, actor="test")
+    for ref in adopted["resources"]:
+        if ref["kind"] == "Agent":
+            agent = await engine.store.find_resource(tenant_id, "Agent", ref["name"], namespace="default")
+            agent.spec.provider = "scripted"
+            agent.spec.provider_config = {"final_outputs": agent_outputs[ref["name"]]}
+            await engine.store.apply_resource(tenant_id, agent, namespace="default")
+
+
+def pull_request_event(action: str, sha: str, *, draft: bool = False) -> bytes:
+    return json.dumps({
+        "action": action, "number": 1, "repository": {"full_name": "acme/api"}, "sender": {"login": "dana"},
+        "pull_request": {"number": 1, "draft": draft, "head": {"sha": sha}},
+    }).encode()
+
+
+async def test_journey_bundled_pr_review(world):
+    """The bundled github-pr-review blueprint: a PR webhook starts a review that comments and sets the merge check."""
+    engine, tenant, github, _ = world
+    github.add_repo("acme/api")
+    github.pulls["acme/api"] = {1: {
+        "number": 1, "title": "Add login rate limit", "state": "open", "merged": False, "draft": False, "mergeable": True,
+        "mergeable_state": "clean", "html_url": "https://github.com/acme/api/pull/1", "head": {"ref": "rate-limit", "sha": "abc"},
+        "base": {"ref": "main"}, "user": {"login": "dana"},
+    }}
+    await apply_examples(engine, tenant.id, agent_outputs={})  # the shared connections and sandboxes
+    await adopt_bundled(engine, tenant.id, "github-pr-review", {"github": "github-acme"}, {"pr-reviewer": {
+        "blocking": True, "headline": "Rate limit is never reset; logins lock out forever.",
+        "review": "- `api/auth.py:42`: the counter is never expired.", "summary": "Reviewed.",
+    }})
+    webhook_id = (await engine.integrations.webhook_url(tenant.id, "github-acme")).rsplit("/", 1)[-1]
+
+    async def deliver(body: bytes, delivery: str) -> dict:
+        headers = {"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": sign(GH_WEBHOOK_SECRET, body), "X-GitHub-Delivery": delivery}
+        return await engine.integrations.handle_webhook(webhook_id, headers, body)
+
+    assert (await deliver(pull_request_event("opened", "abc", draft=True), "d0"))["triggers"] == []  # drafts wait
+    assert (await deliver(pull_request_event("closed", "abc"), "d1"))["triggers"] == []
+    result = await deliver(pull_request_event("opened", "abc"), "d2")
+    assert result["triggers"][0]["status"] == "fired"
+    assert (await deliver(pull_request_event("edited", "abc"), "d3"))["triggers"] == []
+    await engine.run_until_idle()
+
+    run = await engine.store.get_run(tenant.id, result["triggers"][0]["run_id"])
+    assert run.status == "succeeded", run.error
+    assert run.outputs == {"blocking": True, "headline": "Rate limit is never reset; logins lock out forever."}
+    [comment] = github.comments
+    assert comment["number"] == 1 and "logins lock out forever" in comment["body"] and "api/auth.py:42" in comment["body"]
+    [status] = github.statuses[("acme/api", "abc")]
+    assert status["context"] == "shoal/merge-check" and status["state"] == "failure"
+    assert status["target_url"].endswith(f"/runs/{run.id}")
+
+    # A new push is reviewed again; the same head twice is not.
+    github.push("acme/api", 1, "def")
+    assert (await deliver(pull_request_event("synchronize", "def"), "d4"))["triggers"][0]["status"] == "fired"
+    assert (await deliver(pull_request_event("synchronize", "def"), "d5"))["triggers"][0]["status"] == "duplicate"

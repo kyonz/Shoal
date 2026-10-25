@@ -9,6 +9,7 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
 from shoal.api.deps import Ctx, CtxDep
+from shoal.blueprints import defaults
 from shoal.blueprints.service import Authorize
 from shoal.core.errors import NotFound
 from shoal.core.models import KIND_BY_PLURAL
@@ -212,4 +213,38 @@ async def remove_adoption(namespace: str, adoption_id: str, ctx: CtxDep) -> Any:
         "blueprint.removed", row.blueprint, namespace=namespace, adoption=adoption_id, resources=result["removed"],
         kept=result["kept"],
     )
+    return result
+
+
+class DefaultsIn(BaseModel):
+    dry_run: bool = False
+
+
+class DefaultBlueprint(BaseModel):
+    name: str
+    version: str
+    outcome: str = Field(
+        description="created, updated (an older bundled copy), unchanged, or kept (the tenant's own blueprint has "
+        "the name, or its copy is newer)."
+    )
+
+
+@router.post(
+    "/blueprints/defaults",
+    tags=["blueprints"],
+    response_model=list[DefaultBlueprint],
+    summary="Add the blueprints that ship with Shoal to the catalogue",
+)
+async def install_defaults(body: DefaultsIn, ctx: CtxDep) -> Any:
+    """Creates the bundled blueprints the catalogue lacks and upgrades older bundled copies. Blueprints the
+    tenant wrote itself are never touched, and an upgraded copy keeps its status."""
+    await ctx.require("blueprints:publish")
+    await ctx.require("blueprints:feature")
+    result = await defaults.install(ctx.engine, ctx.tenant_id, actor=ctx.actor, dry_run=body.dry_run)
+    if not body.dry_run and any(r["outcome"] in ("created", "updated") for r in result):
+        await ctx.audit(
+            "blueprint.defaults_installed",
+            "blueprints",
+            installed=[r["name"] for r in result if r["outcome"] in ("created", "updated")],
+        )
     return result
