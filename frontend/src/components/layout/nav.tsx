@@ -10,6 +10,7 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  Gauge,
   Library,
   Network,
   Plug,
@@ -99,6 +100,7 @@ export const ADMIN_NAV: NavItem[] = [
   { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
   { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read", keywords: "routing fallback" },
   { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read", keywords: "marketplace git registry" },
+  { label: "Eval platforms", to: "/admin/eval-platforms", icon: Gauge, namespaced: false, permission: "eval-platforms:read", keywords: "braintrust langfuse evals experiments datasets" },
   { label: "Federation", to: "/admin/federation", icon: Globe, namespaced: false, permission: "federation:manage" },
   { label: "Audit log", to: "/admin/audit", icon: Activity, namespaced: false, permission: "audit:read" },
 ];

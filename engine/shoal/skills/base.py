@@ -75,6 +75,7 @@ class SkillSourceContext:
     name: str
     config: Any  # instance of SkillSource.config_model
     source: SkillSource
+    refresh: bool = False  # bypass any cached copy of the source (an update check wants the current state)
 
     def http(self, **kwargs: Any) -> httpx.AsyncClient:
         transport = getattr(self.engine, "http_transport", None)

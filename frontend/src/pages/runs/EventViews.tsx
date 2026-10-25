@@ -23,6 +23,7 @@ import type { RunEvent } from "@/api/client";
 import { connectPath } from "@/pages/connect/PersonalCredentials";
 import { cn } from "@/lib/cn";
 import { CodeEditor, JsonBlock } from "@/components/ui";
+import { actorName } from "@/lib/actor";
 
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
 const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -35,7 +36,7 @@ interface Look {
 }
 
 const LOOKS: Record<string, Look> = {
-  "run.created": { icon: Play, tone: "text-muted", title: (e) => `Run created by ${str((e.data.initiator as { display_name?: string })?.display_name ?? e.data.started_by)}` },
+  "run.created": { icon: Play, tone: "text-muted", title: (e) => `Run created by ${str((e.data.initiator as { display_name?: string })?.display_name ?? actorName(e.data.started_by as string))}` },
   "run.started": { icon: Play, tone: "text-info", title: () => "Run started" },
   "run.succeeded": { icon: CircleCheck, tone: "text-ok", title: () => "Run succeeded" },
   "run.failed": { icon: CircleX, tone: "text-bad", title: (e) => `Run failed${e.data.error ? `: ${str((e.data.error as { message?: string }).message ?? e.data.error)}` : ""}` },
@@ -49,7 +50,7 @@ const LOOKS: Record<string, Look> = {
   "step.skipped": { icon: SkipForward, tone: "text-muted", title: (e) => `Skipped (${str(e.data.reason)})` },
   "step.waiting": { icon: Clock, tone: "text-warn", title: (e) => `Waiting: ${str(e.data.reason)}${e.data.wake_at ? ` · next check ${new Date(str(e.data.wake_at)).toLocaleTimeString()}` : ""}` },
   "approval.requested": { icon: Hand, tone: "text-warn", title: (e) => `Approval requested: ${str(e.data.message)}` },
-  "approval.decided": { icon: Hand, tone: "text-ok", title: (e) => `${e.data.approved ? "Approved" : "Rejected"} by ${str(e.data.by)}${e.data.comment ? ` — “${str(e.data.comment)}”` : ""}` },
+  "approval.decided": { icon: Hand, tone: "text-ok", title: (e) => `${e.data.approved ? "Approved" : "Rejected"} by ${actorName(e.data.by as string)}${e.data.comment ? ` — “${str(e.data.comment)}”` : ""}` },
   "signal.received": {
     icon: Radio,
     tone: "text-info",
@@ -84,7 +85,7 @@ const LOOKS: Record<string, Look> = {
   "agent.started": { icon: Bot, tone: "text-accent", title: (e) => `Agent ${str(e.data.agent)} started${e.data.model ? ` on ${str(e.data.model)}` : ""}` },
   "agent.finished": { icon: Bot, tone: "text-ok", title: (e) => `Agent ${str(e.data.agent)} finished` },
   "agent.tool_blocked": { icon: ShieldAlert, tone: "text-bad", title: (e) => `Blocked tool ${str(e.data.tool)}` },
-  "agent.action": { icon: Zap, tone: "text-accent", title: (e) => `Agent called ${str(e.data.action)}` },
+  "agent.action": { icon: Zap, tone: "text-accent", title: (e) => `Agent called ${str(e.data.action)}${e.data.connection ? ` on ${str(e.data.connection)}` : ""}` },
   "workflow.child_started": { icon: Play, tone: "text-info", title: (e) => `Started child run of ${str(e.data.workflow)}` },
 };
 

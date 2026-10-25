@@ -9,7 +9,7 @@ from shoal.config import Settings
 from shoal.core import clock
 from shoal.core.models import parse_resource
 from shoal.engine import Engine
-from shoal.integrations.base import IntegrationEvent
+from shoal.integrations.base import IntegrationError, IntegrationEvent
 
 from .fakes import FakeGitHub, FakeJira, Router
 
@@ -146,6 +146,24 @@ async def test_merge_refused_when_the_branch_moves_after_the_check(world):
         del integration.can_merge
     assert not result["merged"] and "409" in result["reason"]
     assert github.merges == []
+
+
+async def test_the_step_that_opened_a_pr_cannot_certify_it(world):
+    engine, tenant, github = world
+    await connect(engine, tenant, require_merge_check=True)
+    sam = await initiator(engine, tenant, github="sam")
+
+    async def as_step(step, action, params):
+        return await engine.integrations.call(
+            tenant.id, f"github.{action}", params, connection="gh", initiator=sam, run_id="run-1", step_id=step
+        )
+
+    await as_step("author", "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix"})
+    verdict = {"repo": REPO, "number": 1, "verdict": "pass", "summary": "Looks fine to me"}
+    with pytest.raises(IntegrationError, match="cannot record its own merge check"):
+        await as_step("author", "set_merge_check", verdict)
+    assert github.statuses == {}
+    assert (await as_step("review", "set_merge_check", verdict))["state"] == "success"
 
 
 async def test_deny_elevation_and_owner_merges(world):

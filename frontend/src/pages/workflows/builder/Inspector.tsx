@@ -345,6 +345,9 @@ function ScriptEditor({ step, set }: { step: StepDoc; set: SetFn }) {
               <Input mono value={str(step.workdir)} placeholder="/workspace" onChange={(e) => set({ workdir: e.target.value })} />
             </Field>
           </div>
+          <Field label="Cloud identities" description="Short-lived cloud credentials (e.g. AWS) the script gets as environment variables.">
+            <ResourceTags plural="cloud-identities" value={(step.cloud_identities as string[]) ?? []} onChange={(v) => set({ cloud_identities: v })} />
+          </Field>
           <Field label="Environment variables">
             <KeyValueInput value={(step.env as Record<string, string>) ?? {}} onChange={(v) => set({ env: Object.keys(v).length ? v : undefined })} keyPlaceholder="NAME" />
           </Field>
@@ -505,6 +508,12 @@ function ApprovalEditor({ step, set }: { step: StepDoc; set: SetFn }) {
             </NativeSelect>
           </Field>
         </div>
+        <Field label="When rejected" description="Stop the run, or continue with approved: false so later steps can branch with if.">
+          <NativeSelect value={str(step.on_reject) || "fail"} onChange={(e) => set({ on_reject: e.target.value === "fail" ? undefined : e.target.value })}>
+            <option value="fail">Stop the run</option>
+            <option value="continue">Continue</option>
+          </NativeSelect>
+        </Field>
       </div>
     </Section>
   );

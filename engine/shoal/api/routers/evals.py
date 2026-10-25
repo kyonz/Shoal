@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from shoal.api.deps import Ctx, CtxDep
 from shoal.api.routers.resources import to_out
@@ -44,6 +44,7 @@ class EvalRunOut(Out):
     variants: list[dict[str, Any]]
     mode: str
     status: str
+    spec: dict[str, Any] = Field(description="The Eval spec as it was when the run started (threshold, graders, ...).")
     summary: dict[str, Any]
     gate: dict[str, Any]
     baseline_id: str | None
@@ -79,16 +80,24 @@ class EvalRunDetail(EvalRunOut):
 
 
 class SinkIn(BaseModel):
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    sink: str | None = Field(None, description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'. Set this or `platform`.")
+    platform: str | None = Field(None, description="An EvalPlatform by name; `config` is merged over its settings.")
     config: dict[str, Any] = Field(
         default_factory=dict,
         description="Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. "
-        "Empty on an eval run export: the Eval's own sinks[] settings for this sink.",
+        "Empty on an eval run export: the Eval's own sinks[] settings for this sink or platform.",
     )
+
+    @model_validator(mode="after")
+    def _one_target(self) -> SinkIn:
+        if not self.sink and not self.platform:
+            raise ValueError("set `sink` or `platform`")
+        return self
 
 
 class ExportOut(BaseModel):
     sink: str
+    platform: str | None = None
     url: str | None
     ids: dict[str, Any]
 
@@ -114,17 +123,22 @@ async def _eval_run(ctx: Ctx, eval_run_id: str, permission: str = "evals:read") 
     return row
 
 
-async def _export_config(ctx: Ctx, namespace: str, body: SinkIn, spec: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The sink settings for an export: the caller's, else the Eval's own ``sinks[]`` entry for that sink.
+async def _export_config(ctx: Ctx, namespace: str, body: SinkIn,
+                         spec: dict[str, Any] | None = None) -> tuple[dict[str, Any], str | None]:
+    """The sink settings (and platform) for an export: the caller's, else the Eval's own ``sinks[]`` entry.
 
     Settings that name secrets are resolved server side and sent to the sink's URL, which the caller
     may also choose, so supplying them needs ``evals:write`` (the right to configure sinks on an Eval).
+    An eval platform's own secrets need no more than the export permission: its endpoints cannot be overridden.
     """
     if not body.config:
-        return next((dict(ref.get("config") or {}) for ref in (spec or {}).get("sinks", []) if ref.get("sink") == body.sink), {})
+        for ref in (spec or {}).get("sinks", []):
+            if (body.platform and ref.get("platform") == body.platform) or (not body.platform and ref.get("sink") == body.sink):
+                return dict(ref.get("config") or {}), ref.get("platform")
+        return {}, body.platform
     if any(key.endswith("_secret") for key in body.config):
         await ctx.require("evals:write", namespace)
-    return body.config
+    return body.config, body.platform
 
 
 async def _initiator(ctx: Ctx) -> dict[str, Any]:
@@ -206,11 +220,11 @@ async def compare_eval_runs(eval_run_id: str, ctx: CtxDep, baseline: str) -> dic
 @router.post("/eval-runs/{eval_run_id}/export", tags=["eval runs"], response_model=ExportOut)
 async def export_eval_run(eval_run_id: str, body: SinkIn, ctx: CtxDep) -> Any:
     row = await _eval_run(ctx, eval_run_id, "evals:run")
-    config = await _export_config(ctx, row.namespace, body, row.spec)
+    config, platform = await _export_config(ctx, row.namespace, body, row.spec)
     with use_namespace(row.namespace):  # secrets resolve in the eval run's namespace
-        result = await ctx.engine.evals.export(ctx.tenant_id, row.id, body.sink, config)
-    await ctx.audit("eval.exported", row.id, namespace=row.namespace, sink=body.sink, url=result.url)
-    return ExportOut(sink=body.sink, url=result.url, ids=result.ids)
+        sink, result = await ctx.engine.evals.export(ctx.tenant_id, row.id, body.sink, config, platform)
+    await ctx.audit("eval.exported", row.id, namespace=row.namespace, sink=sink, platform=platform, url=result.url)
+    return ExportOut(sink=sink, platform=platform, url=result.url, ids=result.ids)
 
 
 # --------------------------------------------------------------------------- per-version scores, datasets
@@ -231,7 +245,8 @@ async def import_eval_dataset(namespace: str, name: str, body: DatasetImportIn, 
     with use_namespace(namespace):
         row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Eval", name, namespace=namespace, fallback=False)
         resource = Eval.model_validate(row.document)
-        imported = await ctx.engine.evals.import_dataset(ctx.tenant_id, body.sink, body.dataset, body.config, limit=body.limit)
+        imported = await ctx.engine.evals.import_dataset(ctx.tenant_id, body.sink, body.dataset, body.config, limit=body.limit,
+                                                       platform=body.platform)
         if not imported:
             raise InvalidRequest(f"dataset '{body.dataset}' has no items")
         existing = [] if body.mode == "replace" else [c for c in resource.spec.cases if c.name not in {i.name for i in imported}]
@@ -239,9 +254,33 @@ async def import_eval_dataset(namespace: str, name: str, body: DatasetImportIn, 
         updated = Eval.model_validate({**resource.to_document(), "spec": spec.model_dump(mode="json", by_alias=True, exclude_none=True)})
         source = updated.to_document()["spec"]
         new_row, outcome = await ctx.engine.store.apply_resource(ctx.tenant_id, updated, actor=ctx.actor, namespace=namespace, source=source)
-    await ctx.audit("eval.dataset_imported", f"{namespace}/{name}", sink=body.sink, dataset=body.dataset,
+    await ctx.audit("eval.dataset_imported", f"{namespace}/{name}", sink=body.sink, platform=body.platform, dataset=body.dataset,
                     cases=len(imported), mode=body.mode, version=new_row.version, result=outcome, namespace=namespace)
     return await to_out(ctx, new_row)
+
+
+# --------------------------------------------------------------------------- platforms
+
+
+class PlatformTestOut(BaseModel):
+    ok: bool | None = Field(description="null when the sink cannot check its settings.")
+    sink: str | None = None
+    detail: str | None = None
+    project: str | None = None
+
+
+@router.post("/eval-platforms/{name}/test", tags=["eval platforms"], response_model=PlatformTestOut,
+             summary="Check an eval platform's settings and credentials with a cheap call")
+async def test_eval_platform(name: str, ctx: CtxDep) -> Any:
+    await ctx.require("eval-platforms:read")
+    return await ctx.engine.evals.test_platform(ctx.tenant_id, name)
+
+
+@router.get("/eval-platforms/{name}/datasets", tags=["eval platforms"], response_model=list[str],
+            summary="Dataset names on an eval platform, for import pickers")
+async def eval_platform_datasets(name: str, ctx: CtxDep) -> Any:
+    await ctx.require("eval-platforms:read")
+    return await ctx.engine.evals.platform_datasets(ctx.tenant_id, name)
 
 
 # --------------------------------------------------------------------------- sinks
@@ -260,8 +299,8 @@ async def export_run_trace(run_id: str, body: SinkIn, ctx: CtxDep) -> Any:
     run = await ctx.engine.store.get_run(ctx.tenant_id, run_id)
     await ctx.require("runs:read", run.namespace)
     await ctx.require("evals:run", run.namespace)
-    config = await _export_config(ctx, run.namespace, body)
+    config, platform = await _export_config(ctx, run.namespace, body)
     with use_namespace(run.namespace):
-        result = await ctx.engine.evals.export_run(ctx.tenant_id, run.id, body.sink, config)
-    await ctx.audit("run.exported", run.id, namespace=run.namespace, sink=body.sink, url=result.url)
-    return ExportOut(sink=body.sink, url=result.url, ids=result.ids)
+        sink, result = await ctx.engine.evals.export_run(ctx.tenant_id, run.id, body.sink, config, platform)
+    await ctx.audit("run.exported", run.id, namespace=run.namespace, sink=sink, platform=platform, url=result.url)
+    return ExportOut(sink=sink, platform=platform, url=result.url, ids=result.ids)

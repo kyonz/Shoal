@@ -7,6 +7,7 @@ import { useNamespaces } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { dateTime, relTime } from "@/lib/format";
 import { Badge, Button, Card, EmptyState, Input, JsonBlock, NativeSelect, Page, PageHeader, Skeleton, Td, Th } from "@/components/ui";
+import { Actor } from "@/lib/actor";
 
 type Entry = Schemas["AuditOut"];
 
@@ -189,7 +190,9 @@ export default function Audit() {
                         <Td className="whitespace-nowrap text-muted" title={dateTime(e.created_at)}>
                           {relTime(e.created_at)}
                         </Td>
-                        <Td className="font-mono text-xs">{e.actor ?? "—"}</Td>
+                        <Td className="max-w-56">
+                          <Actor actor={e.actor} />
+                        </Td>
                         <Td>
                           <Badge tone={actionTone(e.action)} className="font-mono">
                             {e.action}

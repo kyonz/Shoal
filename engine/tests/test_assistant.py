@@ -211,3 +211,13 @@ def test_blocked_paths_cannot_be_disguised(path):
     with pytest.raises(ValueError):
         _check_path(path)
     assert _check_path("/v1/namespaces/default/workflows") == "/v1/namespaces/default/workflows"
+
+
+async def test_unsaved_editor_content_reaches_the_model(api):
+    script = play([{"type": "text", "text": "I see your draft."}])
+    draft = "Unsaved edits to workflow `word-count`:\nkind: Workflow\nspec: {steps: [{id: count, type: script}]}"
+    r = await api.post("/v1/assistant/chat", json={"message": "finish my script", "page": "/ns/default/workflows/new",
+                                                    "context": draft})
+    assert r.status_code == 200, r.text
+    assert draft in script.requests[0].system
+    assert "may differ from what is saved" in script.requests[0].system

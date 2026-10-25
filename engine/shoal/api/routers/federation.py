@@ -40,7 +40,7 @@ class LinkPatch(BaseModel):
 class LinkOut(BaseModel):
     id: str
     tenant: str
-    status: str = Field(description="pending (waiting for enrollment), active or revoked.")
+    status: str = Field(description="pending (waiting for enrollment), active, revoked (by the hub) or left (by the member).")
     connected: bool
     requested_mode: Mode
     member_mode: Mode | None = Field(None, description="The member's ceiling.")
@@ -151,6 +151,15 @@ async def tunnel(body: TunnelIn, request: Request, engine: EngineDep) -> dict[st
     return await engine.federation.tunnel(link, responses=body.responses, wait=body.wait, limit=body.limit, report=body.report)
 
 
+@router.post("/leave", status_code=204, summary="The member left the hub (authenticated by the link credential)")
+async def member_left(request: Request, engine: EngineDep) -> Response:
+    token = _bearer(request)
+    if not token:
+        raise Unauthorized("missing link credential")
+    await engine.federation.member_left(await engine.federation.authenticate_link(token))
+    return Response(status_code=204)
+
+
 # --------------------------------------------------------------------------- member
 
 
@@ -229,6 +238,6 @@ async def patch_membership(body: MembershipPatch, ctx: CtxDep) -> Any:
 @router.delete("/membership", status_code=204, summary="Leave the hub; this deployment keeps running on its own")
 async def leave(ctx: CtxDep) -> Response:
     await ctx.require("federation:manage")
-    await ctx.engine.federation_member.leave(ctx.tenant_id)
-    await ctx.audit("federation.left")
+    left = await ctx.engine.federation_member.leave(ctx.tenant_id)
+    await ctx.audit("federation.left", **left)
     return Response(status_code=204)

@@ -185,3 +185,19 @@ class BraintrustSink(EvalSink):
                 if not cursor or not data.get("events"):
                     break
         return cases[:limit] if limit else cases
+
+    async def test_connection(self, config: dict[str, Any]) -> dict[str, Any]:
+        async with self._client(config) as client:
+            r = await client.get("/v1/project", params={"project_name": config["project"]})
+            if r.status_code in (401, 403):
+                return {"ok": False, "detail": f"Braintrust rejected the API key ({r.status_code})"}
+            r.raise_for_status()
+        found = bool(r.json().get("objects"))
+        detail = None if found else "the project does not exist yet; the first export creates it"
+        return {"ok": True, "project": config["project"], "detail": detail}
+
+    async def list_datasets(self, config: dict[str, Any]) -> list[str]:
+        async with self._client(config) as client:
+            r = await client.get("/v1/dataset", params={"project_name": config["project"], "limit": 1000})
+            r.raise_for_status()
+        return sorted(o["name"] for o in r.json().get("objects") or [] if o.get("name"))

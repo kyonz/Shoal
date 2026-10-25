@@ -126,7 +126,7 @@ assert api.requests("POST", "/graphql")[0].json["variables"]["title"] == "Bug"
 | `engine_harness(...)` | A real throwaway engine with your integration registered: create connections (`connect`), apply YAML resources (`apply`), deliver webhooks to the connection URL (`webhook`) and check that triggers fire and runs start. |
 | `signed_webhook`, `github_webhook` | Build correctly signed deliveries. |
 | `IntegrationContract` | Subclass as `TestXContract` to run the contract checks under pytest. |
-| `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m shoal.sdk.testing.contract URL --token T`. |
+| `check_remote_service(url, token)` | The contract checks for a running remote service, also `shoal integrations check URL --token T` from the command line. |
 
 The **contract** checks that keys and action names are valid tool names,
 every action and resource has a description and object schemas, credentials

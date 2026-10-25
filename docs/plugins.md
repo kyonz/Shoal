@@ -74,6 +74,8 @@ the lookup order with `SHOAL_SECRET_PROVIDERS`.
 
 Implement `export_eval`, `export_trace` and `import_dataset`, and describe the settings in
 `config_schema` (JSON Schema). Use `self.client(base_url)` for HTTP so tests can mock it.
+Optionally implement `test_connection` (a cheap call returning `{"ok": bool, "detail": ...}`)
+and `list_datasets` (names), which back the eval platform test and dataset picker.
 Braintrust and Langfuse are the reference implementations.
 
 ## Decision providers (`shoal.decision_providers`)
