@@ -21,6 +21,8 @@ from shoal.api.schemas import (
     Page,
     RunDetail,
     RunOut,
+    SignalIn,
+    SignalOut,
     StartRunIn,
     StepOut,
     TargetOut,
@@ -142,6 +144,21 @@ async def approve_step(run_id: str, step_id: str, body: ApprovalIn, ctx: CtxDep)
     )
     await ctx.audit("run.approval", f"{run.id}/{step_id}", namespace=run.namespace, approved=body.approved, comment=body.comment)
     return row
+
+
+@router.post("/runs/{run_id}/signals/{name}", status_code=202, tags=["runs"], response_model=SignalOut,
+             summary="Send a signal to a run; a wait step with `signal: {name: ...}` takes it")
+async def send_signal(run_id: str, name: str, body: SignalIn, ctx: CtxDep) -> Any:
+    run = await _run(ctx, run_id, "runs:signal")
+    row = await ctx.engine.signals.send(run, name, body.payload, source="api", sender=ctx.actor)
+    await ctx.audit("run.signal", f"{run.id}/{name}", namespace=run.namespace, signal=row.id)
+    return SignalOut.of(row)
+
+
+@router.get("/runs/{run_id}/signals", tags=["runs"], response_model=list[SignalOut], summary="Signals sent to a run")
+async def list_signals(run_id: str, ctx: CtxDep) -> Any:
+    run = await _run(ctx, run_id)
+    return [SignalOut.of(r) for r in await ctx.engine.signals.list(run.id)]
 
 
 @router.post("/runs/{run_id}/rerun", status_code=201, tags=["runs"], response_model=RunOut)

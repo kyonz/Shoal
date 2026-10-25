@@ -132,6 +132,7 @@ class IntegrationManager:
         fired: list[dict[str, Any]] = []
         for event in events:
             woken += await self.engine.store.wake_by_keys(endpoint.tenant_id, event.wake_keys)
+            woken += await self.engine.signals.deliver_event(endpoint.tenant_id, event)
             fired += await self.engine.triggers.dispatch_event(
                 endpoint.tenant_id, endpoint.connection_name, event, connection_namespace=endpoint.namespace
             )
@@ -140,5 +141,6 @@ class IntegrationManager:
     async def inject_event(self, tenant_id: str, connection: str, event: IntegrationEvent) -> dict[str, Any]:
         """Process an already-parsed event (polling integrations, tests, replays)."""
         woken = await self.engine.store.wake_by_keys(tenant_id, event.wake_keys)
+        woken += await self.engine.signals.deliver_event(tenant_id, event)
         fired = await self.engine.triggers.dispatch_event(tenant_id, connection, event, connection_namespace=current_namespace())
         return {"woken_runs": woken, "triggers": fired}

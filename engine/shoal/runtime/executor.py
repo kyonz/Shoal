@@ -278,6 +278,7 @@ class Executor:
                 "initiator": run.initiator or {},
                 "labels": run.labels,
                 "url": f"{self.engine.settings.public_url.rstrip('/')}/runs/{run.id}",
+                "signal_url": self.engine.signals.callback_url(run),
             },
             "trigger": run.context.get("trigger", {}),
             "event": run.context.get("event", {}),

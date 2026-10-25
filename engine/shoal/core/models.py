@@ -219,20 +219,44 @@ class WaitCondition(Model):
     )
 
 
+class WaitSignal(Model):
+    """Wait for data sent into the run.
+
+    ``name`` takes signals sent with ``POST /v1/runs/{id}/signals/{name}`` or to the
+    run's callback URL (``{{ run.signal_url }}/{name}``); signals that arrive before
+    the step waits are kept for it. ``event`` takes the next integration event with
+    that wake key (e.g. ``github:pr:acme/api#12``) while the step is waiting.
+    """
+
+    name: str | None = Field(None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
+    event: str | None = Field(None, description="Expression producing an integration event wake key.")
+    match: str | None = Field(
+        None, description="Expression evaluated with `signal` (the payload); signals that do not match stay queued."
+    )
+
+    @model_validator(mode="after")
+    def _one_source(self) -> WaitSignal:
+        if bool(self.name) == bool(self.event):
+            raise ValueError("signal wait needs exactly one of: name, event")
+        return self
+
+
 class WaitStep(StepBase):
-    """Durable wait for a duration, until a time, or until a condition holds."""
+    """Durable wait for a duration, until a time, until a condition holds, or for a signal."""
 
     type: Literal["wait"] = "wait"  # type: ignore[misc]
     duration: Duration | None = None
     until: str | None = Field(None, description="Expression producing an ISO-8601 timestamp.")
     condition: WaitCondition | None = None
-    max_wait: Duration | None = Field(None, description="Give up waiting for the condition after this long.")
+    signal: WaitSignal | None = None
+    max_wait: Duration | None = Field(None, description="Give up waiting for the condition or signal after this long.")
     on_timeout: Literal["fail", "continue"] = "continue"
 
     @model_validator(mode="after")
     def _one_mode(self) -> WaitStep:
-        if not (self.duration or self.until or self.condition):
-            raise ValueError("wait step needs one of: duration, until, condition")
+        modes = [m for m in (self.duration, self.until, self.condition, self.signal) if m]
+        if len(modes) != 1:
+            raise ValueError("wait step needs exactly one of: duration, until, condition, signal")
         return self
 
 

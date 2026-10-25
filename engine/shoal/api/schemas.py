@@ -423,6 +423,29 @@ class ApprovalIn(BaseModel):
     comment: str | None = None
 
 
+class SignalIn(BaseModel):
+    payload: Any = Field(None, description="Any JSON value; a waiting step outputs it as `payload`.")
+
+
+class SignalOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    source: str = Field(description="api, callback or event.")
+    sender: str
+    payload: Any = None
+    created_at: datetime
+    consumed_by: str | None = Field(None, description="The wait step that took it; null while queued.")
+    consumed_at: datetime | None = None
+
+    @classmethod
+    def of(cls, row: Any) -> SignalOut:
+        return cls(
+            id=row.id, name=row.name, source=row.source, sender=row.sender, payload=(row.data or {}).get("payload"),
+            created_at=row.created_at, consumed_by=row.consumed_by, consumed_at=row.consumed_at,
+        )
+
+
 # --------------------------------------------------------------------------- campaigns
 
 

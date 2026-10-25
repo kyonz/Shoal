@@ -311,6 +311,23 @@ class WaitSubscription(Base):
     step_id: Mapped[str] = mapped_column(String(64))
 
 
+class RunSignal(Base):
+    """Data sent into a run (API, callback URL or integration event), buffered until a wait step takes it."""
+
+    __tablename__ = "run_signals"
+    __table_args__ = (Index("ix_run_signals_run_name", "run_id", "name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(40))
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(500))
+    data: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"payload": ...}
+    source: Mapped[str] = mapped_column(String(20))  # api, callback or event
+    sender: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    consumed_by: Mapped[str | None] = mapped_column(String(64))  # step id
+    consumed_at: Mapped[datetime | None] = mapped_column()
+
+
 class WebhookEndpoint(Base):
     __tablename__ = "webhook_endpoints"
     __table_args__ = (UniqueConstraint("tenant_id", "namespace", "connection_name"),)

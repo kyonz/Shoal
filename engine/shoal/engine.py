@@ -36,6 +36,7 @@ from shoal.llm.router import ModelRouter
 from shoal.plugins.registry import Registry
 from shoal.runtime.events import EventBus
 from shoal.runtime.executor import Executor
+from shoal.runtime.signals import Signals
 from shoal.sandbox.manager import SandboxManager
 from shoal.secrets.providers import SecretManager
 from shoal.store.store import Store
@@ -114,6 +115,7 @@ class Engine:
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)
         self.blueprints = BlueprintService(self)
+        self.signals = Signals(self)
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)
         self.evals = EvalService(self)

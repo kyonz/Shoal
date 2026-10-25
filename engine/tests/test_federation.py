@@ -188,6 +188,18 @@ async def test_background_connector_serves_hub_calls(world):
         await asyncio.wait(list(member.federation_member._tasks.values()), timeout=5)
 
 
+async def test_revoked_tenant_can_be_federated_again(world):
+    _, _, hub_app, _, client = world
+    await _tenant(hub_app, client, "acme")
+    first = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["link"]
+    assert (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).status_code == 409
+    assert (await client(hub_app).delete("/v1/federation/links/acme")).status_code == 204
+    assert (await client(hub_app).get("/v1/federation/links/acme")).json()["status"] == "revoked"
+    r = await client(hub_app).post("/v1/federation/links", json={"tenant": "acme", "mode": "read"})
+    assert r.status_code == 201, r.text
+    assert r.json()["link"]["id"] != first["id"] and r.json()["link"]["status"] == "pending"
+
+
 def test_cli_grant_parsing():
     from shoal.cli.main import _parse_grant
 
