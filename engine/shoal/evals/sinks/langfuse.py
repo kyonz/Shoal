@@ -173,3 +173,26 @@ class LangfuseSink(EvalSink):
                     break
                 page += 1
         return cases[:limit] if limit else cases
+
+    async def test_connection(self, config: dict[str, Any]) -> dict[str, Any]:
+        async with self._client(config) as client:
+            r = await client.get("/api/public/projects")
+            if r.status_code in (401, 403):
+                return {"ok": False, "detail": f"Langfuse rejected the keys ({r.status_code})"}
+            r.raise_for_status()
+        projects = r.json().get("data") or []
+        return {"ok": True, "project": projects[0].get("name") if projects else None}
+
+    async def list_datasets(self, config: dict[str, Any]) -> list[str]:
+        names: list[str] = []
+        page = 1
+        async with self._client(config) as client:
+            while True:
+                r = await client.get("/api/public/v2/datasets", params={"page": page, "limit": 100})
+                r.raise_for_status()
+                data = r.json()
+                names += [d["name"] for d in data.get("data") or [] if d.get("name")]
+                if page >= int((data.get("meta") or {}).get("totalPages") or 1):
+                    break
+                page += 1
+        return sorted(names)

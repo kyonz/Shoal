@@ -1525,6 +1525,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/eval-platforms/{name}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check an eval platform's settings and credentials with a cheap call */
+        post: operations["test_eval_platform_v1_eval_platforms__name__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dataset names on an eval platform, for import pickers */
+        get: operations["eval_platform_datasets_v1_eval_platforms__name__datasets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/eval-sinks": {
         parameters: {
             query?: never;
@@ -3257,6 +3291,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/eval-platforms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval-Platforms */
+        get: operations["list_eval_platforms_v1_eval_platforms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Eval-Platforms */
+        get: operations["get_eval_platforms_v1_eval_platforms__name__get"];
+        /** Put Eval-Platforms */
+        put: operations["put_eval_platforms_v1_eval_platforms__name__put"];
+        post?: never;
+        /** Delete Eval-Platforms */
+        delete: operations["delete_eval_platforms_v1_eval_platforms__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions Eval-Platforms */
+        get: operations["versions_eval_platforms_v1_eval_platforms__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Diff Eval-Platforms */
+        get: operations["diff_eval_platforms_v1_eval_platforms__name__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Eval-Platforms */
+        post: operations["rollback_eval_platforms_v1_eval_platforms__name__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/apply": {
         parameters: {
             query?: never;
@@ -3992,9 +4113,14 @@ export interface components {
         DatasetImportIn: {
             /**
              * Sink
-             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'.
+             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'. Set this or `platform`.
              */
-            sink: string;
+            sink?: string | null;
+            /**
+             * Platform
+             * @description An EvalPlatform by name; `config` is merged over its settings.
+             */
+            platform?: string | null;
             /**
              * Config
              * @description Sink settings; secrets by name (api_key_secret, ...).
@@ -4285,6 +4411,8 @@ export interface components {
         ExportOut: {
             /** Sink */
             sink: string;
+            /** Platform */
+            platform?: string | null;
             /** Url */
             url: string | null;
             /** Ids */
@@ -4895,6 +5023,20 @@ export interface components {
                 [key: string]: string[];
             };
         };
+        /** PlatformTestOut */
+        PlatformTestOut: {
+            /**
+             * Ok
+             * @description null when the sink cannot check its settings.
+             */
+            ok: boolean | null;
+            /** Sink */
+            sink?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Project */
+            project?: string | null;
+        };
         /** QueryIn */
         QueryIn: {
             /** Filter */
@@ -5308,9 +5450,14 @@ export interface components {
         SinkIn: {
             /**
              * Sink
-             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'.
+             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'. Set this or `platform`.
              */
-            sink: string;
+            sink?: string | null;
+            /**
+             * Platform
+             * @description An EvalPlatform by name; `config` is merged over its settings.
+             */
+            platform?: string | null;
             /**
              * Config
              * @description Sink settings; secrets by name (api_key_secret, ...).
@@ -9516,6 +9663,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_eval_platform_v1_eval_platforms__name__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformTestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eval_platform_datasets_v1_eval_platforms__name__datasets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */
@@ -13876,6 +14085,224 @@ export interface operations {
         };
     };
     rollback_skill_sources_v1_skill_sources__name__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"] | components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_platforms_v1_eval_platforms_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+        };
+    };
+    get_eval_platforms_v1_eval_platforms__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_eval_platforms_v1_eval_platforms__name__put: {
+        parameters: {
+            query?: {
+                /** @description Change note stored with the new version. */
+                message?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eval_platforms_v1_eval_platforms__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_eval_platforms_v1_eval_platforms__name__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_eval_platforms_v1_eval_platforms__name__diff_get: {
+        parameters: {
+            query: {
+                from: number;
+                to?: number | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_eval_platforms_v1_eval_platforms__name__rollback_post: {
         parameters: {
             query?: never;
             header?: never;

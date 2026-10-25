@@ -45,7 +45,9 @@ TENANT_VERBS = {"identities": {"read": "identities:read", "write": "identities:w
                 "model-policies": {"read": "model-policies:read", "write": "model-policies:manage",
                                    "delete": "model-policies:manage"},
                 "skill-sources": {"read": "skill-sources:read", "write": "skill-sources:manage",
-                                  "delete": "skill-sources:manage"}}
+                                  "delete": "skill-sources:manage"},
+                "eval-platforms": {"read": "eval-platforms:read", "write": "eval-platforms:manage",
+                                   "delete": "eval-platforms:manage"}}
 
 
 async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:

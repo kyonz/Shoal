@@ -506,6 +506,13 @@ quality is measured, not assumed.
   grader score), production runs export as traces, and datasets import as
   cases (live via `spec.dataset`, or into a new Eval version via
   `POST …/evals/{name}/import`). A failed export never fails the eval.
+  An `EvalPlatform` (tenant-wide, kept in `shared`, managed with
+  `eval-platforms:manage`) holds one sink's settings once, with its secrets
+  named from `shared` (clear-text credentials are rejected). Datasets, eval
+  sinks and the import / export endpoints then say `platform: <name>`, and
+  any inline `config` is merged over the platform's. `POST
+  /v1/eval-platforms/{name}/test` checks the credentials and `GET
+  …/datasets` lists dataset names for pickers.
 - **Inline quality gates.** A `grade` step type scores an upstream output with
   a rubric inside a workflow, so a run can retry, escalate to a human or stop
   when quality is below a threshold.
@@ -866,7 +873,8 @@ credential performed it*, and lets policy decide what the run may do.
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),
   `sandbox-profiles`, `evals` (+runs, scores, import), `eval-runs`
-  (+results, compare, export, cancel), `eval-sinks`, `hooks/{trigger_id}`.
+  (+results, compare, export, cancel), `eval-sinks`, `eval-platforms`
+  (+test, datasets), `hooks/{trigger_id}`.
 - Live updates: `GET /v1/runs/{id}/events` (SSE).
 - Outbound: tenant-configurable webhooks for run/campaign lifecycle events.
 
