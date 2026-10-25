@@ -13,6 +13,7 @@ const EXT = {
   "model-policies": modelPolicyExtension,
   evals: evalExtension,
   blueprints: blueprintExtension,
+  "skill-sources": {},
 };
 
 export type CatalogPlural = keyof typeof EXT;

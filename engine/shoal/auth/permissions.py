@@ -54,6 +54,8 @@ TENANT_PERMISSIONS: dict[str, str] = {
     "gateways:manage": "Create, update and delete LLM gateways (tenant-wide)",
     "model-policies:read": "View model policies",
     "model-policies:manage": "Create, update and delete model policies (tenant-wide)",
+    "skill-sources:read": "View the tenant's skill sources (marketplaces)",
+    "skill-sources:manage": "Add, configure and remove skill sources (tenant-wide)",
     "audit:read": "Read the audit log",
     "api-keys:manage": "Manage every API key in the tenant",
     "scim:provision": "Provision users and groups over SCIM",

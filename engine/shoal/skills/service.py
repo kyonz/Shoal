@@ -149,7 +149,7 @@ class SkillSourceService:
         })
         written = skill.to_document()
         after = {"metadata": {"description": description, "labels": labels}, "spec": written["spec"]}
-        before = _as_written(row) if row is not None else {}
+        before = _as_written(row) if row is not None else {"metadata": {}, "spec": {}}
         changes = diff(before, after)
         summary = {
             "source": source,

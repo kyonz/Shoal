@@ -95,6 +95,9 @@ async def test_source_config_rejects_clear_text_credentials(api, repo):
 
 
 async def test_browse_import_upgrade_and_roll_back(api, repo):
+    perms = (await api.get("/v1/me/permissions")).json()
+    assert {"skill-sources:read", "skill-sources:manage"} <= set(perms["tenant"])
+    assert "skills:import" in perms["namespaces"]["default"]
     await add_git_source(api, repo)
     assert (await api.post("/v1/skill-sources/acme-skills/test")).json()["skills"] == 2
     assert [s["name"] for s in (await api.get("/v1/namespaces/default/skill-sources")).json()] == ["acme-skills"]

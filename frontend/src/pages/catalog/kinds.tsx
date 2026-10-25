@@ -1,5 +1,5 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, FlaskConical, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, FlaskConical, Library, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
 
 export interface KindConfig {
@@ -118,6 +118,17 @@ export const KINDS: Record<string, KindConfig> = {
       params: {},
       resources: [{ apiVersion: "shoal.dev/v1", kind: "Workflow", metadata: { name: "{{ prefix }}example" }, spec: { steps: [{ id: "hello", type: "set", values: { ok: true } }] } }],
     },
+  },
+  "skill-sources": {
+    plural: "skill-sources",
+    kind: "SkillSource",
+    label: "Skill sources",
+    singular: "skill source",
+    icon: Library,
+    blurb: "Marketplaces that teams import skills from: git repositories in the Agent Skills layout, skill registries or plugins.",
+    order: ["title", "source", "description", "config", "secrets", "namespaces", "enabled"],
+    template: { source: "git", title: "Public skills", config: { url: "https://github.com/anthropics/skills", ref: "main", path: "skills" } },
+    summary: (s) => [s.source, (s.config as { url?: string } | undefined)?.url].filter(Boolean).join(" · ") || undefined,
   },
 };
 

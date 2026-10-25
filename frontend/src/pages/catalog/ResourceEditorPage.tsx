@@ -176,10 +176,11 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
   const confirm = useConfirm();
   const tenantScoped = TENANT_SCOPED.includes(cfg.plural);
   const canPublish = useCan("blueprints:publish");
+  const canManageSources = useCan("skill-sources:manage");
   const canWriteKind = useCan(`${plural}:write`, ns);
   const canDeleteKind = useCan(`${plural}:delete`, ns);
-  const canWrite = plural === "blueprints" ? canPublish : canWriteKind;
-  const canDelete = plural === "blueprints" ? canPublish : canDeleteKind;
+  const canWrite = plural === "blueprints" ? canPublish : plural === "skill-sources" ? canManageSources : canWriteKind;
+  const canDelete = plural === "blueprints" ? canPublish : plural === "skill-sources" ? canManageSources : canDeleteKind;
 
   const schemas = useSchemas();
   const specSchema = schemas.data?.[plural]?.spec_schema;
