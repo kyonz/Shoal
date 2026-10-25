@@ -504,6 +504,11 @@ contract, so they double as reference implementations.
   packages, remote) appear in `/v1/integrations` and the UI catalogue with
   their schemas; community integrations can be listed alongside blueprints
   (§10.1) with verification status.
+- Implemented in `engine/awm/sdk/` (SDK, `awm.sdk.testing`, `awm.sdk.server`,
+  `awm.sdk.scaffold`), `engine/awm/integrations/remote.py` (the `remote`
+  adapter and `register_remote_integration`) and `templates/integration/`.
+  The author guide and the full protocol are in
+  [integrations.md](integrations.md).
 
 ---
 

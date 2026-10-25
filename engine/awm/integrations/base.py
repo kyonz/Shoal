@@ -182,6 +182,13 @@ class Integration:
     def webhook_setup_instructions(self, url: str) -> str:
         return f"Send webhooks to {url}"
 
+    async def actions_for(self, ctx: ConnectionContext) -> dict[str, ActionDef]:
+        """Actions available on one connection; dynamic integrations (remote) override this."""
+        return self.actions
+
+    async def resources_for(self, ctx: ConnectionContext) -> dict[str, ResourceDef]:
+        return self.resources
+
     # --- dispatch ------------------------------------------------------------
 
     async def call_action(self, ctx: ConnectionContext, name: str, params: dict[str, Any]) -> dict[str, Any]:
