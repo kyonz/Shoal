@@ -1,0 +1,19 @@
+{{- range $component := list "api" "worker" }}
+{{- $cfg := index $.Values $component }}
+{{- if and $cfg.podDisruptionBudget.enabled (or (eq $component "api") $.Values.worker.enabled) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "awm.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "awm.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  minAvailable: {{ $cfg.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "awm.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+{{- end }}
+{{- end }}
