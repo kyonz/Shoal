@@ -27,8 +27,11 @@ EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "slack-approval"
 class TestSlackContract(IntegrationContract):
     integration = SlackIntegration
     sample_config = {"bot_token": "xoxb-sample", "signing_secret": SECRET}
-    sample_webhook = MockSlack(signing_secret=SECRET).event({"type": "app_mention", "user": "U1", "channel": "C1",
-                                                              "text": "<@U0BOT> hi", "ts": "1.1"})
+
+    @property
+    def sample_webhook(self):  # signed when the test runs: Slack rejects requests over five minutes old
+        return MockSlack(signing_secret=SECRET).event({"type": "app_mention", "user": "U1", "channel": "C1",
+                                                       "text": "<@U0BOT> hi", "ts": "1.1"})
 
 
 def doc(kind: str, name: str, spec: dict) -> object:
