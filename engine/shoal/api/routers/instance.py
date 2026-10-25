@@ -1,4 +1,4 @@
-"""The instance: tenant switching for people, and tenant and account management for instance admins.
+"""The instance: tenant switching for people; tenants, accounts and the orchestrator for instance admins.
 
 Instance admins (and auditors, read-only) are accounts with an ``instance_role``.
 The ``SHOAL_ADMIN_TOKEN`` stays as a break-glass credential with the same rights.
@@ -6,6 +6,7 @@ The ``SHOAL_ADMIN_TOKEN`` stays as a break-glass credential with the same rights
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
@@ -19,8 +20,11 @@ from shoal.api.schemas import (
     AccountPatch,
     AuditOut,
     MyTenant,
+    OrchestratorEnvironment,
+    OrchestratorStatus,
     SessionOut,
     SwitchTenantIn,
+    TemporalCheck,
     TenantMemberIn,
     TenantMemberOut,
     TenantOut,
@@ -29,7 +33,14 @@ from shoal.api.schemas import (
 )
 from shoal.auth.accounts import INSTANCE_ADMIN
 from shoal.auth.sessions import issue_session
-from shoal.core.errors import Forbidden, InvalidRequest, NotFound
+from shoal.core.errors import Conflict, Forbidden, InvalidRequest, NotFound
+from shoal.runtime.orchestrators import (
+    SETTING_KEY,
+    OrchestratorSetting,
+    TemporalSettings,
+    check_temporal,
+    resolve_connection,
+)
 from shoal.store import tables as t
 
 router = APIRouter()
@@ -192,3 +203,91 @@ async def patch_account(account_id: str, body: AccountPatch, ctx: SystemCtxDep) 
             summary="Instance-level audit: tenants created, suspended or deleted, instance roles, instance sign-ins")
 async def instance_audit(ctx: InstanceReaderCtxDep, limit: int = 100, action: str | None = None, before: int | None = None) -> Any:
     return await ctx.engine.store.list_audit(None, min(limit, 1000), action=action, before=before)
+
+
+# --------------------------------------------------------------------------- orchestrator (instance admins)
+
+
+async def _orchestrator_status(ctx: Any) -> OrchestratorStatus:
+    engine = ctx.engine
+    settings, orchestrators = engine.settings, engine.orchestrators
+    row = await engine.store.get_instance_setting(SETTING_KEY)
+    return OrchestratorStatus(
+        source=orchestrators.source,
+        orchestrator=orchestrators.current.name,
+        driving=sorted(orchestrators.active),
+        setting=OrchestratorSetting.model_validate(row.value) if row else None,
+        environment=OrchestratorEnvironment(
+            orchestrator=settings.orchestrator, temporal_address=settings.temporal_address,
+            temporal_namespace=settings.temporal_namespace, temporal_task_queue=settings.temporal_task_queue,
+            temporal_tls=bool(settings.temporal_tls or settings.temporal_api_key or settings.temporal_tls_cert_path
+                              or settings.temporal_tls_ca_path),
+        ),
+        runs=await engine.store.unfinished_runs_by_orchestrator(),
+        temporal_installed=importlib.util.find_spec("temporalio") is not None,
+        error=orchestrators.error,
+        revision=row.revision if row else None,
+        updated_by=row.updated_by if row else None,
+        updated_at=row.updated_at if row else None,
+    )
+
+
+async def _keep_temporal_runs(ctx: Any, temporal: TemporalSettings | None) -> None:
+    """Refuse to drop the only Temporal connection while runs still need it."""
+    if temporal is not None or ctx.engine.settings.orchestrator == "temporal":
+        return
+    if count := (await ctx.engine.store.unfinished_runs_by_orchestrator()).get("temporal"):
+        raise Conflict(f"{count} unfinished run(s) are on Temporal; keep the connection until they finish or are cancelled")
+
+
+@router.get("/v1/instance/orchestrator", tags=["instance"], response_model=OrchestratorStatus,
+            summary="What drives runs: the built-in orchestrator or Temporal, and where that is set")
+async def get_orchestrator(ctx: InstanceReaderCtxDep) -> Any:
+    await ctx.engine.orchestrators.refresh(force=True)
+    return await _orchestrator_status(ctx)
+
+
+@router.put("/v1/instance/orchestrator", tags=["instance"], response_model=OrchestratorStatus,
+            summary="Save a Temporal connection and choose what new runs start on (overrides SHOAL_ORCHESTRATOR)")
+async def put_orchestrator(body: OrchestratorSetting, ctx: SystemCtxDep) -> Any:
+    engine = ctx.engine
+    if body.temporal is not None:
+        if importlib.util.find_spec("temporalio") is None:
+            raise InvalidRequest("this Shoal installation lacks the temporal extra: pip install 'shoal[temporal]'")
+        connection = await resolve_connection(engine, body.temporal)
+        if body.orchestrator == "temporal":
+            result = await check_temporal(connection)
+            if not result["ok"]:
+                raise InvalidRequest(f"cannot switch runs to Temporal: {result['detail']}")
+    await _keep_temporal_runs(ctx, body.temporal)
+    previous = await engine.store.get_instance_setting(SETTING_KEY)
+    await engine.store.put_instance_setting(SETTING_KEY, body.model_dump(mode="json"), actor=ctx.actor)
+    was = OrchestratorSetting.model_validate(previous.value).orchestrator if previous else engine.settings.orchestrator
+    action = "instance.orchestrator_switched" if was != body.orchestrator else "instance.orchestrator_updated"
+    temporal = body.temporal
+    await engine.store.audit(None, ctx.actor, action, body.orchestrator, previous=was,
+                             address=temporal.address if temporal else None,
+                             namespace=temporal.namespace if temporal else None,
+                             task_queue=temporal.task_queue if temporal else None)
+    await engine.orchestrators.refresh(force=True)
+    return await _orchestrator_status(ctx)
+
+
+@router.delete("/v1/instance/orchestrator", tags=["instance"], response_model=OrchestratorStatus,
+               summary="Forget the console setting and go back to SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_*")
+async def reset_orchestrator(ctx: SystemCtxDep) -> Any:
+    await _keep_temporal_runs(ctx, None)
+    await ctx.engine.store.delete_instance_setting(SETTING_KEY)
+    await ctx.engine.store.audit(None, ctx.actor, "instance.orchestrator_reset", ctx.engine.settings.orchestrator)
+    await ctx.engine.orchestrators.refresh(force=True)
+    return await _orchestrator_status(ctx)
+
+
+@router.post("/v1/instance/orchestrator/test", tags=["instance"], response_model=TemporalCheck,
+             summary="Try a Temporal connection without saving it")
+async def test_orchestrator(body: TemporalSettings, ctx: SystemCtxDep) -> Any:
+    try:
+        connection = await resolve_connection(ctx.engine, body)
+    except InvalidRequest as exc:  # e.g. a secret that is not set
+        return TemporalCheck(ok=False, detail=str(exc))
+    return await check_temporal(connection)

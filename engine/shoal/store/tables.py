@@ -519,6 +519,17 @@ class BlueprintAdoption(Base):
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class InstanceSetting(Base):
+    """Instance-wide settings changed from the instance console (e.g. the orchestrator), one row per key."""
+
+    __tablename__ = "instance_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    revision: Mapped[int] = mapped_column(Integer, default=1, doc="Bumped on every save, so every process notices.")
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class AuditEntry(Base):
     """Append-only record of who did what. Written for every mutating API call,
     sign-in, denied request and governance decision."""

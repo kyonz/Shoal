@@ -1,4 +1,4 @@
-import { Activity, Building2, ShieldCheck, UsersRound } from "lucide-react";
+import { Activity, Building2, ShieldCheck, UsersRound, Workflow } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/ui";
 export const INSTANCE_NAV = [
   { label: "Tenants", to: "/instance", icon: Building2, keywords: "organisations workspaces suspend" },
   { label: "Accounts", to: "/instance/accounts", icon: UsersRound, keywords: "people instance admins auditors" },
+  { label: "Orchestrator", to: "/instance/orchestrator", icon: Workflow, keywords: "temporal scheduler task queue workers" },
   { label: "Instance audit", to: "/instance/audit", icon: Activity, keywords: "log events" },
 ];
 
