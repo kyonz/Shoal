@@ -10,6 +10,8 @@ interface AuthState {
   perms: PermissionSummary | undefined;
   loading: boolean;
   signedIn: boolean;
+  /** Signed in, but refused: a suspended tenant or a deactivated account (the server's problem detail). */
+  refused: string | null;
   can: (permission: string, namespace?: string) => boolean;
   /** Instance roles: admins manage tenants and accounts, auditors read them. The admin token counts as an admin. */
   instance: { admin: boolean; reader: boolean };
@@ -63,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       perms: summary,
       loading: me.isLoading || (hasTenant && perms.isLoading && !me.data?.is_system_admin),
       signedIn: !!me.data && !unauthorized,
+      refused: me.error instanceof ApiError && me.error.status === 403 ? me.error.detail : null,
       can: (p, ns) => can(summary, p, ns),
       instance: instanceAccess(me.data),
       signInWithToken,

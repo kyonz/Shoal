@@ -1,3 +1,4 @@
+import { Ban } from "lucide-react";
 import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useRouteError, type RouteObject } from "react-router";
 import { useAuth } from "@/lib/auth";
@@ -28,9 +29,19 @@ export function Lazy({ children }: { children: ReactNode }) {
 }
 
 function RequireAuth() {
-  const { signedIn, loading } = useAuth();
+  const { signedIn, loading, refused, signOut } = useAuth();
   const location = useLocation();
   if (loading) return <Splash />;
+  if (refused)
+    return (
+      <EmptyState
+        className="h-full"
+        icon={<Ban className="size-5" />}
+        title="You can't use this tenant right now"
+        description={refused}
+        action={<Button onClick={() => void signOut()}>Sign out</Button>}
+      />
+    );
   if (!signedIn) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   return <Outlet />;
 }
