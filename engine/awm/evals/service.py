@@ -495,7 +495,7 @@ class EvalService:
         if exports:
             await self._update(row.id, exports=exports)
         await self.store.audit(
-            row.tenant_id, f"eval:{row.id}", "eval.completed", f"{row.namespace}/{row.eval_name}",
+            row.tenant_id, f"eval:{row.id}", "eval.completed", f"{row.namespace}/{row.eval_name}", namespace=row.namespace,
             eval_run=row.id, score=summary.get("score"), gate_passed=gate["passed"], workflow_version=row.workflow_version,
         )
 
