@@ -26,7 +26,11 @@ engine() {
   cd "$root/engine"
   uv sync --locked --all-extras --quiet
   uv run ruff check .
-  uv run pytest -q
+  SHOAL_TEST_DATABASE_URL= uv run pytest -q  # SQLite
+  if [ -n "${SHOAL_TEST_DATABASE_URL:-}" ]; then  # e.g. postgresql+asyncpg://postgres@127.0.0.1:5432/shoal_test
+    echo "again against Postgres"
+    uv run pytest -q
+  fi
   uv run shoal --help >/dev/null
 }
 

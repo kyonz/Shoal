@@ -35,6 +35,11 @@ uv run ruff check .              # lint
 SHOAL_ADMIN_TOKEN=dev uv run shoal serve   # API + worker on 127.0.0.1:8080 with SQLite
 ```
 
+Tests use SQLite by default. To run them against Postgres as well, point
+`SHOAL_TEST_DATABASE_URL` at a scratch database (its `public` schema is reset
+for every test), e.g.
+`SHOAL_TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:5432/shoal_test scripts/check.sh engine`.
+
 ### Web UI
 
 ```sh
