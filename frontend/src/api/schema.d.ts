@@ -4428,6 +4428,13 @@ export interface components {
             document: {
                 [key: string]: unknown;
             };
+            /**
+             * Source
+             * @description The spec as the client wrote it, without server defaults (what rollback restores).
+             */
+            source?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RoleBindingIn */
         RoleBindingIn: {

@@ -406,6 +406,7 @@ async def test_versions_diff_and_rollback(admin):
     history = (await admin.get(f"{url}/versions")).json()
     assert [(h["version"], h["message"]) for h in history] == [(2, "Friendlier greeting"), (1, None)]
     assert (await admin.get(f"{url}/versions/1")).json()["document"]["spec"]["steps"][0]["id"] == "greet"
+    assert history[1]["source"] == HELLO["spec"]  # as written, without server defaults
 
     changes = (await admin.get(f"{url}/diff", params={"from": 1})).json()["changes"]
     assert {"op": "add", "path": "/spec/steps/[id=first]", "to": {"id": "first", "type": "set", "values": {}}} in changes
