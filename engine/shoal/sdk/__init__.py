@@ -24,6 +24,11 @@ built-in GitHub and Jira integrations use::
 
 Ship it as a package with an ``shoal.integrations`` entry point, or serve it
 over HTTP with :mod:`shoal.sdk.server`. Test it with :mod:`shoal.sdk.testing`.
+
+Skill sources (marketplaces that skills are imported from) use the same
+pattern: subclass :class:`SkillSource`, implement ``list`` (and optionally
+``search``) and ``fetch``, and ship it with a ``shoal.skill_sources`` entry
+point or serve it with :mod:`shoal.sdk.skill_server`.
 """
 
 from pydantic import BaseModel, Field, SecretStr
@@ -52,6 +57,15 @@ from shoal.sdk.helpers import (
     verify_token,
 )
 from shoal.sdk.manifest import manifest_for
+from shoal.skills.base import (
+    SkillBundle,
+    SkillPage,
+    SkillSource,
+    SkillSourceContext,
+    SkillSourceError,
+    SkillSummary,
+    parse_skill_md,
+)
 
 SDK_VERSION = "1.0"
 
@@ -70,6 +84,12 @@ __all__ = [
     "RemoteManifest",
     "ResourceDef",
     "SecretStr",
+    "SkillBundle",
+    "SkillPage",
+    "SkillSource",
+    "SkillSourceContext",
+    "SkillSourceError",
+    "SkillSummary",
     "action",
     "actor",
     "decode_cursor",
@@ -77,6 +97,7 @@ __all__ = [
     "hmac_sha256",
     "json_body",
     "manifest_for",
+    "parse_skill_md",
     "raise_for_status",
     "register_remote_integration",
     "resource",

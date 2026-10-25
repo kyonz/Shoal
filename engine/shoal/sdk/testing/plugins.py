@@ -25,8 +25,12 @@ from shoal.sdk.plugins import (
     ModelResponse,
     SandboxBackend,
     SandboxSpec,
+    SkillPage,
+    SkillSource,
+    SkillSourceContext,
     ToolDef,
 )
+from shoal.skills.base import SkillBundle, SkillSourceError
 
 STOP_REASONS = {"end_turn", "tool_use", "max_tokens", "stop_sequence", "refusal", "pause_turn"}
 
@@ -147,3 +151,44 @@ def check_eval_sink(sink: EvalSink) -> None:
     schema = getattr(sink, "config_schema", None)
     if schema:
         assert isinstance(schema, dict) and schema.get("type") == "object", "config_schema is a JSON object schema"
+
+
+async def check_skill_source(source: SkillSource, ctx: SkillSourceContext) -> None:
+    """``list``, ``search`` and ``fetch`` agree with each other, and unknown skills raise ``SkillSourceError``.
+
+    ``ctx`` points at a source with at least one skill (for example a test repository or registry).
+    """
+    assert isinstance(source, SkillSource), "skill sources subclass SkillSource"
+    catalog = type(source).catalog()
+    assert catalog["config_schema"].get("type") == "object", "config_model is a pydantic model (a JSON object schema)"
+    page = await source.list(ctx, None, 50)
+    assert isinstance(page, SkillPage), "list returns a SkillPage"
+    assert page.items, "list returned no skills; point the contract at a source that has some"
+    ids = [s.id for s in page.items]
+    assert len(ids) == len(set(ids)), f"skill ids must be unique within a page: {ids}"
+    first = page.items[0]
+    assert first.id and first.name, "every summary has an id and a name"
+    found = await source.search(ctx, first.name, None, 50)
+    assert isinstance(found, SkillPage), "search returns a SkillPage"
+    assert first.id in [s.id for s in found.items], f"searching for '{first.name}' does not find {first.id}"
+    if page.next_cursor:
+        more = await source.list(ctx, page.next_cursor, 50)
+        assert isinstance(more, SkillPage), "the next page is a SkillPage"
+    bundle = await source.fetch(ctx, first.id)
+    assert isinstance(bundle, SkillBundle), "fetch returns a SkillBundle"
+    assert bundle.id == first.id, f"fetch('{first.id}') returned skill '{bundle.id}'"
+    assert bundle.version, "a bundle names its version"
+    assert isinstance(bundle.instructions, str) and not bundle.instructions.startswith("---"), (
+        "instructions are the SKILL.md body, without frontmatter"
+    )
+    assert all(isinstance(k, str) and isinstance(v, str) and not k.startswith("/") for k, v in bundle.files.items()), (
+        "files map relative paths to text"
+    )
+    assert "SKILL.md" not in bundle.files, "SKILL.md is the instructions, not one of the files"
+    try:
+        await source.fetch(ctx, "shoal-contract/does-not-exist")
+    except SkillSourceError:
+        pass
+    else:
+        raise AssertionError("fetching an unknown skill should raise SkillSourceError (status 404)")
+

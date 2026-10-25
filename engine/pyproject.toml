@@ -70,6 +70,10 @@ jev = "shoal.decisions.jev:JevProvider"
 braintrust = "shoal.evals.sinks.braintrust:BraintrustSink"
 langfuse = "shoal.evals.sinks.langfuse:LangfuseSink"
 
+[project.entry-points."shoal.skill_sources"]
+git = "shoal.skills.git:GitSkillSource"
+registry = "shoal.skills.registry:RegistrySkillSource"
+
 [project.entry-points."shoal.agent_runtimes"]
 tool-loop = "shoal.agents.tool_loop:ToolLoopRuntime"
 cli = "shoal.agents.cli_runtime:CliRuntime"

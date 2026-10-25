@@ -37,6 +37,12 @@ class Settings(BaseSettings):
         description="Operator-wide remote integrations (open integrations protocol) registered at start-up, "
         'e.g. SHOAL_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
     )
+    skill_source_cache_dir: str | None = Field(
+        None, description="Where git skill sources keep their checkouts (default: a directory under the system temp dir)."
+    )
+    skill_source_allow_local: bool = Field(
+        False, description="Let git skill sources read repositories from this server's disk (file:// URLs and paths)."
+    )
 
     oidc_issuer: str | None = Field(
         None,

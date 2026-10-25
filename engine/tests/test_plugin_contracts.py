@@ -17,6 +17,7 @@ from shoal.sdk.testing import (
     check_model_provider,
     check_sandbox_backend,
     check_secret_provider,
+    check_skill_source,
 )
 
 BUILT_INS = [
@@ -26,6 +27,7 @@ BUILT_INS = [
     ("sandboxes", "space"), ("sandboxes", "remote"), ("secrets", "env"), ("secrets", "db"),
     ("eval_sinks", "braintrust"), ("eval_sinks", "langfuse"), ("decision_providers", "llm"), ("decision_providers", "jev"),
     ("agent_runtimes", "tool-loop"), ("agent_runtimes", "cli"), ("agent_runtimes", "a2a"), ("credentials", "aws"),
+    ("skill_sources", "git"), ("skill_sources", "registry"),
 ]
 
 
@@ -81,3 +83,41 @@ async def test_decision_provider_contract():
 def test_eval_sink_contracts():
     check_eval_sink(BraintrustSink())
     check_eval_sink(LangfuseSink())
+
+
+def _skill_repo(tmp_path):
+    import subprocess
+
+
+    repo = tmp_path / "repo"
+    (repo / "skills" / "pdf").mkdir(parents=True)
+    (repo / "skills" / "pdf" / "SKILL.md").write_text("---\nname: pdf\ndescription: PDFs.\n---\nRead PDFs.\n")
+    (repo / "skills" / "pdf" / "notes.md").write_text("notes\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)}
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "v1"], check=True, env=env)
+    return repo
+
+
+async def test_skill_source_contracts(engine, tmp_path):
+    import httpx
+
+    from shoal.sdk.plugins import SkillSourceContext
+    from shoal.sdk.skill_server import create_app
+    from shoal.skills.git import GitSkillSource
+    from shoal.skills.registry import RegistrySkillSource
+
+    repo = _skill_repo(tmp_path)
+    engine.settings.skill_source_allow_local = True
+    engine.settings.skill_source_cache_dir = str(tmp_path / "cache")
+
+    git = GitSkillSource()
+    config = {"url": str(repo), "ref": "main"}
+    await check_skill_source(git, SkillSourceContext(engine, "t", "git", git.config_model.model_validate(config), git))
+
+    engine.http_transport = httpx.ASGITransport(app=create_app(GitSkillSource, config, token="tok", allow_local=True))
+    registry = RegistrySkillSource()
+    ctx = SkillSourceContext(engine, "t", "registry", registry.config_model.model_validate({"url": "http://registry.test", "token": "tok"}), registry)
+    await check_skill_source(registry, ctx)

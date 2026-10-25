@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from shoal.core.models import KIND_BY_PLURAL
 
-TENANT_PLURALS = ("identities", "blueprints", "gateways", "model-policies")
+TENANT_PLURALS = ("identities", "blueprints", "gateways", "model-policies", "skill-sources")
 RESOURCE_PLURALS = sorted(p for p in KIND_BY_PLURAL if p not in TENANT_PLURALS)
 
 NAMESPACE_PERMISSIONS: dict[str, str] = {
@@ -31,6 +31,7 @@ NAMESPACE_PERMISSIONS: dict[str, str] = {
     "secrets:read": "List secret names (values are never readable)",
     "secrets:write": "Set and delete secrets",
     "blueprints:adopt": "Adopt blueprints from the catalogue into the namespace",
+    "skills:import": "Import skills from skill sources (marketplaces) into the namespace",
     "members:read": "View namespace members",
     "members:manage": "Add and remove namespace members",
     "evals:run": "Run evaluations",
@@ -53,6 +54,8 @@ TENANT_PERMISSIONS: dict[str, str] = {
     "gateways:manage": "Create, update and delete LLM gateways (tenant-wide)",
     "model-policies:read": "View model policies",
     "model-policies:manage": "Create, update and delete model policies (tenant-wide)",
+    "skill-sources:read": "View the tenant's skill sources (marketplaces)",
+    "skill-sources:manage": "Add, configure and remove skill sources (tenant-wide)",
     "audit:read": "Read the audit log",
     "api-keys:manage": "Manage every API key in the tenant",
     "scim:provision": "Provision users and groups over SCIM",
@@ -100,7 +103,7 @@ BUILTIN_ROLES: dict[str, RoleDef] = {
         RoleDef(
             "editor",
             "Build and run: edit agents, workflows, connections and triggers, and operate runs.",
-            (*READ_ALL, *WRITE_RESOURCES, *OPERATE, "secrets:write", "blueprints:adopt"),
+            (*READ_ALL, *WRITE_RESOURCES, *OPERATE, "secrets:write", "blueprints:adopt", "skills:import"),
         ),
         RoleDef("operator", "Run and supervise: start, approve and cancel runs and campaigns.", (*READ_ALL, *OPERATE)),
         RoleDef("viewer", "Read-only access.", READ_ALL),

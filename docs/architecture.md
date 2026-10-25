@@ -331,6 +331,14 @@ leases.
   description) plus optional scripts/resources. They are stored per tenant,
   versioned, mounted into the sandbox, and listed to the agent so it can load
   them on demand.
+- **Skill sources** (`shoal.skill_sources`) are marketplaces skills are
+  imported from: `git` (Agent Skills layout, pinned to a ref), `registry`
+  (`shoal.skill-source/v1` over HTTP, which `shoal.sdk.skill_server` serves for
+  any source plugin) or a plugin. A `SkillSource` is tenant-wide and admin
+  managed, with credentials as secrets in `shared`. Importing writes a normal
+  `Skill` into a namespace labelled with source, skill, version and ref;
+  upgrades show a diff and roll back through resource versioning
+  ([skills.md](skills.md)).
 - **Tools** come from: built-ins (`shell`, `read_file`, `write_file`,
   `edit_file`, `http`), integration actions (exposed automatically, scoped by
   the connection), and MCP servers.
@@ -1090,7 +1098,7 @@ modal = "shoal_modal:ModalBackend"
 ```
 
 Groups: `shoal.integrations`, `shoal.sandboxes`, `shoal.providers`,
-`shoal.agent_runtimes`, `shoal.gateways`, `shoal.decision_providers`, `shoal.eval_sinks`,
+`shoal.agent_runtimes`, `shoal.gateways`, `shoal.decision_providers`, `shoal.eval_sinks`, `shoal.skill_sources`,
 `shoal.credentials`, `shoal.secrets`, `shoal.steps`, `shoal.orchestrators`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.

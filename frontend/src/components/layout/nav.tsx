@@ -10,6 +10,7 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  Library,
   Network,
   Plug,
   Rocket,
@@ -51,6 +52,7 @@ export const NAV: NavGroup[] = [
       { label: "Workflows", to: "workflows", icon: Workflow, namespaced: true, permission: "workflows:read", keywords: "builder graph steps" },
       { label: "Agents", to: "agents", icon: Bot, namespaced: true, permission: "agents:read", keywords: "model prompt" },
       { label: "Skills", to: "skills", icon: Sparkles, namespaced: true, permission: "skills:read", keywords: "SKILL.md" },
+      { label: "Skill marketplace", to: "skill-marketplace", icon: Library, namespaced: true, permission: "skills:read", keywords: "skills import git registry agent skills" },
       { label: "Evals", to: "evals", icon: FlaskConical, namespaced: true, permission: "evals:read", keywords: "evaluation graders quality" },
     ],
   },
@@ -78,6 +80,7 @@ export const NAV: NavGroup[] = [
       { label: "Sandboxes", to: "sandbox-profiles", icon: Boxes, namespaced: true, permission: "sandbox-profiles:read", keywords: "docker kubernetes e2b space" },
       { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
       { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read", keywords: "routing fallback" },
+      { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read", keywords: "marketplace git registry" },
     ],
   },
   {
@@ -103,6 +106,7 @@ export const ADMIN_NAV: NavItem[] = [
   { label: "Identities", to: "/admin/identities", icon: GitBranch, namespaced: false, permission: "identities:read" },
   { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read" },
   { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read" },
+  { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read" },
   { label: "Federation", to: "/admin/federation", icon: Globe, namespaced: false, permission: "federation:manage" },
   { label: "Audit log", to: "/admin/audit", icon: Activity, namespaced: false, permission: "audit:read" },
 ];

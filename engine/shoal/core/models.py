@@ -802,6 +802,25 @@ class BlueprintSpec(Model):
     )
 
 
+class SkillSourceSpec(Model):
+    """A skills marketplace the tenant imports skills from (a git repository, a registry, or any
+    ``shoal.skill_sources`` plugin). Tenant-wide; its secrets are read from the ``shared`` namespace."""
+
+    source: str = Field(description="Skill source plugin: git, registry, or any installed plugin.")
+    title: str | None = None
+    description: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict, description="Non-secret settings (see the plugin's schema).")
+    secrets: dict[str, str] = Field(default_factory=dict, description="Config field -> secret name in `shared`.")
+    namespaces: list[str] = Field(default_factory=list, description="Namespaces that may browse and import (empty: all).")
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _no_clear_text_credentials(self) -> SkillSourceSpec:
+        if bad := credential_fields(self.config):
+            raise ValueError(f"config {bad} look like credentials; map them to secrets in `shared` under secrets")
+        return self
+
+
 class EvalCase(Model):
     name: str
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -1032,6 +1051,12 @@ class Eval(ResourceBase):
     plural: ClassVar[str] = "evals"
 
 
+class SkillSource(ResourceBase):
+    kind: Literal["SkillSource"] = "SkillSource"
+    spec: SkillSourceSpec
+    plural: ClassVar[str] = "skill-sources"
+
+
 AnyResource = Annotated[
     Workflow
     | Agent
@@ -1045,7 +1070,8 @@ AnyResource = Annotated[
     | Gateway
     | ModelPolicy
     | Blueprint
-    | Eval,
+    | Eval
+    | SkillSource,
     Field(discriminator="kind"),
 ]
 
@@ -1053,7 +1079,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

@@ -86,3 +86,14 @@ map.
 Agent runtimes receive an `AgentInvocation` (agent, prompt, tools, sandbox, model client) and
 return an `AgentResult` whose outputs match the step's schema. Cloud credential providers issue
 an STS-style session for a `CloudIdentity`. See `shoal/cloud/aws.py`.
+
+## Skill sources (`shoal.skill_sources`)
+
+Marketplaces that skills are imported from. Subclass `SkillSource` with a pydantic
+`config_model` (fields typed `SecretStr` come from secrets in `shared`), implement `list` and
+`fetch`, and optionally `search` (the default filters the listing). `fetch` returns a
+`SkillBundle`: the SKILL.md body (`parse_skill_md` splits off the frontmatter), the other files as
+text, a `version` and, where there is one, the exact `ref`. An unknown skill raises
+`SkillSourceError` with status 404. Check it with `check_skill_source`; `git` and `registry` are
+the reference implementations, and `shoal.sdk.skill_server` serves any source over
+`shoal.skill-source/v1` so it can run as its own service. See [skills.md](skills.md).

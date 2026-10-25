@@ -251,13 +251,14 @@ Every agent and script step runs in a sandbox: `local`, `docker`, `kubernetes`, 
 protocol. Sandbox profiles are per namespace, so one team can run on Kubernetes while another uses E2B.
 
 Everything above is a plugin: integrations, model providers, sandboxes, secret backends, eval sinks,
-decision providers, agent runtimes and cloud credential providers all follow one pattern (a base
+decision providers, agent runtimes, cloud credential providers and skill sources all follow one pattern (a base
 class, an entry point and a contract test), so new ones install without engine changes
 ([guide](docs/plugins.md)).
 
 ### Integrations, campaigns and blueprints
 - **GitHub, Jira, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
+- **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
 - **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue.
 
@@ -293,7 +294,7 @@ One container image for the API, workers and CLI; docker compose and a Helm char
 metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 
 ### In progress
-A Temporal orchestrator backend and a skills marketplace.
+A Temporal orchestrator backend.
 
 ## Documentation
 
@@ -302,6 +303,7 @@ A Temporal orchestrator backend and a skills marketplace.
 | [Architecture](docs/architecture.md) | Concepts, the runtime, plugin contracts and the API surface |
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
+| [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
 | [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
 | [Terraform provider](terraform-provider/docs/index.md) | Managing Shoal as code |

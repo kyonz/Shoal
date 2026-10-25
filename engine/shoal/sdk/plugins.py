@@ -38,6 +38,7 @@ from shoal.evals.sinks.base import EvalExport, EvalSink, ExportResult, ScoredCas
 from shoal.integrations.base import Integration
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec
 from shoal.secrets.providers import SecretProvider
+from shoal.skills.base import SkillBundle, SkillPage, SkillSource, SkillSourceContext, SkillSummary
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ PLUGIN_GROUPS: dict[str, PluginGroup] = {
         PluginGroup("agent_runtimes", AgentRuntime, "Run an agent: a tool loop, a CLI agent, or a remote agent.",
                     "any A2A agent via the `a2a` runtime"),
         PluginGroup("credentials", CredentialProvider, "Issue short-lived cloud credentials for a CloudIdentity."),
+        PluginGroup("skill_sources", SkillSource, "Marketplaces skills are imported from: list, search and fetch SKILL.md bundles.",
+                    "the `registry` source's shoal.skill-source/v1 protocol, which `shoal.sdk.skill_server` serves for any source"),
     )
 }
 
@@ -94,6 +97,11 @@ __all__ = [
     "SandboxSpec",
     "ScoredCase",
     "SecretProvider",
+    "SkillBundle",
+    "SkillPage",
+    "SkillSource",
+    "SkillSourceContext",
+    "SkillSummary",
     "ToolDef",
     "Trace",
     "TraceSpan",
