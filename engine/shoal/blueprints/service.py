@@ -14,6 +14,7 @@ is left untouched for run time.
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import ValidationError
@@ -33,6 +34,8 @@ EXPR = re.compile(r"\{\{\s*((?:(?!\}\}).)+?)\s*\}\}", re.DOTALL)
 LABEL_BLUEPRINT = "shoal.dev/blueprint"
 LABEL_VERSION = "shoal.dev/blueprint-version"
 LABEL_ADOPTION = "shoal.dev/adoption"
+
+Authorize = Callable[[set[str], set[str]], Awaitable[None]]
 
 
 def _is_template(expr: str) -> bool:
@@ -191,7 +194,10 @@ class BlueprintService:
         dry_run: bool = False,
         can_adopt_drafts: bool = False,
         adoption: t.BlueprintAdoption | None = None,
+        authorize: Authorize | None = None,
     ) -> dict[str, Any]:
+        """Render and apply a blueprint. ``authorize`` is called with the kinds the adoption writes and
+        the kinds it would delete (resources a new version drops) before anything is written."""
         blueprint = await self.blueprint(tenant_id, name, version)
         spec = blueprint.spec
         allowed = (
@@ -227,6 +233,8 @@ class BlueprintService:
             plan.append({"kind": kind, "name": resource.metadata.name, "plural": resource.plural, "outcome": outcome})
         previous = {(r["kind"], r["name"]) for r in (adoption.resources if adoption else [])}
         dropped = previous - {(r["kind"], r["name"]) for r in plan}  # resources the new version no longer has
+        if authorize is not None:
+            await authorize({r["kind"] for r in plan}, {kind for kind, _ in dropped})
         if dry_run:
             return {
                 "blueprint": name,
@@ -291,6 +299,7 @@ class BlueprintService:
         version: str | None,
         params: dict[str, Any] | None,
         dry_run: bool = False,
+        authorize: Authorize | None = None,
     ) -> dict[str, Any]:
         adoption = await self.adoption(tenant_id, adoption_id)
         target = await self.blueprint(tenant_id, adoption.blueprint, version)
@@ -306,29 +315,31 @@ class BlueprintService:
             version=version,
             dry_run=dry_run,
             adoption=adoption,
+            authorize=authorize,
         )
 
-    async def remove(self, tenant_id: str, adoption_id: str) -> list[dict[str, str]]:
+    async def remove(self, tenant_id: str, adoption_id: str) -> dict[str, list[dict[str, str]]]:
+        """Delete the adoption and the resources it still owns. Resources that were deleted or taken
+        over (their adoption label changed) are left alone and reported under ``kept``."""
         adoption = await self.adoption(tenant_id, adoption_id)
-        removed = []
+        removed, kept = [], []
         for ref in adoption.resources:
+            if not await self._in_namespace(tenant_id, ref["kind"], ref["name"], adoption.namespace):
+                kept.append({**ref, "reason": "already deleted"})
+                continue
             existing = await self.engine.store.find_resource(
                 tenant_id, ref["kind"], ref["name"], namespace=adoption.namespace
             )
-            if (
-                existing
-                and existing.metadata.labels.get(LABEL_ADOPTION) == adoption_id
-                and await self._in_namespace(tenant_id, ref["kind"], ref["name"], adoption.namespace)
-            ):
-                await self.engine.store.delete_resource(
-                    tenant_id, ref["kind"], ref["name"], namespace=adoption.namespace
-                )
-                removed.append(ref)
+            if existing is None or existing.metadata.labels.get(LABEL_ADOPTION) != adoption_id:
+                kept.append({**ref, "reason": f"no longer labelled {LABEL_ADOPTION}={adoption_id}"})
+                continue
+            await self.engine.store.delete_resource(tenant_id, ref["kind"], ref["name"], namespace=adoption.namespace)
+            removed.append(ref)
         async with self.engine.store.session() as s:
             row = await s.get(t.BlueprintAdoption, adoption_id)
             if row is not None:
                 await s.delete(row)
-        return removed
+        return {"removed": removed, "kept": kept}
 
     async def _in_namespace(self, tenant_id: str, kind: str, name: str, namespace: str) -> bool:
         try:

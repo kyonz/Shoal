@@ -75,6 +75,13 @@ shoal eval run triage-eval --baseline previous --fail-under 0.9 --max-regression
 With `--wait` the command exits 1 unless the eval completes and its gate passes; the gate's
 reasons are printed. `shoal eval get <id>` shows a past run.
 
+```sh
+shoal eval list triage-eval                   # recent runs: status, score, pass rate, gate
+shoal eval compare <candidate-id> <baseline-id>   # case-by-case diff, regressions and improvements
+shoal eval scores triage-eval                 # scores per workflow version
+shoal eval cancel <id>
+```
+
 ## Skills from marketplaces
 
 ```sh
