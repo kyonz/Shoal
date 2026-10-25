@@ -11,7 +11,7 @@ export default function ResourceSchemas() {
   return (
     <div>
       <p className="mb-4 text-[13px] leading-relaxed text-muted">
-        Every resource uses the same envelope: <code className="font-mono text-[12px]">apiVersion: awm.dev/v1</code>,{" "}
+        Every resource uses the same envelope: <code className="font-mono text-[12px]">apiVersion: shoal.dev/v1</code>,{" "}
         <code className="font-mono text-[12px]">kind</code>, <code className="font-mono text-[12px]">metadata</code> (name, description, labels,
         annotations) and the <code className="font-mono text-[12px]">spec</code> described below. Namespaced kinds live at{" "}
         <code className="font-mono text-[12px]">/v1/namespaces/{"{ns}"}/{"{plural}"}/{"{name}"}</code>; tenant kinds at{" "}

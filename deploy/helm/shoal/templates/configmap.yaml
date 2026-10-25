@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "shoal.fullname" . }}
+  labels:
+    {{- include "shoal.labels" . | nindent 4 }}
+data:
+  SHOAL_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
+  SHOAL_CORS_ORIGINS: {{ (.Values.config.corsOrigins | default (list .Values.config.publicUrl)) | toJson | quote }}
+  SHOAL_DEFAULT_SANDBOX_BACKEND: {{ .Values.config.defaultSandboxBackend | quote }}
+  SHOAL_DEFAULT_DECISION_PROVIDER: {{ .Values.config.defaultDecisionProvider | quote }}
+  SHOAL_WORKER_CONCURRENCY: {{ .Values.config.workerConcurrency | quote }}
+  SHOAL_LEASE_SECONDS: {{ .Values.config.leaseSeconds | quote }}
+  SHOAL_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  SHOAL_LOG_JSON: {{ .Values.config.logJson | quote }}

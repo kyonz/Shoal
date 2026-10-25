@@ -211,7 +211,7 @@ export default function WorkflowList() {
   );
 }
 
-const SAMPLE = `apiVersion: awm.dev/v1
+const SAMPLE = `apiVersion: shoal.dev/v1
 kind: Workflow
 metadata:
   name: hello

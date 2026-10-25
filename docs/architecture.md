@@ -17,7 +17,7 @@ first release must satisfy.
 
 ### Goals
 
-1. **Pluggable engine.** The core is a Python library (`awm`) with typed
+1. **Pluggable engine.** The core is a Python library (`shoal`) with typed
    (pydantic v2) contracts. Every external dependency sits behind a protocol and
    is discovered through Python entry points.
 2. **Usable directly.** A polished React UI and a CLI sit on top of the same
@@ -65,7 +65,7 @@ first release must satisfy.
 | **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
 
-All of these are pydantic models in `awm.core.models` and are serialisable to
+All of these are pydantic models in `shoal.core.models` and are serialisable to
 YAML/JSON, so they can be authored as files (GitOps) or via the API/UI.
 
 ---
@@ -114,18 +114,18 @@ added as a plugin later without touching workflows.
 ## 4. Repository layout
 
 ```
-engine/                 Python package `awm` (library + server + worker + CLI)
-  awm/core/             pydantic models, workflow schema, expressions, errors
-  awm/plugins/          plugin registry (entry points) and base protocols
-  awm/runtime/          durable executor, scheduler, step handlers
-  awm/agents/           agent runtime, model providers, skills, tools
-  awm/sandbox/          sandbox protocol + local/docker/kubernetes/e2b backends
-  awm/integrations/     integration framework + github, jira, webhook, schedule
-  awm/campaigns/        campaign planner, controller, policies
-  awm/store/            SQLAlchemy models, repositories, migrations (Alembic)
-  awm/secrets/          secret providers (env, encrypted-db, kubernetes)
-  awm/api/              FastAPI app, routers, auth, tenancy, SSE
-  awm/cli/              `awm` CLI (Typer)
+engine/                 Python package `shoal` (library + server + worker + CLI)
+  shoal/core/             pydantic models, workflow schema, expressions, errors
+  shoal/plugins/          plugin registry (entry points) and base protocols
+  shoal/runtime/          durable executor, scheduler, step handlers
+  shoal/agents/           agent runtime, model providers, skills, tools
+  shoal/sandbox/          sandbox protocol + local/docker/kubernetes/e2b backends
+  shoal/integrations/     integration framework + github, jira, webhook, schedule
+  shoal/campaigns/        campaign planner, controller, policies
+  shoal/store/            SQLAlchemy models, repositories, migrations (Alembic)
+  shoal/secrets/          secret providers (env, encrypted-db, kubernetes)
+  shoal/api/              FastAPI app, routers, auth, tenancy, SSE
+  shoal/cli/              `shoal` CLI (Typer)
   tests/
 frontend/               React + TypeScript + Vite UI
 examples/               Workflow, campaign and trigger definitions (the journeys)
@@ -137,11 +137,11 @@ docs/                   Architecture, guides, API reference, plugin authoring
 
 ## 5. Workflow model
 
-Workflows are declarative and versioned (`apiVersion: awm.dev/v1`). Example
+Workflows are declarative and versioned (`apiVersion: shoal.dev/v1`). Example
 (abbreviated from `examples/jira-bugfix/workflow.yaml`):
 
 ```yaml
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata:
   name: jira-bugfix
@@ -263,11 +263,11 @@ leases.
 
 ## 7. Agents, skills and tools
 
-- **Model providers** (`awm.providers` entry point): `anthropic` (default),
+- **Model providers** (`shoal.providers` entry point): `anthropic` (default),
   `openai`-compatible, `bedrock`, `vertex`, plus `scripted` (deterministic, for
   tests). A provider implements one async method: `complete(messages, tools,
   …) -> ModelResponse`.
-- **Agent runtimes** (`awm.agent_runtimes`):
+- **Agent runtimes** (`shoal.agent_runtimes`):
   - `tool-loop` — Shoal's own tool-use loop: model ↔ tools until the model
     calls the built-in `finish` tool with outputs matching the step schema.
   - `cli` — run an external coding agent CLI (e.g. Claude Code, Codex, Aider)
@@ -292,7 +292,7 @@ leases.
 Agents act on external systems, so *how they authenticate* is pluggable and
 kept out of the model's reach.
 
-- **Credential providers** (`awm.credentials` entry point) mint the credential
+- **Credential providers** (`shoal.credentials` entry point) mint the credential
   a step needs at the moment it needs it:
   - `static` — a tenant secret (PAT, API token);
   - `oauth2` — user-delegated OAuth (authorization-code flow run by the UI
@@ -340,7 +340,7 @@ kept out of the model's reach.
 
 Model access is pluggable at two levels.
 
-- **Gateways** (`awm.gateways` entry point) are how requests reach a model:
+- **Gateways** (`shoal.gateways` entry point) are how requests reach a model:
   `anthropic` (direct, official SDK), `bedrock`, `vertex`, `foundry`, any
   Anthropic-compatible base URL (LiteLLM proxy, Portkey, Cloudflare AI
   Gateway, an internal gateway), and `openai-compatible` (OpenRouter, vLLM,
@@ -379,7 +379,7 @@ quality is measured, not assumed.
   model policy), with diffs against a baseline.
 - **Gates.** An eval can gate promotion of a new workflow version or model
   policy (must not regress beyond a threshold), and runs in CI through the
-  API/CLI (`awm eval run --baseline v12 --fail-under 0.9`).
+  API/CLI (`shoal eval run --baseline v12 --fail-under 0.9`).
 - **Online evals** sample production runs (e.g. "was the Jira fix PR
   merged within 7 days?", judge-scored PR quality) and trend them on the
   dashboard.
@@ -389,7 +389,7 @@ quality is measured, not assumed.
   trends them, an eval run can pin `variants` (version × input overrides) to
   A/B versions in one run, and `baseline` (`previous`, `version:N` or a run
   id) adds a case-by-case diff (regressions, improvements, grader deltas).
-- **Eval platforms.** `awm.eval_sinks` plugins connect Braintrust and
+- **Eval platforms.** `shoal.eval_sinks` plugins connect Braintrust and
   Langfuse (and any other platform): finished eval runs export as
   experiments / sessions (one trace per case with step spans, plus every
   grader score), production runs export as traces, and datasets import as
@@ -410,7 +410,7 @@ and a confidence value, in roughly 70-500 ms and at a fraction of LLM cost.
 They cannot generate text or code, so they complement agents rather than
 replace them.
 
-- **Decision providers** (`awm.decision_providers` entry point) share one
+- **Decision providers** (`shoal.decision_providers` entry point) share one
   contract: `decide(state, questions) -> answers`. Question types are
   `choice` (pick one of up to 255 options), `score` (place on an ordered
   rubric) and `boolean` (Jev's *noul*: probability a statement is true).
@@ -524,11 +524,11 @@ class Integration(Protocol):
 Anyone can build an integration; the built-ins use exactly the same public
 contract, so they double as reference implementations.
 
-- **Python SDK** (`awm.sdk`, re-exporting the `Integration` base,
+- **Python SDK** (`shoal.sdk`, re-exporting the `Integration` base,
   `@action`/`@resource` decorators, `IntegrationEvent`, `ConnectionContext` and
-  helpers) plus a **test kit** (`awm.sdk.testing`: an in-memory engine, a
+  helpers) plus a **test kit** (`shoal.sdk.testing`: an in-memory engine, a
   mock HTTP transport, webhook signing helpers and contract tests that every
-  integration should pass) and a project template (`awm integrations new
+  integration should pass) and a project template (`shoal integrations new
   linear`) producing a package with entry points, tests and CI.
 - **Out-of-process integrations** over HTTP, so integrations can be written in
   any language and deployed separately: the service serves a manifest
@@ -544,8 +544,8 @@ contract, so they double as reference implementations.
   packages, remote) appear in `/v1/integrations` and the UI catalogue with
   their schemas; community integrations can be listed alongside blueprints
   (§10.1) with verification status.
-- Implemented in `engine/awm/sdk/` (SDK, `awm.sdk.testing`, `awm.sdk.server`,
-  `awm.sdk.scaffold`), `engine/awm/integrations/remote.py` (the `remote`
+- Implemented in `engine/shoal/sdk/` (SDK, `shoal.sdk.testing`, `shoal.sdk.server`,
+  `shoal.sdk.scaffold`), `engine/shoal/integrations/remote.py` (the `remote`
   adapter and `register_remote_integration`) and `templates/integration/`.
   The author guide and the full protocol are in
   [integrations.md](integrations.md).
@@ -557,7 +557,7 @@ contract, so they double as reference implementations.
 A campaign = **workflow** × **target selector** × **policies**.
 
 ```yaml
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Campaign
 metadata: {name: test-coverage-uplift}
 spec:
@@ -610,7 +610,7 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   dry_run}`. Expressions over `params`, `prefix` and `blueprint` are rendered.
   Run-time expressions (`inputs`, `steps`, `event`, …) are left as written.
   The resulting resources are applied in that namespace and labelled with
-  `awm.dev/blueprint`, `awm.dev/blueprint-version` and `awm.dev/adoption`, so
+  `shoal.dev/blueprint`, `shoal.dev/blueprint-version` and `shoal.dev/adoption`, so
   the workflow can be opened in the visual builder and customised. `prefix`
   lets one namespace adopt the same blueprint twice, and a name clash is a
   409. Adoptions are listed under `…/blueprint-adoptions`. `PUT …/{id}
@@ -669,7 +669,7 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   (`userName eq "…"`) and PATCH, authenticated by a per-tenant SCIM bearer
   token. Deactivating a user in the IdP disables their sessions and API keys
   immediately; group membership changes flow through to role bindings.
-- **API keys**: `awm_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
+- **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
   than the owner holds), with expiry, last-used, and revocation.
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
@@ -706,8 +706,8 @@ credential performed it*, and lets policy decide what the run may do.
 - **Governance policy (GitHub App mode)**, enforced inside the integration so
   workflows cannot bypass it, with every decision written to the audit log
   and the step output:
-  - *Provenance labels* on PRs/issues, e.g. `awm:automated` and
-    `awm:initiator-can-merge` / `awm:initiator-cannot-merge`, plus a
+  - *Provenance labels* on PRs/issues, e.g. `shoal:automated` and
+    `shoal:initiator-can-merge` / `shoal:initiator-cannot-merge`, plus a
     `Requested-by: @login` trailer in PR bodies and `Co-authored-by` commit
     trailers, so downstream systems can tell whether the work was driven by
     someone with the right permissions.
@@ -764,11 +764,11 @@ one control plane, and a federated deployment can also sit next to the hub.
   replica can take the call and any replica can serve the poll.)
 - **Enrollment.** An operator creates a federated tenant on the hub, which
   returns a single-use enrollment token. The member's admin runs
-  `awm federation join <hub-url> --token … --max-mode read_write --namespace …
+  `shoal federation join <hub-url> --token … --max-mode read_write --namespace …
   --grant tenant-admin=hub_group:platform`, choosing the **maximum access** it
   grants, which namespaces it exposes, and the first role bindings for hub
-  people. The hub stores the link (`awm federation link <tenant>` creates it
-  and `awm federation links` shows connection health), never the member's
+  people. The hub stores the link (`shoal federation link <tenant>` creates it
+  and `shoal federation links` shows connection health), never the member's
   data or secrets. Only an empty tenant can be federated.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -910,10 +910,10 @@ matches the running version.
 ## 15. Observability and operations
 
 - Structured JSON logs, OpenTelemetry traces (run → step → tool call),
-  Prometheus metrics (`awm_runs_total`, `awm_step_duration_seconds`,
-  `awm_tokens_total`, `awm_sandbox_seconds_total`).
+  Prometheus metrics (`shoal_runs_total`, `shoal_step_duration_seconds`,
+  `shoal_tokens_total`, `shoal_sandbox_seconds_total`).
 - Deploy: `docker compose up` (API, worker, Postgres, UI) and a Helm chart.
-- Config via env vars (`AWM_DATABASE_URL`, `AWM_SECRET_KEY`, …) with a
+- Config via env vars (`SHOAL_DATABASE_URL`, `SHOAL_SECRET_KEY`, …) with a
   pydantic-settings model.
 
 ---
@@ -923,16 +923,16 @@ matches the running version.
 Plugins are normal Python packages exposing entry points:
 
 ```toml
-[project.entry-points."awm.integrations"]
-linear = "awm_linear:LinearIntegration"
+[project.entry-points."shoal.integrations"]
+linear = "shoal_linear:LinearIntegration"
 
-[project.entry-points."awm.sandboxes"]
-modal = "awm_modal:ModalBackend"
+[project.entry-points."shoal.sandboxes"]
+modal = "shoal_modal:ModalBackend"
 ```
 
-Groups: `awm.integrations`, `awm.sandboxes`, `awm.providers`,
-`awm.agent_runtimes`, `awm.gateways`, `awm.decision_providers`, `awm.eval_sinks`,
-`awm.credentials`, `awm.secrets`, `awm.steps`, `awm.orchestrators`.
+Groups: `shoal.integrations`, `shoal.sandboxes`, `shoal.providers`,
+`shoal.agent_runtimes`, `shoal.gateways`, `shoal.decision_providers`, `shoal.eval_sinks`,
+`shoal.credentials`, `shoal.secrets`, `shoal.steps`, `shoal.orchestrators`.
 The UI renders connection/action forms from the plugins' JSON schemas, so a
 new plugin needs no frontend changes.
 
@@ -953,4 +953,4 @@ new plugin needs no frontend changes.
 
 ## 18. Open questions
 
-- ~~Product name~~ — decided: **Shoal**. The Python package, CLI, `AWM_*` settings and `awm.dev/v1` apiVersion keep their `awm` names until a later release.
+- ~~Product name~~ — decided: **Shoal**. The Python package, CLI, `SHOAL_*` settings and `shoal.dev/v1` apiVersion keep their `shoal` names until a later release.

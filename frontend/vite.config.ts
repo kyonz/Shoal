@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
-const api = process.env.AWM_API_URL ?? "http://localhost:8080";
+const api = process.env.SHOAL_API_URL ?? "http://localhost:8080";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

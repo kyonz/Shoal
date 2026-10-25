@@ -23,7 +23,7 @@ and should be updated alongside the code.
 | Engine, API, worker, CLI | Python 3.11+, [uv](https://docs.astral.sh/uv/) | `engine/` |
 | Web UI | Node.js 20+ | `frontend/` |
 | Terraform provider | Go (version in `terraform-provider/go.mod`), Terraform | `terraform-provider/` |
-| Helm chart | Helm 3 | `deploy/helm/awm/` |
+| Helm chart | Helm 3 | `deploy/helm/shoal/` |
 
 ### Engine
 
@@ -32,7 +32,7 @@ cd engine
 uv sync --all-extras
 uv run pytest -q                 # tests
 uv run ruff check .              # lint
-AWM_ADMIN_TOKEN=dev uv run awm serve   # API + worker on 127.0.0.1:8080 with SQLite
+SHOAL_ADMIN_TOKEN=dev uv run shoal serve   # API + worker on 127.0.0.1:8080 with SQLite
 ```
 
 ### Web UI

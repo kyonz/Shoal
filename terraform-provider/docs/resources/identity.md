@@ -61,7 +61,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `github` | string | optional | GitHub login. |
 | `jira_account_id` | string | optional |  |
 | `slack_id` | string | optional |  |
-| `actors` | list of string | optional | AWM actors that are this person, e.g. 'user:dana@acme.com'. |
+| `actors` | list of string | optional | Shoal actors that are this person, e.g. 'user:dana@acme.com'. |
 | `github_token_secret` | string | optional | Secret holding the user's linked GitHub OAuth token. |
 
 ## Import

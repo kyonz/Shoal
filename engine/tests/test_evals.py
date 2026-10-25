@@ -11,16 +11,16 @@ import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from awm.agents.providers.base import ModelRequest, ModelResponse
-from awm.agents.providers.scripted import set_script_function
-from awm.api.app import create_app
-from awm.core.models import parse_resource
-from awm.decisions.base import DecisionProvider, DecisionRequest, DecisionResult, answer_from_probabilities
-from awm.evals.schema import validate
+from shoal.agents.providers.base import ModelRequest, ModelResponse
+from shoal.agents.providers.scripted import set_script_function
+from shoal.api.app import create_app
+from shoal.core.models import parse_resource
+from shoal.decisions.base import DecisionProvider, DecisionRequest, DecisionResult, answer_from_probabilities
+from shoal.evals.schema import validate
 
 
 def res(kind: str, name: str, spec: dict[str, Any]):
-    return parse_resource({"apiVersion": "awm.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
+    return parse_resource({"apiVersion": "shoal.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
 
 
 def classifier(expr: str) -> dict[str, Any]:
@@ -311,7 +311,7 @@ async def test_braintrust_dataset_import_and_experiment_export(engine, tenant):
     assert bt.auth == {"Bearer sk-bt"}
     assert row.exports["braintrust"]["status"] == "exported"
     assert row.exports["braintrust"]["url"].startswith("https://www.braintrust.dev/app/acme/p/triage/experiments/")
-    assert bt.experiments[0]["metadata"]["awm_eval_run"] == row.id
+    assert bt.experiments[0]["metadata"]["shoal_eval_run"] == row.id
     roots = [e for e in bt.events if e["id"] == e["root_span_id"]]
     spans = [e for e in bt.events if e["id"] != e["root_span_id"]]
     assert len(roots) == 2 and len(spans) == 2
@@ -375,7 +375,7 @@ ADMIN = "test-admin-token"
 async def admin(engine):
     engine.settings.admin_token = SecretStr(ADMIN)
     app = create_app(engine=engine)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://awm.test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test") as client:
         r = await client.post("/v1/tenants", json={"slug": "acme", "name": "Acme"}, headers={"Authorization": f"Bearer {ADMIN}"})
         assert r.status_code == 201, r.text
         client.headers["Authorization"] = f"Bearer {r.json()['api_key']}"

@@ -1,4 +1,4 @@
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: SandboxProfile
 metadata:
   name: default
@@ -7,14 +7,14 @@ spec:
   backend: local
   scope: run
 ---
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: SandboxProfile
 metadata:
   name: k8s
   description: One pod per run on Kubernetes (gVisor), workspace shared across steps.
 spec:
   backend: kubernetes
-  image: ghcr.io/kyonz/awm-sandbox:latest
+  image: ghcr.io/kyonz/shoal-sandbox:latest
   cpu: 2
   memory_mb: 4096
   scope: run
@@ -22,10 +22,10 @@ spec:
   network:
     egress: allow
   config:
-    namespace: awm-sandboxes
+    namespace: shoal-sandboxes
     runtime_class: gvisor
 ---
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: SandboxProfile
 metadata:
   name: space

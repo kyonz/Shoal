@@ -7,16 +7,16 @@ from typing import Any
 
 import httpx
 
-from awm.agents.providers.base import ModelRequest, ModelResponse, ProviderUnavailable, ToolDef
-from awm.agents.providers.openai_compat import OpenAICompatibleProvider, to_openai_messages
-from awm.agents.providers.scripted import set_script_function
-from awm.core.models import DecisionQuestion, parse_resource
-from awm.decisions.base import DecisionProvider, DecisionRequest, DecisionResult, answer_from_probabilities
-from awm.decisions.jev import JevProvider
+from shoal.agents.providers.base import ModelRequest, ModelResponse, ProviderUnavailable, ToolDef
+from shoal.agents.providers.openai_compat import OpenAICompatibleProvider, to_openai_messages
+from shoal.agents.providers.scripted import set_script_function
+from shoal.core.models import DecisionQuestion, parse_resource
+from shoal.decisions.base import DecisionProvider, DecisionRequest, DecisionResult, answer_from_probabilities
+from shoal.decisions.jev import JevProvider
 
 
 def res(kind: str, name: str, spec: dict[str, Any]):
-    return parse_resource({"apiVersion": "awm.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
+    return parse_resource({"apiVersion": "shoal.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
 
 
 class FakeDecider(DecisionProvider):
@@ -291,8 +291,8 @@ async def test_difficulty_router_picks_rule(engine, tenant):
 
 
 async def test_weighted_selection_is_deterministic():
-    from awm.core.models import ModelRule
-    from awm.llm.router import ModelRouter
+    from shoal.core.models import ModelRule
+    from shoal.llm.router import ModelRouter
 
     rule = ModelRule.model_validate(
         {"name": "ab", "strategy": "weighted", "candidates": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}]}

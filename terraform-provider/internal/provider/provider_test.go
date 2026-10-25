@@ -60,14 +60,14 @@ func startEngine() (func(), error) {
 	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
 	const admin = "acc-admin-token"
 
-	cmd := exec.Command("uv", "run", "--quiet", "uvicorn", "--factory", "awm.api.app:create_app",
+	cmd := exec.Command("uv", "run", "--quiet", "uvicorn", "--factory", "shoal.api.app:create_app",
 		"--host", "127.0.0.1", "--port", fmt.Sprint(port), "--log-level", "warning")
 	cmd.Dir = engineDir
 	cmd.Env = append(os.Environ(),
-		"AWM_DATABASE_URL=sqlite+aiosqlite:///"+filepath.Join(tmp, "shoal.db"),
-		"AWM_ADMIN_TOKEN="+admin,
-		"AWM_PUBLIC_URL="+endpoint,
-		"AWM_LOCAL_SANDBOX_ROOT="+filepath.Join(tmp, "sandboxes"),
+		"SHOAL_DATABASE_URL=sqlite+aiosqlite:///"+filepath.Join(tmp, "shoal.db"),
+		"SHOAL_ADMIN_TOKEN="+admin,
+		"SHOAL_PUBLIC_URL="+endpoint,
+		"SHOAL_LOCAL_SANDBOX_ROOT="+filepath.Join(tmp, "sandboxes"),
 	)
 	logFile, err := os.Create(filepath.Join(tmp, "engine.log"))
 	if err != nil {

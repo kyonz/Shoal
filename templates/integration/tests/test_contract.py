@@ -1,8 +1,8 @@
 """The Shoal integration contract: schemas, naming, secrets and webhook signing."""
 
-from awm.sdk.testing import IntegrationContract, signed_webhook
+from shoal.sdk.testing import IntegrationContract, signed_webhook
 
-from awm_starter import StarterIntegration
+from shoal_starter import StarterIntegration
 
 
 class TestStarterContract(IntegrationContract):

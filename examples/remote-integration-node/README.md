@@ -2,18 +2,18 @@
 
 A complete Shoal integration in ~180 lines of dependency-free Node.js, to show
 that integrations can be written in any language. It implements the
-`awm.integration/v1` protocol (see [docs/integrations.md](../../docs/integrations.md)).
+`shoal.integration/v1` protocol (see [docs/integrations.md](../../docs/integrations.md)).
 
 ```bash
-AWM_INTEGRATION_TOKEN=change-me node server.mjs
+SHOAL_INTEGRATION_TOKEN=change-me node server.mjs
 # check it against the contract every integration must pass
-python -m awm.sdk.testing.contract http://127.0.0.1:8080 --token change-me
+python -m shoal.sdk.testing.contract http://127.0.0.1:8080 --token change-me
 ```
 
 Connect it to a tenant:
 
 ```yaml
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Connection
 metadata: { name: incidents }
 spec:

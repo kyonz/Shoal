@@ -1,4 +1,4 @@
-"""The ``awm`` CLI against an in-process server (with an embedded worker)."""
+"""The ``shoal`` CLI against an in-process server (with an embedded worker)."""
 
 from __future__ import annotations
 
@@ -10,17 +10,17 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from typer.testing import CliRunner
 
-from awm.api.app import create_app
-from awm.cli import client as cli_client
-from awm.cli import config
-from awm.cli.main import app
-from awm.config import Settings
+from shoal.api.app import create_app
+from shoal.cli import client as cli_client
+from shoal.cli import config
+from shoal.cli.main import app
+from shoal.config import Settings
 
 ADMIN = "cli-admin-token"
-SERVER = "http://awm.test"
+SERVER = "http://shoal.test"
 
 HELLO = """
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata: {name: hello, description: Says hello, labels: {team: platform}}
 spec:
@@ -31,7 +31,7 @@ spec:
 """
 
 BROKEN = """
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata: {name: broken}
 spec:
@@ -43,12 +43,12 @@ spec:
 @pytest.fixture
 def server(tmp_path, monkeypatch):
     """An app on its own loop (TestClient's portal), with the CLI's HTTP routed to it."""
-    monkeypatch.setenv("AWM_LOCAL_SANDBOX_ROOT", str(tmp_path / "sandboxes"))
-    monkeypatch.setenv("AWM_CONFIG", str(tmp_path / "cli.yaml"))
-    for var in ("AWM_SERVER", "AWM_TOKEN", "AWM_NAMESPACE", "AWM_TENANT", "AWM_CONTEXT"):
+    monkeypatch.setenv("SHOAL_LOCAL_SANDBOX_ROOT", str(tmp_path / "sandboxes"))
+    monkeypatch.setenv("SHOAL_CONFIG", str(tmp_path / "cli.yaml"))
+    for var in ("SHOAL_SERVER", "SHOAL_TOKEN", "SHOAL_NAMESPACE", "SHOAL_TENANT", "SHOAL_CONTEXT"):
         monkeypatch.delenv(var, raising=False)
     settings = Settings(
-        database_url=f"sqlite+aiosqlite:///{tmp_path}/awm.db", public_url=SERVER,
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/shoal.db", public_url=SERVER,
         admin_token=SecretStr(ADMIN), poll_interval_seconds=0.05,
     )
     with TestClient(create_app(settings, run_worker=True), base_url=SERVER) as http:
@@ -192,7 +192,7 @@ def test_admin_token_with_tenant_header(cli, tenant_key):
 
 
 def test_input_parsing():
-    from awm.cli.main import _parse_inputs
+    from shoal.cli.main import _parse_inputs
 
     assert _parse_inputs(["n=3", "flag=true", "s=hello", "obj={\"a\": 1}", "eq=a=b"], None) == {
         "n": 3, "flag": True, "s": "hello", "obj": {"a": 1}, "eq": "a=b",
@@ -200,7 +200,7 @@ def test_input_parsing():
 
 
 TRIAGE = """
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata: {name: triage}
 spec:
@@ -209,7 +209,7 @@ spec:
   steps:
     - {id: classify, type: set, values: {label: "{{ 'bug' if 'crash' in inputs.text else 'feature' }}"}}
 ---
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Eval
 metadata: {name: triage-eval}
 spec:

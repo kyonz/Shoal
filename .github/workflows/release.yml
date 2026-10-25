@@ -51,7 +51,7 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Package and push
         run: |
-          version="$(grep '^version:' deploy/helm/awm/Chart.yaml | cut -d' ' -f2)"
-          helm package deploy/helm/awm --version "$version" --app-version "$version" -d dist
+          version="$(grep '^version:' deploy/helm/shoal/Chart.yaml | cut -d' ' -f2)"
+          helm package deploy/helm/shoal --version "$version" --app-version "$version" -d dist
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm push "dist/awm-$version.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          helm push "dist/shoal-$version.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"

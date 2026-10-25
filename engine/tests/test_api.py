@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from awm.api.app import create_app
+from shoal.api.app import create_app
 
 ADMIN = "test-admin-token"
 
@@ -24,7 +24,7 @@ HELLO = {
 async def api(engine):
     engine.settings.admin_token = SecretStr(ADMIN)
     app = create_app(engine=engine)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://awm.test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test") as client:
         yield client
 
 
@@ -72,7 +72,7 @@ async def test_resource_put_is_create_or_replace(admin):
     r = await admin.put(url, json=HELLO)
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["apiVersion"] == "awm.dev/v1" and body["kind"] == "Workflow"
+    assert body["apiVersion"] == "shoal.dev/v1" and body["kind"] == "Workflow"
     assert body["metadata"]["name"] == "hello" and body["metadata"]["namespace"] == "team-a"
     assert body["metadata"]["version"] == 1 and body["metadata"]["labels"] == {"team": "platform"}
 
@@ -98,7 +98,7 @@ async def test_resource_put_is_create_or_replace(admin):
 
 async def test_apply_and_runs(admin):
     doc = """
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata: {name: hello}
 spec:
@@ -145,7 +145,7 @@ async def test_rbac_namespace_viewer(admin, api):
     await admin.put("/v1/namespaces/team-a/workflows/hello", json=HELLO)
     token = await _key_for(admin, "val", "viewer", "team-a")
 
-    viewer = httpx.AsyncClient(transport=api._transport, base_url="http://awm.test", headers={"Authorization": f"Bearer {token}"})
+    viewer = httpx.AsyncClient(transport=api._transport, base_url="http://shoal.test", headers={"Authorization": f"Bearer {token}"})
     async with viewer:
         assert (await viewer.get("/v1/namespaces/team-a/workflows/hello")).status_code == 200
         r = await viewer.put("/v1/namespaces/team-a/workflows/hello", json=HELLO)
@@ -181,7 +181,7 @@ async def test_admin_roles_and_bindings(admin):
 
 
 async def test_oidc_provider_secret_is_write_only(admin):
-    body = {"issuer": "https://idp.example.com", "client_id": "awm", "client_secret": "shh", "groups_claim": "groups"}
+    body = {"issuer": "https://idp.example.com", "client_id": "shoal", "client_secret": "shh", "groups_claim": "groups"}
     r = await admin.put("/v1/oidc-providers/okta", json=body)
     assert r.status_code == 201, r.text
     assert r.json()["has_client_secret"] is True and "shh" not in r.text
@@ -218,7 +218,7 @@ async def test_scim_users_and_groups(admin):
 async def test_a2a_inbound(admin):
     await admin.put("/v1/namespaces/default/workflows/hello", json=HELLO)
     card = (await admin.get("/v1/namespaces/default/a2a/hello/.well-known/agent-card.json")).json()
-    assert card["url"] == "http://awm.test/v1/namespaces/default/a2a/hello"
+    assert card["url"] == "http://shoal.test/v1/namespaces/default/a2a/hello"
     assert card["skills"][0]["inputSchema"]["required"] == ["name"]
 
     send = {"jsonrpc": "2.0", "id": 1, "method": "message/send",
@@ -273,7 +273,7 @@ async def test_audit_covers_writes_denials_and_failures(admin, api):
     await admin.put("/v1/namespaces/team-a/workflows/hello", json=HELLO)
     await admin.put("/v1/namespaces/team-a/workflows/broken", json={"spec": {"steps": []}})  # rejected write
     token = await _key_for(admin, "val", "viewer", "team-a")
-    viewer = httpx.AsyncClient(transport=api._transport, base_url="http://awm.test", headers={"Authorization": f"Bearer {token}"})
+    viewer = httpx.AsyncClient(transport=api._transport, base_url="http://shoal.test", headers={"Authorization": f"Bearer {token}"})
     async with viewer:
         r = await viewer.delete("/v1/namespaces/team-a/workflows/hello")
         assert r.status_code == 403 and r.headers["x-request-id"]
@@ -338,7 +338,7 @@ async def test_blueprint_adoption_lifecycle(admin, api):
     adoption = r.json()["adoption"]
     assert adoption["blueprint_version"] == "1.0.0" and adoption["params"] == {"greeting": "Hello", "team": "a"}
     wf = (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).json()
-    assert wf["metadata"]["labels"]["team"] == "a" and wf["metadata"]["labels"]["awm.dev/adoption"] == adoption["id"]
+    assert wf["metadata"]["labels"]["team"] == "a" and wf["metadata"]["labels"]["shoal.dev/adoption"] == adoption["id"]
     # run-time expressions are left alone, adoption-time ones filled in
     assert wf["spec"]["steps"][0]["values"]["text"] == "Hello {{ inputs.name }}"
 

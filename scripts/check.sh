@@ -27,7 +27,7 @@ engine() {
   uv sync --locked --all-extras --quiet
   uv run ruff check .
   uv run pytest -q
-  uv run awm --help >/dev/null
+  uv run shoal --help >/dev/null
 }
 
 frontend() {
@@ -54,29 +54,29 @@ terraform_provider() {
 }
 
 helm_chart() {
-  local chart="$root/deploy/helm/awm"
+  local chart="$root/deploy/helm/shoal"
   helm lint --strict "$chart"
   if ! have kubeconform; then echo "kubeconform not installed: skipping schema validation"; return 0; fi
-  helm template awm "$chart" | kubeconform -strict -summary -skip ServiceMonitor
-  helm template awm "$chart" \
-    --set postgresql.enabled=false,database.url=postgresql+asyncpg://u:p@db/awm \
+  helm template shoal "$chart" | kubeconform -strict -summary -skip ServiceMonitor
+  helm template shoal "$chart" \
+    --set postgresql.enabled=false,database.url=postgresql+asyncpg://u:p@db/shoal \
     --set ingress.enabled=true,api.autoscaling.enabled=true,worker.autoscaling.enabled=true \
     --set kubernetesSandboxes.enabled=true,metrics.serviceMonitor.enabled=true,api.embeddedWorker=true \
     | kubeconform -strict -summary -skip ServiceMonitor
-  helm template awm "$chart" --set secrets.existingSecret=awm-creds,worker.enabled=false \
+  helm template shoal "$chart" --set secrets.existingSecret=shoal-creds,worker.enabled=false \
     --set kubernetesSandboxes.enabled=true,kubernetesSandboxes.clusterWide=true \
     | kubeconform -strict -summary
 }
 
 image() {
   cd "$root"
-  docker build -f deploy/Dockerfile -t awm:check .
+  docker build -f deploy/Dockerfile -t shoal:check .
   docker compose -f deploy/docker-compose.yaml config -q
-  local name="awm-check-$$" port="${AWM_CHECK_PORT:-18080}"
-  docker run -d --name "$name" -p "$port:8080" -e AWM_ADMIN_TOKEN=check awm:check >/dev/null
+  local name="shoal-check-$$" port="${SHOAL_CHECK_PORT:-18080}"
+  docker run -d --name "$name" -p "$port:8080" -e SHOAL_ADMIN_TOKEN=check shoal:check >/dev/null
   trap 'docker rm -f '"$name"' >/dev/null 2>&1 || true' RETURN
   for _ in $(seq 1 30); do curl -sf "http://localhost:$port/readyz" >/dev/null && break; sleep 1; done
-  docker run --rm --network host awm:check --server "http://localhost:$port" --token check tenants create check
+  docker run --rm --network host shoal:check --server "http://localhost:$port" --token check tenants create check
 }
 
 if want engine; then step "engine: ruff + pytest"; run engine engine; fi

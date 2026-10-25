@@ -85,7 +85,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) (in
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 	if c.Tenant != "" {
-		req.Header.Set("X-AWM-Tenant", c.Tenant)
+		req.Header.Set("X-Shoal-Tenant", c.Tenant)
 	}
 	if c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)

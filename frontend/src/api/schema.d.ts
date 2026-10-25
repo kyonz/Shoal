@@ -3601,7 +3601,7 @@ export interface components {
         ResourceOut: {
             /**
              * Apiversion
-             * @default awm.dev/v1
+             * @default shoal.dev/v1
              */
             apiVersion: string;
             /** Kind */

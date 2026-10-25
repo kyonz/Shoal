@@ -22,7 +22,7 @@ A shoal is a group of fish that swim together. **Shoal** does the same for AI ag
 agent a model, skills, tools and a sandbox, wires agents into versioned workflows, and runs those
 workflows durably, whether a run takes ten seconds or waits a week for a code review.
 
-Shoal is self-hostable, multi-tenant and API-first. The web UI, the `awm` CLI and the Terraform
+Shoal is self-hostable, multi-tenant and API-first. The web UI, the `shoal` CLI and the Terraform
 provider all use the same public HTTP API, and every layer (model provider, sandbox, integration,
 secret store, eval platform) is a plugin you can swap without forking.
 
@@ -42,23 +42,23 @@ The API and UI are on <http://localhost:8080>. Create your first tenant with the
 `deploy/.env`; it prints the tenant's first API key:
 
 ```sh
-uv tool install ./engine                    # installs the `awm` CLI
-awm --server http://localhost:8080 --token "$AWM_ADMIN_TOKEN" tenants create acme
+uv tool install ./engine                    # installs the `shoal` CLI
+shoal --server http://localhost:8080 --token "$SHOAL_ADMIN_TOKEN" tenants create acme
 ```
 
 ### Without Docker
 
 ```sh
 cd engine && uv sync
-AWM_ADMIN_TOKEN=change-me uv run awm serve  # API + embedded worker on 127.0.0.1:8080, SQLite
+SHOAL_ADMIN_TOKEN=change-me uv run shoal serve  # API + embedded worker on 127.0.0.1:8080, SQLite
 ```
 
 ### Run your first workflow
 
 ```sh
-awm login http://localhost:8080 --token <api-key>
-awm apply -f examples/hello/
-awm run hello -i name=Dana --wait
+shoal login http://localhost:8080 --token <api-key>
+shoal apply -f examples/hello/
+shoal run hello -i name=Dana --wait
 ```
 
 ```text
@@ -77,7 +77,7 @@ in a GitHub org.
 ## What a workflow looks like
 
 ```yaml
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata:
   name: bugfix
@@ -145,7 +145,7 @@ The full version, with tests, Jira writeback and failure handling, is in [`examp
 
 **Operate it your way**
 - One container image for API, worker and CLI; docker compose and a Helm chart ([deploy guide](deploy/README.md)).
-- The `awm` CLI ([reference](docs/cli.md)) and a [Terraform provider](terraform-provider/README.md) that manages every resource as code.
+- The `shoal` CLI ([reference](docs/cli.md)) and a [Terraform provider](terraform-provider/README.md) that manages every resource as code.
 - Prometheus metrics, health checks and an OpenAPI spec with interactive docs at `/v1/docs`.
 
 ## Documentation
@@ -162,7 +162,7 @@ The full version, with tests, Jira writeback and failure handling, is in [`examp
 ## Repository layout
 
 ```
-engine/               Python engine: library, API server, worker and the `awm` CLI
+engine/               Python engine: library, API server, worker and the `shoal` CLI
 frontend/             React + TypeScript web UI
 terraform-provider/   Terraform provider for every Shoal resource
 deploy/               Dockerfile, docker compose and Helm chart
@@ -177,8 +177,8 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to set up a d
 environment and run the tests, and follow our [Code of Conduct](CODE_OF_CONDUCT.md). Please report
 security issues privately as described in [SECURITY.md](SECURITY.md).
 
-> **Naming note.** The project was started as "AI Workflow Manager", which is why the Python package,
-> CLI command, environment variables and resource `apiVersion` still use `awm`. These will move to
+> **Naming note.** The project was started as "Shoal", which is why the Python package,
+> CLI command, environment variables and resource `apiVersion` still use `shoal`. These will move to
 > Shoal names in a later release.
 
 ## License

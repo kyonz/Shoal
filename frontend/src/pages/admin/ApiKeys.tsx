@@ -120,7 +120,7 @@ export default function ApiKeys() {
                   <Tr key={k.id} className={cn(k.revoked_at && "opacity-60")}>
                     <Td>
                       <div className="font-medium">{k.name}</div>
-                      <div className="font-mono text-[11px] text-faint">awm_{k.prefix}_…</div>
+                      <div className="font-mono text-[11px] text-faint">shoal_{k.prefix}_…</div>
                     </Td>
                     {all && (
                       <Td className="text-muted">

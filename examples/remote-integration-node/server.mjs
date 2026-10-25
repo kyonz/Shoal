@@ -1,20 +1,20 @@
 // A remote Shoal integration in plain Node.js (no dependencies).
 //
-// It speaks the awm.integration/v1 protocol, so Shoal treats it like any built-in:
+// It speaks the shoal.integration/v1 protocol, so Shoal treats it like any built-in:
 // its actions become workflow steps and agent tools, its resources feed campaign
 // targets, and its webhooks fire triggers. The "incidents" backend is in memory
 // to keep the example self-contained; a real service would call its provider API
 // with the credentials it receives in `connection`.
 //
-//   AWM_INTEGRATION_TOKEN=change-me PORT=8080 node server.mjs
+//   SHOAL_INTEGRATION_TOKEN=change-me PORT=8080 node server.mjs
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 
-const PROTOCOL = "awm.integration/v1";
-const TOKEN = process.env.AWM_INTEGRATION_TOKEN;
-if (!TOKEN && process.env.AWM_INSECURE_NO_AUTH !== "1") {
-  console.error("set AWM_INTEGRATION_TOKEN (or AWM_INSECURE_NO_AUTH=1 for local development)");
+const PROTOCOL = "shoal.integration/v1";
+const TOKEN = process.env.SHOAL_INTEGRATION_TOKEN;
+if (!TOKEN && process.env.SHOAL_INSECURE_NO_AUTH !== "1") {
+  console.error("set SHOAL_INTEGRATION_TOKEN (or SHOAL_INSECURE_NO_AUTH=1 for local development)");
   process.exit(1);
 }
 

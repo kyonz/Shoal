@@ -93,7 +93,7 @@ export default function ResourceListPage({ plural }: { plural: string }) {
                     <Td className="font-mono text-xs text-muted">{sub ?? "—"}</Td>
                     <Td>
                       <div className="flex flex-wrap gap-1">
-                        {Object.entries(r.metadata.labels ?? {}).filter(([k]) => !k.startsWith("awm.dev/")).slice(0, 3).map(([k, v]) => (
+                        {Object.entries(r.metadata.labels ?? {}).filter(([k]) => !k.startsWith("shoal.dev/")).slice(0, 3).map(([k, v]) => (
                           <Badge key={k} className="font-mono">
                             {k}={v}
                           </Badge>

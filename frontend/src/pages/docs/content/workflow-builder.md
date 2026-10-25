@@ -1,6 +1,6 @@
 # Using the workflow builder
 
-The visual builder edits the same declarative workflow (`apiVersion: awm.dev/v1`, `kind: Workflow`) you can write by hand. Anything you build on the canvas can be read, diffed and applied as YAML, and anything written as YAML opens on the canvas.
+The visual builder edits the same declarative workflow (`apiVersion: shoal.dev/v1`, `kind: Workflow`) you can write by hand. Anything you build on the canvas can be read, diffed and applied as YAML, and anything written as YAML opens on the canvas.
 
 ## The canvas
 

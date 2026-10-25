@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "gen:api": "openapi-typescript ${AWM_API_URL:-http://localhost:8080}/v1/openapi.json -o src/api/schema.d.ts"
+    "gen:api": "openapi-typescript ${SHOAL_API_URL:-http://localhost:8080}/v1/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",

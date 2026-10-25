@@ -1,0 +1,230 @@
+"""Built-in step handlers: set, action, script, wait, approval, workflow."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Any
+
+from shoal.core.errors import StepError
+from shoal.core.models import (
+    ActionStep,
+    ApprovalStep,
+    RunStatus,
+    ScriptStep,
+    SetStep,
+    WaitStep,
+    WorkflowCallStep,
+)
+from shoal.integrations.base import IntegrationError
+from shoal.runtime.context import Completed, StepContext, StepResult, Suspended
+
+
+class SetHandler:
+    async def run(self, ctx: StepContext) -> StepResult:
+        step = ctx.step
+        assert isinstance(step, SetStep)
+        return Completed(ctx.render(step.values))
+
+
+class ActionHandler:
+    async def run(self, ctx: StepContext) -> StepResult:
+        step = ctx.step
+        assert isinstance(step, ActionStep)
+        params = ctx.render(step.with_)
+        integration = step.action.split(".", 1)[0]
+        await ctx.emit("action.called", {"action": step.action, "params": params})
+        output = await ctx.engine.integrations.call(
+            ctx.tenant_id,
+            step.action,
+            params,
+            connection=ctx.connection_for(integration, step.connection),
+            initiator=ctx.run.initiator,
+            run_id=ctx.run.id,
+        )
+        return Completed(output)
+
+
+class ScriptHandler:
+    async def run(self, ctx: StepContext) -> StepResult:
+        step = ctx.step
+        assert isinstance(step, ScriptStep)
+        script = ctx.render(step.run)
+        env = {k: str(v) for k, v in ctx.render(step.env).items()}
+        profile = step.sandbox or ctx.workflow.defaults.sandbox
+        timeout = step.timeout.total_seconds() if step.timeout else None
+        async with ctx.engine.sandboxes.acquire(ctx.run, profile) as sandbox:
+            await ctx.emit("script.started", {"sandbox_id": sandbox.id, "script": script[:2000]})
+            result = await sandbox.exec(script, cwd=step.workdir, env=env, timeout=timeout)
+        output = ctx.redactor(result.to_dict())
+        await ctx.emit("script.finished", {"exit_code": result.exit_code, "duration": result.duration_seconds})
+        usage = {"sandbox_seconds": result.duration_seconds}
+        if step.fail_on_error and not result.ok:
+            raise StepError(
+                f"script exited with {result.exit_code}" + (" (timed out)" if result.timed_out else ""),
+                details={"stdout": output["stdout"][-4000:], "stderr": output["stderr"][-4000:]},
+            )
+        return Completed(output, usage=usage)
+
+
+def _parse_time(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        from datetime import UTC
+
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+class WaitHandler:
+    async def run(self, ctx: StepContext) -> StepResult:
+        step = ctx.step
+        assert isinstance(step, WaitStep)
+        now = ctx.now()
+
+        if step.condition is None:
+            if step.duration is not None:
+                until = ctx.deadline("until", step.duration)
+            else:
+                if "until" not in ctx.state:
+                    ctx.state["until"] = _parse_time(ctx.render(step.until)).isoformat()
+                until = datetime.fromisoformat(ctx.state["until"])
+            if now >= until:
+                return Completed({"waited_until": until.isoformat(), "timed_out": False})
+            return Suspended(wake_at=until, reason=f"waiting until {until.isoformat()}")
+
+        cond = step.condition
+        deadline = ctx.deadline("deadline", step.max_wait) if step.max_wait else None
+        ctx.state["polls"] = ctx.state.get("polls", 0) + 1
+        result: dict[str, Any] | None = None
+        try:
+            integration = cond.action.split(".", 1)[0]
+            result = await ctx.engine.integrations.call(
+                ctx.tenant_id,
+                cond.action,
+                ctx.render(cond.with_),
+                connection=ctx.connection_for(integration, cond.connection),
+                initiator=ctx.run.initiator,
+                run_id=ctx.run.id,
+            )
+        except IntegrationError as exc:
+            if not exc.retryable:
+                raise
+            await ctx.emit("wait.poll_error", {"error": str(exc)})
+
+        if result is not None and ctx.truthy(cond.check, result=result):
+            return Completed({"satisfied": True, "timed_out": False, "result": result, "polls": ctx.state["polls"]})
+
+        if deadline is not None and now >= deadline:
+            if step.on_timeout == "fail":
+                raise StepError(f"condition not met within {step.max_wait}", details={"result": result})
+            return Completed({"satisfied": False, "timed_out": True, "result": result, "polls": ctx.state["polls"]})
+
+        next_poll = now + cond.poll_interval
+        if deadline is not None:
+            next_poll = min(next_poll, deadline)
+        keys = [k for k in (ctx.render(cond.wake_on) or []) if k]
+        await ctx.emit("wait.polled", {"satisfied": False, "next_poll": next_poll.isoformat()})
+        return Suspended(wake_at=next_poll, wait_keys=keys, reason="condition not met")
+
+
+class ApprovalHandler:
+    async def run(self, ctx: StepContext) -> StepResult:
+        step = ctx.step
+        assert isinstance(step, ApprovalStep)
+        decision = ctx.state.get("decision")
+        if decision:
+            return Completed(
+                {
+                    "approved": decision["approved"],
+                    "by": decision.get("by"),
+                    "comment": decision.get("comment"),
+                    "timed_out": False,
+                }
+            )
+        deadline = ctx.deadline("deadline", step.max_wait) if step.max_wait else None
+        if deadline is not None and ctx.now() >= deadline:
+            return Completed({"approved": step.on_timeout == "approve", "by": None, "comment": None, "timed_out": True})
+        if not ctx.state.get("requested"):
+            ctx.state["requested"] = True
+            ctx.state["message"] = ctx.render(step.message)
+            await ctx.emit(
+                "approval.requested",
+                {"message": ctx.state["message"], "approvers": step.approvers, "deadline": deadline and deadline.isoformat()},
+            )
+        return Suspended(
+            wake_at=deadline, wait_keys=[f"approval:{ctx.run.id}:{step.id}"], reason="awaiting approval"
+        )
+
+
+class WorkflowHandler:
+    async def run(self, ctx: StepContext) -> StepResult:
+        step = ctx.step
+        assert isinstance(step, WorkflowCallStep)
+        executor = ctx.engine.executor
+        store = ctx.engine.store
+        children: list[str | None] = ctx.state.get("children") or []
+
+        if "items" not in ctx.state:
+            if step.for_each:
+                items = ctx.render(step.for_each)
+                if not isinstance(items, list):
+                    raise StepError(f"for_each must produce a list, got {type(items).__name__}")
+            else:
+                items = [None]
+            ctx.state["items"] = items
+            children = [None] * len(items)
+        items = ctx.state["items"]
+
+        statuses: dict[str, Any] = {}
+        for run_id in filter(None, children):
+            statuses[run_id] = await store.get_run(ctx.tenant_id, run_id)
+        active = sum(1 for r in statuses.values() if not RunStatus(r.status).terminal)
+
+        for index, item in enumerate(items):
+            if children[index] is not None or active >= step.concurrency:
+                continue
+            inputs = ctx.render(step.with_, item=item, index=index)
+            child = await executor.start_run(
+                ctx.tenant_id,
+                step.workflow,
+                inputs,
+                version=step.version,
+                started_by=f"run:{ctx.run.id}",
+                context={**ctx.run.context, "parent": {"run_id": ctx.run.id, "step_id": step.id, "index": index}},
+                parent_run_id=ctx.run.id,
+                parent_step_id=step.id,
+                campaign_id=ctx.run.campaign_id,
+            )
+            children[index] = child.id
+            statuses[child.id] = child
+            active += 1
+            await ctx.emit("workflow.child_started", {"run_id": child.id, "workflow": step.workflow, "index": index})
+        ctx.state["children"] = children
+        await ctx.checkpoint()
+
+        pending = [rid for rid in children if rid is None or not RunStatus(statuses[rid].status).terminal]
+        if pending:
+            return Suspended(
+                wait_keys=[f"run:{rid}" for rid in children if rid and rid in pending],
+                reason=f"waiting for {len(pending)} child run(s)",
+                wake_at=ctx.now() + timedelta(minutes=5),  # safety net in case a wake is missed
+            )
+
+        results = []
+        failed = 0
+        for index, run_id in enumerate(children):
+            child = statuses[run_id]
+            ok = child.status == RunStatus.succeeded
+            failed += 0 if ok else 1
+            results.append({"index": index, "run_id": run_id, "status": child.status, "outputs": child.outputs or {}, "error": child.error})
+        if step.for_each is None:
+            child = results[0]
+            if child["status"] != RunStatus.succeeded:
+                raise StepError(f"child workflow '{step.workflow}' {child['status']}", details={"run_id": child["run_id"], "error": child["error"]})
+            return Completed({"run_id": child["run_id"], **child["outputs"]})
+        output = {"results": results, "succeeded": len(results) - failed, "failed": failed}
+        if failed:
+            raise StepError(f"{failed} of {len(results)} child runs did not succeed", details=output)
+        return Completed(output)

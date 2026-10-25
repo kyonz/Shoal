@@ -1,4 +1,4 @@
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Agent
 metadata:
   name: bugfixer

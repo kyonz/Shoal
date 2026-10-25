@@ -1,9 +1,9 @@
 """Behaviour tests against a mocked Starter API."""
 
 import pytest
-from awm.sdk.testing import IntegrationHarness, MockHTTP, engine_harness, signed_webhook
+from shoal.sdk.testing import IntegrationHarness, MockHTTP, engine_harness, signed_webhook
 
-from awm_starter import StarterIntegration
+from shoal_starter import StarterIntegration
 
 CONFIG = {"base_url": "https://api.starter.example", "api_token": "tok_test", "webhook_secret": "whsec_test"}
 
@@ -52,7 +52,7 @@ async def test_webhook_events(api):
 
 
 WORKFLOW = """
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata: { name: triage }
 spec:
@@ -62,7 +62,7 @@ spec:
 """
 
 TRIGGER = """
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Trigger
 metadata: { name: on-ticket }
 spec:

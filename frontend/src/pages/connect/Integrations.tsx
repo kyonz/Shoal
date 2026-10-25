@@ -110,9 +110,9 @@ function BuildYourOwn() {
                 <Zap className="size-3.5 text-accent" /> Python SDK
               </div>
               <p className="mt-1 text-xs text-muted">
-                Subclass <code className="font-mono">awm.sdk.Integration</code>, decorate actions with <code className="font-mono">@action</code>, test with <code className="font-mono">awm.sdk.testing</code>, publish under the <code className="font-mono">awm.integrations</code> entry point.
+                Subclass <code className="font-mono">shoal.sdk.Integration</code>, decorate actions with <code className="font-mono">@action</code>, test with <code className="font-mono">shoal.sdk.testing</code>, publish under the <code className="font-mono">shoal.integrations</code> entry point.
               </p>
-              <pre className="mt-2 overflow-x-auto rounded-md bg-subtle px-2 py-1.5 font-mono text-[11px] text-muted">awm integrations new linear</pre>
+              <pre className="mt-2 overflow-x-auto rounded-md bg-subtle px-2 py-1.5 font-mono text-[11px] text-muted">shoal integrations new linear</pre>
             </div>
             <div className="rounded-lg border border-border bg-panel/80 p-3">
               <div className="flex items-center gap-1.5 text-[13px] font-medium">

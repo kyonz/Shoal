@@ -17,11 +17,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from awm.config import Settings
-from awm.core import clock
-from awm.core.loader import load_path
-from awm.core.models import Agent
-from awm.engine import Engine
+from shoal.config import Settings
+from shoal.core import clock
+from shoal.core.loader import load_path
+from shoal.core.models import Agent
+from shoal.engine import Engine
 
 from .fakes import FakeGitHub, FakeJira, Router, comment_text
 
@@ -32,10 +32,10 @@ JIRA_WEBHOOK_SECRET = "jira-hook-secret"
 
 @pytest.fixture
 async def world(tmp_path, monkeypatch):
-    monkeypatch.setenv("AWM_LOCAL_SANDBOX_ROOT", str(tmp_path / "sandboxes"))
+    monkeypatch.setenv("SHOAL_LOCAL_SANDBOX_ROOT", str(tmp_path / "sandboxes"))
     github, jira = FakeGitHub(), FakeJira()
     engine = Engine(
-        Settings(database_url=f"sqlite+aiosqlite:///{tmp_path}/awm.db", public_url="https://awm.example"),
+        Settings(database_url=f"sqlite+aiosqlite:///{tmp_path}/shoal.db", public_url="https://shoal.example"),
         http_transport=httpx.MockTransport(Router(github, jira)),
     )
     await engine.start()
@@ -86,7 +86,7 @@ async def test_journey_github_org_uplift_campaign(world):
         agent_outputs={
             "uplift": {
                 "changed": True,
-                "branch": "awm/uplift-coverage",
+                "branch": "shoal/uplift-coverage",
                 "metric_before": 71.5,
                 "metric_after": 100,
                 "pr_body": "Adds tests to reach 100% coverage.",
@@ -187,7 +187,7 @@ async def test_journey_jira_webhook_bugfix_writeback(world):
 
     # A move to some other column does not fire.
     other = jira_issue_updated("BUG-7", "Done", 1700000001)
-    assert (await engine.integrations.handle_webhook(webhook_id, {"X-AWM-Token": JIRA_WEBHOOK_SECRET}, other))["triggers"] == []
+    assert (await engine.integrations.handle_webhook(webhook_id, {"X-Shoal-Token": JIRA_WEBHOOK_SECRET}, other))["triggers"] == []
 
     await engine.run_until_idle()
     run = await engine.store.get_run(tenant.id, run_id)

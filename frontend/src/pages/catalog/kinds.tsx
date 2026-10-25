@@ -116,7 +116,7 @@ export const KINDS: Record<string, KindConfig> = {
       version: "0.1.0",
       status: "draft",
       params: {},
-      resources: [{ apiVersion: "awm.dev/v1", kind: "Workflow", metadata: { name: "{{ prefix }}example" }, spec: { steps: [{ id: "hello", type: "set", values: { ok: true } }] } }],
+      resources: [{ apiVersion: "shoal.dev/v1", kind: "Workflow", metadata: { name: "{{ prefix }}example" }, spec: { steps: [{ id: "hello", type: "set", values: { ok: true } }] } }],
     },
   },
 };

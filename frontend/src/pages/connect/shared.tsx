@@ -155,7 +155,7 @@ export function toYaml(kind: string, name: string, metadata: { description?: str
   const md: Record<string, unknown> = { name };
   if (metadata?.description) md.description = metadata.description;
   if (metadata?.labels && Object.keys(metadata.labels).length) md.labels = metadata.labels;
-  return YAML.stringify({ apiVersion: "awm.dev/v1", kind, metadata: md, spec }, { lineWidth: 0 });
+  return YAML.stringify({ apiVersion: "shoal.dev/v1", kind, metadata: md, spec }, { lineWidth: 0 });
 }
 
 /** Parse a resource YAML document back to {description, spec}; throws on bad YAML. */

@@ -124,8 +124,8 @@ export default function Login() {
                 void submitToken();
               }}
             >
-              <Field label="API key or admin token" description="Keys look like awm_xxxx_…. Stored in this browser only.">
-                <Input autoFocus mono type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="awm_…" />
+              <Field label="API key or admin token" description="Keys look like shoal_xxxx_…. Stored in this browser only.">
+                <Input autoFocus mono type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="shoal_…" />
               </Field>
               <Field label="Tenant" hint="optional" description="Only needed with the system admin token.">
                 <Input value={tokenTenant} onChange={(e) => setTokenTenant(e.target.value)} placeholder="acme" />

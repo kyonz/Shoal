@@ -118,7 +118,7 @@ export function toDocument(kind: string, d: Draft, schema: JsonSchema | undefine
   const metadata: Record<string, unknown> = { name: d.name || "my-resource" };
   if (!useSpec && d.description) metadata.description = d.description;
   if (Object.keys(d.labels).length) metadata.labels = d.labels;
-  return { apiVersion: "awm.dev/v1", kind, metadata, spec };
+  return { apiVersion: "shoal.dev/v1", kind, metadata, spec };
 }
 
 function toBody(d: Draft, schema: JsonSchema | undefined) {
@@ -147,13 +147,13 @@ function parseErrors(err: unknown): { byField: Record<string, string>; list: str
   return { byField, list };
 }
 
-export const BLUEPRINT_LABEL = "awm.dev/blueprint";
+export const BLUEPRINT_LABEL = "shoal.dev/blueprint";
 
 /** "From blueprint X" badge for resources created by an adoption. */
 export function BlueprintBadge({ labels }: { labels?: Record<string, string> }) {
   const bp = labels?.[BLUEPRINT_LABEL];
   if (!bp) return null;
-  const version = labels?.["awm.dev/blueprint-version"];
+  const version = labels?.["shoal.dev/blueprint-version"];
   const name = bp.split("@")[0];
   return (
     <Badge tone="accent" title={`Created by adopting blueprint ${bp}`}>

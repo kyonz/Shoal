@@ -10,19 +10,19 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from awm.auth.rbac import Principal
-from awm.auth.sessions import verify_session
-from awm.config import Settings
-from awm.core import clock
-from awm.core.errors import Forbidden, NotFound, Unauthorized
-from awm.core.models import parse_resource
-from awm.core.scope import use_namespace
-from awm.engine import Engine
+from shoal.auth.rbac import Principal
+from shoal.auth.sessions import verify_session
+from shoal.config import Settings
+from shoal.core import clock
+from shoal.core.errors import Forbidden, NotFound, Unauthorized
+from shoal.core.models import parse_resource
+from shoal.core.scope import use_namespace
+from shoal.engine import Engine
 
 
 def res(kind, name, spec, namespace=None):
     meta = {"name": name, **({"namespace": namespace} if namespace else {})}
-    return parse_resource({"apiVersion": "awm.dev/v1", "kind": kind, "metadata": meta, "spec": spec})
+    return parse_resource({"apiVersion": "shoal.dev/v1", "kind": kind, "metadata": meta, "spec": spec})
 
 
 WF = {"steps": [{"id": "s", "type": "set", "values": {"ok": True}}]}
@@ -71,7 +71,7 @@ async def test_secrets_do_not_leak_across_namespaces_but_shared_connections_work
 
 
 async def test_shared_connection_events_fire_triggers_in_team_namespaces(engine, tenant):
-    from awm.integrations.base import IntegrationEvent
+    from shoal.integrations.base import IntegrationEvent
 
     await engine.store.apply_resource(tenant.id, res("Connection", "hooks", {"integration": "webhook"}, namespace="shared"))
     await engine.store.ensure_namespace(tenant.id, "team-a")
@@ -159,7 +159,7 @@ class FakeIdP:
 
     def id_token(self, claims):
         now = int(clock.now().timestamp())
-        body = {"iss": self.issuer, "aud": "awm-client", "iat": now, "exp": now + 300, **claims}
+        body = {"iss": self.issuer, "aud": "shoal-client", "iat": now, "exp": now + 300, **claims}
         return jwt.encode(body, self.key, algorithm="RS256", headers={"kid": "k1"})
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -187,13 +187,13 @@ class FakeIdP:
 async def idp_world(tmp_path):
     idp = FakeIdP()
     engine = Engine(
-        Settings(database_url=f"sqlite+aiosqlite:///{tmp_path}/awm.db"),
+        Settings(database_url=f"sqlite+aiosqlite:///{tmp_path}/shoal.db"),
         http_transport=httpx.MockTransport(idp.handle),
     )
     await engine.start()
     tenant = await engine.store.create_tenant("acme")
     await engine.oidc.configure(
-        tenant.id, "okta", issuer=idp.issuer + "/", client_id="awm-client", client_secret="shh",
+        tenant.id, "okta", issuer=idp.issuer + "/", client_id="shoal-client", client_secret="shh",
         groups_claim="groups", default_role="viewer", allowed_domains=["acme.test"],
     )
     yield engine, tenant, idp
@@ -201,10 +201,10 @@ async def idp_world(tmp_path):
     clock.reset()
 
 
-async def sign_in(engine, tenant, idp, claims, redirect="https://awm.test/auth/callback"):
+async def sign_in(engine, tenant, idp, claims, redirect="https://shoal.test/auth/callback"):
     url = await engine.oidc.begin(tenant.id, "okta", redirect, redirect_to="/runs")
     query = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
-    assert query["code_challenge_method"] == "S256" and query["client_id"] == "awm-client"
+    assert query["code_challenge_method"] == "S256" and query["client_id"] == "shoal-client"
     idp.codes["c1"] = {"nonce": query["nonce"], **claims}
     return await engine.oidc.complete(query["state"], "c1", redirect)
 
@@ -231,10 +231,10 @@ async def test_oidc_rejects_bad_tokens(idp_world):
     engine, tenant, idp = idp_world
     with pytest.raises(Forbidden, match="domain"):
         await sign_in(engine, tenant, idp, {"sub": "x", "email": "eve@evil.test"})
-    url = await engine.oidc.begin(tenant.id, "okta", "https://awm.test/cb")
+    url = await engine.oidc.begin(tenant.id, "okta", "https://shoal.test/cb")
     state = parse_qs(urlparse(url).query)["state"][0]
     idp.codes["c1"] = {"sub": "x", "email": "eve@acme.test", "nonce": "wrong"}
     with pytest.raises(Unauthorized, match="nonce"):
-        await engine.oidc.complete(state, "c1", "https://awm.test/cb")
+        await engine.oidc.complete(state, "c1", "https://shoal.test/cb")
     with pytest.raises(Unauthorized, match="expired or was already used"):
-        await engine.oidc.complete(state, "c1", "https://awm.test/cb")
+        await engine.oidc.complete(state, "c1", "https://shoal.test/cb")

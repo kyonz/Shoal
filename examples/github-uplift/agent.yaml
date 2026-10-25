@@ -1,4 +1,4 @@
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Skill
 metadata:
   name: test-coverage
@@ -16,7 +16,7 @@ spec:
     5. If 100% is unreachable without contortions (generated code, platform branches), stop at a sensible
        ceiling and explain the remaining gaps.
 ---
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Agent
 metadata:
   name: uplift

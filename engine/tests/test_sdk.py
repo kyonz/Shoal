@@ -15,13 +15,13 @@ from typing import Any
 import httpx
 import pytest
 
-from awm.config import RemoteIntegration
-from awm.integrations.base import IntegrationError
-from awm.integrations.github import GitHubIntegration
-from awm.integrations.jira import JiraIntegration
-from awm.integrations.remote import check_url, register_remote_integration
-from awm.integrations.webhook import WebhookIntegration
-from awm.sdk import (
+from shoal.config import RemoteIntegration
+from shoal.integrations.base import IntegrationError
+from shoal.integrations.github import GitHubIntegration
+from shoal.integrations.jira import JiraIntegration
+from shoal.integrations.remote import check_url, register_remote_integration
+from shoal.integrations.webhook import WebhookIntegration
+from shoal.sdk import (
     BaseModel,
     ConnectionContext,
     EventDef,
@@ -39,9 +39,9 @@ from awm.sdk import (
     resource,
     verify_hmac_sha256,
 )
-from awm.sdk.scaffold import new_integration
-from awm.sdk.server import create_app
-from awm.sdk.testing import (
+from shoal.sdk.scaffold import new_integration
+from shoal.sdk.server import create_app
+from shoal.sdk.testing import (
     IntegrationHarness,
     MockHTTP,
     UnmatchedRequest,
@@ -264,9 +264,9 @@ async def test_remote_connection_end_to_end():
 
         # A signed webhook is verified and parsed remotely, then fires a trigger.
         await world.apply(
-            {"apiVersion": "awm.dev/v1", "kind": "Workflow", "metadata": {"name": "on-close"},
+            {"apiVersion": "shoal.dev/v1", "kind": "Workflow", "metadata": {"name": "on-close"},
              "spec": {"inputs": {"id": {"type": "string"}}, "steps": [{"id": "s", "type": "set", "values": {"id": "{{ inputs.id }}"}}]}},
-            {"apiVersion": "awm.dev/v1", "kind": "Trigger", "metadata": {"name": "closed"},
+            {"apiVersion": "shoal.dev/v1", "kind": "Trigger", "metadata": {"name": "closed"},
              "spec": {"connection": "tix", "event": "ticket.closed", "workflow": "on-close", "inputs": {"id": "{{ event.id }}"}}},
         )
         headers, body = signed_webhook("s3", {"action": "closed", "id": "T-9"})
@@ -315,7 +315,7 @@ async def node_service():
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     port = _free_port()
-    env = {**os.environ, "AWM_INTEGRATION_TOKEN": SERVICE_TOKEN, "PORT": str(port)}
+    env = {**os.environ, "SHOAL_INTEGRATION_TOKEN": SERVICE_TOKEN, "PORT": str(port)}
     proc = await asyncio.create_subprocess_exec(
         "node", str(ROOT / "examples/remote-integration-node/server.mjs"), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
@@ -353,21 +353,21 @@ async def test_node_remote_integration(node_service):
 
 
 def test_scaffold_creates_a_working_project(tmp_path):
-    project = new_integration("service-now", tmp_path / "awm-service-now", title="ServiceNow")
+    project = new_integration("service-now", tmp_path / "shoal-service-now", title="ServiceNow")
     pyproject = (project / "pyproject.toml").read_text()
-    assert 'name = "awm-service-now"' in pyproject
-    assert 'service_now = "awm_service_now:ServiceNowIntegration"' in pyproject
-    assert (project / "src/awm_service_now/integration.py").exists()
+    assert 'name = "shoal-service-now"' in pyproject
+    assert 'service_now = "shoal_service_now:ServiceNowIntegration"' in pyproject
+    assert (project / "src/shoal_service_now/integration.py").exists()
     assert "starter" not in "".join(p.read_text().lower() for p in project.rglob("*") if p.is_file())
 
     sys.path.insert(0, str(project / "src"))
     try:
-        module = importlib.import_module("awm_service_now")
+        module = importlib.import_module("shoal_service_now")
         assert module.ServiceNowIntegration.key == "service_now"
         assert check_integration(module.ServiceNowIntegration) == []
     finally:
         sys.path.remove(str(project / "src"))
-        for name in [m for m in sys.modules if m.startswith("awm_service_now")]:
+        for name in [m for m in sys.modules if m.startswith("shoal_service_now")]:
             del sys.modules[name]
     with pytest.raises(FileExistsError):
         new_integration("service-now", project)

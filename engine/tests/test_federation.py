@@ -9,11 +9,11 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from awm.api.app import create_app
-from awm.config import Settings
-from awm.core import clock
-from awm.engine import Engine
-from awm.federation import protocol as p
+from shoal.api.app import create_app
+from shoal.config import Settings
+from shoal.core import clock
+from shoal.engine import Engine
+from shoal.federation import protocol as p
 
 ADMIN = "fed-admin-token"
 HELLO = {"spec": {"steps": [{"id": "s", "type": "set", "values": {"text": "hi"}}]}}
@@ -189,7 +189,7 @@ async def test_background_connector_serves_hub_calls(world):
 
 
 def test_cli_grant_parsing():
-    from awm.cli.main import _parse_grant
+    from shoal.cli.main import _parse_grant
 
     assert _parse_grant("viewer=hub_user:alice@acme.com") == {
         "role": "viewer", "subject_kind": "hub_user", "subject_id": "alice@acme.com", "namespace": None}

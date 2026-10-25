@@ -6,7 +6,7 @@ This guide takes you from signing in to watching your first workflow run live. I
 
 Open Shoal and enter your organisation's short name (for example `acme`). If your administrator has set up single sign-on, you will see a **Continue with …** button for each OpenID Connect provider (Okta, Entra ID, Google, Keycloak and so on). Shoal uses the authorization-code flow with PKCE and keeps you signed in with a short-lived session cookie.
 
-No single sign-on yet? Choose **Use an API key instead** and paste a key (`awm_<prefix>_<secret>`). When a tenant is created, the server returns a bootstrap key for its `admin` service account; use it once to configure sign-in under **Admin console › Sign-in & SCIM**. The system admin token also works here; enter the tenant's short name alongside it.
+No single sign-on yet? Choose **Use an API key instead** and paste a key (`shoal_<prefix>_<secret>`). When a tenant is created, the server returns a bootstrap key for its `admin` service account; use it once to configure sign-in under **Admin console › Sign-in & SCIM**. The system admin token also works here; enter the tenant's short name alongside it.
 
 > Keys pasted on the sign-in page are stored only in this browser. Sign out from the account menu to remove them.
 
@@ -37,7 +37,7 @@ You can also start runs from the API:
 
 ```bash
 curl -X POST "$SHOAL_URL/v1/namespaces/default/workflows/hello/runs" \
-  -H "Authorization: Bearer $AWM_API_KEY" \
+  -H "Authorization: Bearer $SHOAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"inputs": {"name": "Ana"}}'
 ```

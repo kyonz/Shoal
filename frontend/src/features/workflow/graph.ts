@@ -1,7 +1,7 @@
 /**
  * Pure functions between the workflow document and the canvas graph.
  *
- * Engine semantics (awm.core.models.WorkflowSpec.dependencies): a step's
+ * Engine semantics (shoal.core.models.WorkflowSpec.dependencies): a step's
  * dependencies are its explicit `needs`, or else the previous step in the
  * list. Every structural edit therefore (1) materialises all dependencies,
  * (2) applies the change, (3) re-orders steps topologically (ties broken by

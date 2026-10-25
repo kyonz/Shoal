@@ -42,7 +42,7 @@ While it waits, the run viewer shows a banner with the message and **Approve** /
 
 ```bash
 curl -X POST "$SHOAL_URL/v1/runs/$RUN_ID/steps/review/approval" \
-  -H "Authorization: Bearer $AWM_API_KEY" \
+  -H "Authorization: Bearer $SHOAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"approved": true, "comment": "Looks good"}'
 ```

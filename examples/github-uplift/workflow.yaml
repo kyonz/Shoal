@@ -1,4 +1,4 @@
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Workflow
 metadata:
   name: repo-uplift
@@ -20,7 +20,7 @@ spec:
         Repository: https://github.com/{{ inputs.repo }}
         Goal: {{ inputs.goal }}
 
-        Clone the repository into the workspace, create the branch `awm/uplift-{{ run.id }}`, make the
+        Clone the repository into the workspace, create the branch `shoal/uplift-{{ run.id }}`, make the
         changes needed to reach the goal, run the full test suite, commit with a clear message and
         `git push -u origin` the branch. If the goal is already met, change nothing and set changed=false.
       outputs:

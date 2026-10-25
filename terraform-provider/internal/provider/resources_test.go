@@ -226,7 +226,7 @@ func TestAccAccessResources(t *testing.T) {
 					resource.TestCheckResourceAttr("shoal_role.runner", "permissions.#", "2"),
 					resource.TestCheckResourceAttr("shoal_group.devs", "members.#", "1"),
 					resource.TestCheckResourceAttr("shoal_role_binding.devs", "namespace", "payments-acc"),
-					resource.TestMatchResourceAttr("shoal_api_key.ci", "token", regexp.MustCompile(`^awm_`)),
+					resource.TestMatchResourceAttr("shoal_api_key.ci", "token", regexp.MustCompile(`^shoal_`)),
 					resource.TestCheckResourceAttr("shoal_oidc_provider.okta", "scopes.#", "3"),
 					resource.TestCheckResourceAttr("shoal_oidc_provider.okta", "auto_provision", "true"),
 					resource.TestCheckTypeSetElemAttr("data.shoal_permissions.all", "tenant.*", "users:manage"),

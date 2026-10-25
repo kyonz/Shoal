@@ -6,10 +6,10 @@ import json
 
 import httpx
 
-from awm.sandbox.base import SandboxSpec
-from awm.sandbox.local import LocalBackend
-from awm.sandbox.space import SpaceBackend
-from awm.sandbox.wrap import parse_wrapped, wrapped_command, write_chunks
+from shoal.sandbox.base import SandboxSpec
+from shoal.sandbox.local import LocalBackend
+from shoal.sandbox.space import SpaceBackend
+from shoal.sandbox.wrap import parse_wrapped, wrapped_command, write_chunks
 
 
 async def _run(argv: list[str]) -> str:
@@ -106,7 +106,7 @@ async def test_space_backend_against_fake_api(monkeypatch):
         http_transport = httpx.MockTransport(fake)
 
     backend.setup(E())  # type: ignore[arg-type]
-    spec = SandboxSpec(image="seed:latest", cpu=2, memory_mb=2048, config={"api_url": "https://space.test", "data_plane_url": "https://space-data.test", "read_chunk_bytes": 4}, labels={"awm/tenant": "t", "awm/run": "run_1"})
+    spec = SandboxSpec(image="seed:latest", cpu=2, memory_mb=2048, config={"api_url": "https://space.test", "data_plane_url": "https://space-data.test", "read_chunk_bytes": 4}, labels={"shoal/tenant": "t", "shoal/run": "run_1"})
     sandbox = await backend.create(spec)
     assert fake.sandboxes["sbx_1"]["template"] == "seed:latest"
     result = await sandbox.exec("pytest -q", timeout=60)

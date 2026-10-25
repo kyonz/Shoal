@@ -2,7 +2,7 @@
 
 Anyone can add an integration to Shoal. The built-in GitHub, Jira and webhook
 integrations use exactly the contract described here, so they double as
-reference implementations (`engine/awm/integrations/`).
+reference implementations (`engine/shoal/integrations/`).
 
 An integration contributes up to three things:
 
@@ -19,7 +19,7 @@ connection form from the integration's `connection_model` (fields typed
 
 There are two ways to ship one:
 
-1. **A Python package** with an `awm.integrations` entry point, installed next
+1. **A Python package** with an `shoal.integrations` entry point, installed next
    to the engine. Start from the template (below).
 2. **A remote service** in any language that speaks the HTTP protocol at the
    end of this page. Python integrations can also be served this way with one
@@ -28,8 +28,8 @@ There are two ways to ship one:
 ## Quick start
 
 ```bash
-python -m awm.sdk.scaffold linear --title Linear     # will be `awm integrations new linear`
-cd awm-linear && uv sync && uv run pytest
+python -m shoal.sdk.scaffold linear --title Linear     # will be `shoal integrations new linear`
+cd shoal-linear && uv sync && uv run pytest
 ```
 
 The project is a working integration for a sample ticket tracker, with
@@ -37,11 +37,11 @@ actions, a paginated resource, signed webhooks, unit tests, an end-to-end
 trigger test, the contract tests, CI and a Dockerfile. Replace the sample API
 calls with the real service.
 
-## The SDK (`awm.sdk`)
+## The SDK (`shoal.sdk`)
 
 ```python
-from awm.sdk import BaseModel, ConnectionContext, EventDef, Field, Integration, IntegrationEvent, Page, SecretStr
-from awm.sdk import action, json_body, raise_for_status, resource, verify_hmac_sha256
+from shoal.sdk import BaseModel, ConnectionContext, EventDef, Field, Integration, IntegrationEvent, Page, SecretStr
+from shoal.sdk import action, json_body, raise_for_status, resource, verify_hmac_sha256
 
 
 class LinearConnection(BaseModel):
@@ -97,14 +97,14 @@ Rules worth knowing:
 Register the package:
 
 ```toml
-[project.entry-points."awm.integrations"]
-linear = "awm_linear:LinearIntegration"
+[project.entry-points."shoal.integrations"]
+linear = "shoal_linear:LinearIntegration"
 ```
 
-## The test kit (`awm.sdk.testing`)
+## The test kit (`shoal.sdk.testing`)
 
 ```python
-from awm.sdk.testing import IntegrationContract, IntegrationHarness, MockHTTP, engine_harness, signed_webhook
+from shoal.sdk.testing import IntegrationContract, IntegrationHarness, MockHTTP, engine_harness, signed_webhook
 
 api = MockHTTP(host="api.linear.app")
 api.post("/graphql", json={"data": {"issueCreate": {"success": True}}})
@@ -121,7 +121,7 @@ assert api.requests("POST", "/graphql")[0].json["variables"]["title"] == "Bug"
 | `engine_harness(...)` | A real throwaway engine with your integration registered: create connections (`connect`), apply YAML resources (`apply`), deliver webhooks to the connection URL (`webhook`) and check that triggers fire and runs start. |
 | `signed_webhook`, `github_webhook` | Build correctly signed deliveries. |
 | `IntegrationContract` | Subclass as `TestXContract` to run the contract checks under pytest. |
-| `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m awm.sdk.testing.contract URL --token T`. |
+| `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m shoal.sdk.testing.contract URL --token T`. |
 
 The **contract** checks that keys and action names are valid tool names,
 every action and resource has a description and object schemas, credentials
@@ -133,12 +133,12 @@ rejected and parsed event types are declared. The built-in integrations pass it.
 ## Remote integrations (any language)
 
 A remote integration is an HTTP service speaking protocol
-`awm.integration/v1`. [examples/remote-integration-node](../examples/remote-integration-node/server.mjs)
+`shoal.integration/v1`. [examples/remote-integration-node](../examples/remote-integration-node/server.mjs)
 is a complete one in dependency-free Node.js; any Python integration can be
 served with:
 
 ```bash
-AWM_INTEGRATION_TOKEN=change-me python -m awm.sdk.server awm_linear:LinearIntegration --port 8080
+SHOAL_INTEGRATION_TOKEN=change-me python -m shoal.sdk.server shoal_linear:LinearIntegration --port 8080
 ```
 
 ### Connecting one
@@ -149,7 +149,7 @@ the service as its connection config. Actions are called as
 `remote.<action>` and agents get `remote__<action>` tools.
 
 ```yaml
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Connection
 metadata: { name: incidents }
 spec:
@@ -169,7 +169,7 @@ The URL must be `https` (plain `http` is allowed for loopback, or with
 ### Protocol
 
 Every request carries `Authorization: Bearer <token>` and
-`X-AWM-Protocol: awm.integration/v1`. A service must reject requests with a
+`X-Shoal-Protocol: shoal.integration/v1`. A service must reject requests with a
 missing or wrong token with `401`.
 
 | Endpoint | Request body | Response |
@@ -193,7 +193,7 @@ The manifest:
 
 ```json
 {
-  "protocol": "awm.integration/v1",
+  "protocol": "shoal.integration/v1",
   "key": "incidents",
   "title": "Incidents",
   "description": "Open and resolve incidents.",

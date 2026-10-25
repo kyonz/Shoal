@@ -1,7 +1,7 @@
 # Connections reference secrets by name. Create them first, e.g.:
-#   awm secrets set github-token   ghp_...
-#   awm secrets set github-webhook-secret  "$(openssl rand -hex 32)"
-apiVersion: awm.dev/v1
+#   shoal secrets set github-token   ghp_...
+#   shoal secrets set github-webhook-secret  "$(openssl rand -hex 32)"
+apiVersion: shoal.dev/v1
 kind: Connection
 metadata:
   name: github-acme
@@ -16,12 +16,12 @@ spec:
       mode: app                    # or "user": act with the initiator's linked GitHub token
       elevation: qualified_approval  # initiator without write access -> need a write-access approval
       request_initiator_review: true
-      require_merge_check: false   # true: require a passing awm/merge-check status
+      require_merge_check: false   # true: require a passing shoal/merge-check status
   secrets:
     token: github-token
     webhook_secret: github-webhook-secret
 ---
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Connection
 metadata:
   name: jira-acme

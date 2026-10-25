@@ -9,7 +9,7 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-The dev server proxies `/v1` and `/scim` to the engine at `AWM_API_URL` (default `http://localhost:8080`). Start the engine with `AWM_PUBLIC_URL=http://localhost:5173` so OIDC callbacks and the session cookie land on the dev origin.
+The dev server proxies `/v1` and `/scim` to the engine at `SHOAL_API_URL` (default `http://localhost:8080`). Start the engine with `SHOAL_PUBLIC_URL=http://localhost:5173` so OIDC callbacks and the session cookie land on the dev origin.
 
 Sign in with your identity provider, or choose **Use an API key instead** and paste a tenant API key (or the system admin token plus a tenant slug).
 

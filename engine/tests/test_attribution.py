@@ -5,11 +5,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from awm.config import Settings
-from awm.core import clock
-from awm.core.models import parse_resource
-from awm.engine import Engine
-from awm.integrations.base import IntegrationEvent
+from shoal.config import Settings
+from shoal.core import clock
+from shoal.core.models import parse_resource
+from shoal.engine import Engine
+from shoal.integrations.base import IntegrationEvent
 
 from .fakes import FakeGitHub, FakeJira, Router
 
@@ -17,16 +17,16 @@ REPO = "acme/api"
 
 
 def res(kind, name, spec):
-    return parse_resource({"apiVersion": "awm.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
+    return parse_resource({"apiVersion": "shoal.dev/v1", "kind": kind, "metadata": {"name": name}, "spec": spec})
 
 
 @pytest.fixture
 async def world(tmp_path, monkeypatch):
-    monkeypatch.setenv("AWM_LOCAL_SANDBOX_ROOT", str(tmp_path / "sandboxes"))
+    monkeypatch.setenv("SHOAL_LOCAL_SANDBOX_ROOT", str(tmp_path / "sandboxes"))
     github = FakeGitHub()
     github.add_repo(REPO)
     engine = Engine(
-        Settings(database_url=f"sqlite+aiosqlite:///{tmp_path}/awm.db"),
+        Settings(database_url=f"sqlite+aiosqlite:///{tmp_path}/shoal.db"),
         http_transport=httpx.MockTransport(Router(github, FakeJira())),
     )
     await engine.start()
@@ -74,8 +74,8 @@ async def test_app_mode_provenance_and_ownership(world):
     await connect(engine, tenant, assign_initiator=True, request_initiator_review=True)
     dana = await initiator(engine, tenant, actor="user:dana@acme.test")
     pr = await call(engine, tenant, "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix", "body": "Body", "labels": ["bug"]}, dana)
-    assert pr["provenance"] == {"mode": "app", "initiator": "dana", "initiator_permission": "read", "initiator_can_merge": False, "labels": ["awm:automated", "awm:initiator-cannot-merge"]}
-    assert github.labels[(REPO, 1)] == ["bug", "awm:automated", "awm:initiator-cannot-merge"]
+    assert pr["provenance"] == {"mode": "app", "initiator": "dana", "initiator_permission": "read", "initiator_can_merge": False, "labels": ["shoal:automated", "shoal:initiator-cannot-merge"]}
+    assert github.labels[(REPO, 1)] == ["bug", "shoal:automated", "shoal:initiator-cannot-merge"]
     assert github.pulls[REPO][1]["body"].endswith("Requested-by: @dana")
     assert github.assignees[(REPO, 1)] == ["dana"] and github.review_requests[(REPO, 1)] == ["dana"]
     audit = await engine.store.list_audit(tenant.id)
@@ -98,7 +98,7 @@ async def test_qualified_approval_gates_merge(world):
     github.approve(REPO, 1, user="reviewer")  # has write access
     result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
     assert result["merged"] and result["governance"]["qualified_approvers"] == ["reviewer"]
-    assert "awm:merged-via-qualified-approval" in github.labels[(REPO, 1)]
+    assert "shoal:merged-via-qualified-approval" in github.labels[(REPO, 1)]
 
 
 async def test_deny_elevation_and_owner_merges(world):
@@ -126,7 +126,7 @@ async def test_agent_assisted_merge_check_and_required_labels(world):
     await call(engine, tenant, "create_pull_request", {"repo": REPO, "title": "A", "head": "a"}, sam)
     github.approve(REPO, 1)
     check = await call(engine, tenant, "can_merge", {"repo": REPO, "number": 1}, sam)
-    assert check["reasons"] == ["merge check (awm/merge-check) is missing", "missing required labels: qa-ok"]
+    assert check["reasons"] == ["merge check (shoal/merge-check) is missing", "missing required labels: qa-ok"]
     await call(engine, tenant, "set_merge_check", {"repo": REPO, "number": 1, "verdict": "pass", "summary": "Diff matches policy"}, sam)
     github.labels[(REPO, 1)].append("qa-ok")
     result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, sam)

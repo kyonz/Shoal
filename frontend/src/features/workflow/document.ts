@@ -3,7 +3,7 @@ import { parse, stringify } from "yaml";
 import type { StepDoc, WorkflowSpecDoc } from "./types";
 
 export interface WorkflowDocument {
-  apiVersion: "awm.dev/v1";
+  apiVersion: "shoal.dev/v1";
   kind: "Workflow";
   metadata: { name: string; description?: string; labels?: Record<string, string> };
   spec: WorkflowSpecDoc;
@@ -13,7 +13,7 @@ export function toDocument(name: string, description: string, labels: Record<str
   const metadata: WorkflowDocument["metadata"] = { name: name || "untitled" };
   if (description) metadata.description = description;
   if (Object.keys(labels).length) metadata.labels = labels;
-  return { apiVersion: "awm.dev/v1", kind: "Workflow", metadata, spec };
+  return { apiVersion: "shoal.dev/v1", kind: "Workflow", metadata, spec };
 }
 
 export function toYaml(doc: unknown): string {
@@ -48,7 +48,7 @@ export function parseWorkflowYaml(text: string): ParsedWorkflow {
   return {
     ok: true,
     doc: {
-      apiVersion: "awm.dev/v1",
+      apiVersion: "shoal.dev/v1",
       kind: "Workflow",
       metadata: { name: String(doc.metadata?.name ?? ""), description: doc.metadata?.description, labels: doc.metadata?.labels },
       spec,

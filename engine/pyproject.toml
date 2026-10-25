@@ -1,11 +1,11 @@
 [project]
-name = "awm"
+name = "shoal"
 version = "0.1.0"
-description = "AI Workflow Manager: an open-source, multi-tenant engine for multi-agent AI workflows"
+description = "Shoal: an open-source, multi-tenant engine for multi-agent AI workflows"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-authors = [{ name = "AI Workflow Manager contributors" }]
+authors = [{ name = "Shoal contributors" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: Apache Software License",
@@ -36,46 +36,46 @@ postgres = ["asyncpg>=0.29"]
 kubernetes = ["kubernetes-asyncio>=30.1"]
 e2b = ["e2b>=1.0"]
 docker = ["docker>=7.1"]
-all = ["awm[postgres,kubernetes,e2b,docker]"]
+all = ["shoal[postgres,kubernetes,e2b,docker]"]
 
 [project.scripts]
-awm = "awm.cli.main:app"
+shoal = "shoal.cli.main:app"
 
-[project.entry-points."awm.sandboxes"]
-local = "awm.sandbox.local:LocalBackend"
-docker = "awm.sandbox.docker:DockerBackend"
-kubernetes = "awm.sandbox.kubernetes:KubernetesBackend"
-e2b = "awm.sandbox.e2b:E2BBackend"
-space = "awm.sandbox.space:SpaceBackend"
-remote = "awm.sandbox.remote:RemoteBackend"
+[project.entry-points."shoal.sandboxes"]
+local = "shoal.sandbox.local:LocalBackend"
+docker = "shoal.sandbox.docker:DockerBackend"
+kubernetes = "shoal.sandbox.kubernetes:KubernetesBackend"
+e2b = "shoal.sandbox.e2b:E2BBackend"
+space = "shoal.sandbox.space:SpaceBackend"
+remote = "shoal.sandbox.remote:RemoteBackend"
 
-[project.entry-points."awm.integrations"]
-github = "awm.integrations.github:GitHubIntegration"
-jira = "awm.integrations.jira:JiraIntegration"
-webhook = "awm.integrations.webhook:WebhookIntegration"
-remote = "awm.integrations.remote:RemoteIntegration"
+[project.entry-points."shoal.integrations"]
+github = "shoal.integrations.github:GitHubIntegration"
+jira = "shoal.integrations.jira:JiraIntegration"
+webhook = "shoal.integrations.webhook:WebhookIntegration"
+remote = "shoal.integrations.remote:RemoteIntegration"
 
-[project.entry-points."awm.providers"]
-anthropic = "awm.agents.providers.anthropic:AnthropicProvider"
-scripted = "awm.agents.providers.scripted:ScriptedProvider"
-openai-compatible = "awm.agents.providers.openai_compat:OpenAICompatibleProvider"
+[project.entry-points."shoal.providers"]
+anthropic = "shoal.agents.providers.anthropic:AnthropicProvider"
+scripted = "shoal.agents.providers.scripted:ScriptedProvider"
+openai-compatible = "shoal.agents.providers.openai_compat:OpenAICompatibleProvider"
 
-[project.entry-points."awm.decision_providers"]
-llm = "awm.decisions.llm:LLMDecisionProvider"
-jev = "awm.decisions.jev:JevProvider"
+[project.entry-points."shoal.decision_providers"]
+llm = "shoal.decisions.llm:LLMDecisionProvider"
+jev = "shoal.decisions.jev:JevProvider"
 
-[project.entry-points."awm.eval_sinks"]
-braintrust = "awm.evals.sinks.braintrust:BraintrustSink"
-langfuse = "awm.evals.sinks.langfuse:LangfuseSink"
+[project.entry-points."shoal.eval_sinks"]
+braintrust = "shoal.evals.sinks.braintrust:BraintrustSink"
+langfuse = "shoal.evals.sinks.langfuse:LangfuseSink"
 
-[project.entry-points."awm.agent_runtimes"]
-tool-loop = "awm.agents.tool_loop:ToolLoopRuntime"
-cli = "awm.agents.cli_runtime:CliRuntime"
-a2a = "awm.agents.a2a_runtime:A2ARuntime"
+[project.entry-points."shoal.agent_runtimes"]
+tool-loop = "shoal.agents.tool_loop:ToolLoopRuntime"
+cli = "shoal.agents.cli_runtime:CliRuntime"
+a2a = "shoal.agents.a2a_runtime:A2ARuntime"
 
-[project.entry-points."awm.secrets"]
-env = "awm.secrets.providers:EnvSecretProvider"
-db = "awm.secrets.providers:DatabaseSecretProvider"
+[project.entry-points."shoal.secrets"]
+env = "shoal.secrets.providers:EnvSecretProvider"
+db = "shoal.secrets.providers:DatabaseSecretProvider"
 
 [dependency-groups]
 dev = [
@@ -90,10 +90,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["awm"]
+packages = ["shoal"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"../templates/integration" = "awm/sdk/_template"
+"../templates/integration" = "shoal/sdk/_template"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

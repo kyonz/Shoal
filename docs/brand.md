@@ -64,5 +64,5 @@ On dark backgrounds use the lighter tints `#2DD4BF`, `#5EEAD4` and `#7DD3FC` for
 ## Name
 
 Write **Shoal** with a capital S in prose; the wordmark is lower-case. The project began as
-"AI Workflow Manager", which is why the Python package, the `awm` CLI, the `AWM_*` settings and the
-`awm.dev/v1` apiVersion still carry `awm`; they will move to Shoal names in a later release.
+"Shoal", which is why the Python package, the `shoal` CLI, the `SHOAL_*` settings and the
+`shoal.dev/v1` apiVersion still carry `shoal`; they will move to Shoal names in a later release.

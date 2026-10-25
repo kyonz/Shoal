@@ -1,4 +1,4 @@
-# awm-starter
+# shoal-starter
 
 A Starter integration for [Shoal](https://github.com/kyonz/ai-workflow-manager).
 
@@ -20,12 +20,12 @@ secret handling, webhook signing). Keep it passing; the catalogue relies on it.
 
 ## Install into Shoal
 
-Install the package next to the engine. The `awm.integrations` entry point in
+Install the package next to the engine. The `shoal.integrations` entry point in
 `pyproject.toml` registers it, and `starter` appears in **Integrations** with a
 connection form generated from `StarterConnection`.
 
 ```bash
-pip install awm-starter
+pip install shoal-starter
 ```
 
 ## Or run it as a remote service
@@ -33,7 +33,7 @@ pip install awm-starter
 Any integration can run out of process and be connected over HTTP:
 
 ```bash
-AWM_INTEGRATION_TOKEN=change-me python -m awm.sdk.server awm_starter:StarterIntegration --host 0.0.0.0 --port 8080
+SHOAL_INTEGRATION_TOKEN=change-me python -m shoal.sdk.server shoal_starter:StarterIntegration --host 0.0.0.0 --port 8080
 ```
 
 Then create a `remote` connection in Shoal with `url` set to the service and
@@ -41,7 +41,7 @@ Then create a `remote` connection in Shoal with `url` set to the service and
 The `Dockerfile` builds that service.
 
 ```yaml
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Connection
 metadata: { name: starter }
 spec:

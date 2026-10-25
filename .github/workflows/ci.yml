@@ -36,7 +36,7 @@ jobs:
       - name: Pytest
         run: uv run pytest -q
       - name: CLI smoke test
-        run: uv run awm --help >/dev/null
+        run: uv run shoal --help >/dev/null
 
   frontend:
     name: Frontend
@@ -106,15 +106,15 @@ jobs:
       - name: Start an engine for acceptance tests
         working-directory: engine
         env:
-          AWM_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/acc.db
-          AWM_ADMIN_TOKEN: acc-admin-token
-          AWM_PUBLIC_URL: http://127.0.0.1:8080
-          AWM_LOCAL_SANDBOX_ROOT: ${{ runner.temp }}/sandboxes
+          SHOAL_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/acc.db
+          SHOAL_ADMIN_TOKEN: acc-admin-token
+          SHOAL_PUBLIC_URL: http://127.0.0.1:8080
+          SHOAL_LOCAL_SANDBOX_ROOT: ${{ runner.temp }}/sandboxes
         run: |
           uv sync --locked
-          nohup uv run awm serve --port 8080 > "${{ runner.temp }}/engine.log" 2>&1 &
+          nohup uv run shoal serve --port 8080 > "${{ runner.temp }}/engine.log" 2>&1 &
           for _ in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
-          key=$(uv run awm --server http://127.0.0.1:8080 --token acc-admin-token tenants create acc -o json | jq -r .api_key)
+          key=$(uv run shoal --server http://127.0.0.1:8080 --token acc-admin-token tenants create acc -o json | jq -r .api_key)
           echo "::add-mask::$key"
           echo "SHOAL_ENDPOINT=http://127.0.0.1:8080" >> "$GITHUB_ENV"
           echo "SHOAL_API_KEY=$key" >> "$GITHUB_ENV"
@@ -133,21 +133,21 @@ jobs:
       - uses: actions/checkout@v5
       - uses: azure/setup-helm@v4
       - name: Lint
-        run: helm lint --strict deploy/helm/awm
+        run: helm lint --strict deploy/helm/shoal
       - name: Install kubeconform
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin kubeconform
       - name: Render and validate
         run: |
           set -euo pipefail
-          chart=deploy/helm/awm
-          helm template awm "$chart" | kubeconform -strict -summary -skip ServiceMonitor
-          helm template awm "$chart" \
-            --set postgresql.enabled=false,database.url=postgresql+asyncpg://u:p@db/awm \
+          chart=deploy/helm/shoal
+          helm template shoal "$chart" | kubeconform -strict -summary -skip ServiceMonitor
+          helm template shoal "$chart" \
+            --set postgresql.enabled=false,database.url=postgresql+asyncpg://u:p@db/shoal \
             --set ingress.enabled=true,api.autoscaling.enabled=true,worker.autoscaling.enabled=true \
             --set kubernetesSandboxes.enabled=true,metrics.serviceMonitor.enabled=true,api.embeddedWorker=true \
             | kubeconform -strict -summary -skip ServiceMonitor
-          helm template awm "$chart" --set secrets.existingSecret=awm-creds,worker.enabled=false,kubernetesSandboxes.enabled=true,kubernetesSandboxes.clusterWide=true \
+          helm template shoal "$chart" --set secrets.existingSecret=shoal-creds,worker.enabled=false,kubernetesSandboxes.enabled=true,kubernetesSandboxes.clusterWide=true \
             | kubeconform -strict -summary
 
   image:
@@ -161,15 +161,15 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
-          tags: awm:ci
+          tags: shoal:ci
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test
         run: |
-          docker run -d --name awm -p 8080:8080 -e AWM_ADMIN_TOKEN=ci awm:ci
+          docker run -d --name shoal -p 8080:8080 -e SHOAL_ADMIN_TOKEN=ci shoal:ci
           for _ in $(seq 1 30); do curl -sf http://localhost:8080/readyz && break; sleep 1; done
-          docker run --rm --network host awm:ci --server http://localhost:8080 --token ci tenants create ci
-          docker logs awm
+          docker run --rm --network host shoal:ci --server http://localhost:8080 --token ci tenants create ci
+          docker logs shoal
       - name: Validate docker compose
         run: docker compose -f deploy/docker-compose.yaml config -q

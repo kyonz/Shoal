@@ -1,4 +1,4 @@
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Campaign
 metadata:
   name: coverage-uplift
@@ -24,7 +24,7 @@ spec:
     budget_usd: 500
 ---
 # Optional: relaunch the campaign every Monday at 02:00 Auckland time.
-apiVersion: awm.dev/v1
+apiVersion: shoal.dev/v1
 kind: Trigger
 metadata:
   name: weekly-coverage-uplift

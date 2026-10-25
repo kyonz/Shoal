@@ -9,7 +9,7 @@ from __future__ import annotations
 import pathlib
 from typing import Any
 
-from awm.core.models import RESOURCE_KINDS
+from shoal.core.models import RESOURCE_KINDS
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "templates" / "resources"
 TYPE_NAMES = {

@@ -78,7 +78,7 @@ class FakeGitHub:
                 "html_url": f"https://github.com/{repo}/pull/{number}",
                 "head": {"ref": body["head"], "sha": f"sha{number}"},
                 "base": {"ref": body["base"]},
-                "user": {"login": "awm-bot"},
+                "user": {"login": "shoal-bot"},
                 "body": body.get("body"),
             }
             return httpx.Response(201, json=prs[number])
@@ -129,7 +129,7 @@ class FakeGitHub:
                 self.labels.setdefault(key, []).extend(body["labels"])
             return httpx.Response(200, json=[{"name": n} for n in self.labels.get(key, [])])
         if path == "/user":
-            return httpx.Response(200, json={"login": "awm-bot"})
+            return httpx.Response(200, json={"login": "shoal-bot"})
         return httpx.Response(404, json={"message": f"fake github: no route {method} {path}"})
 
 
@@ -200,6 +200,6 @@ class Router:
 
 
 def comment_text(adf: Any) -> str:
-    from awm.integrations.jira import adf_to_text
+    from shoal.integrations.jira import adf_to_text
 
     return adf_to_text(adf) if isinstance(adf, dict) else str(adf)

@@ -13,13 +13,13 @@ The platform is open: the built-in `github`, `jira` and `webhook` integrations u
 Write an integration as a normal Python package and register it with an entry point:
 
 ```toml
-[project.entry-points."awm.integrations"]
-linear = "awm_linear:LinearIntegration"
+[project.entry-points."shoal.integrations"]
+linear = "shoal_linear:LinearIntegration"
 ```
 
-The SDK (`awm.sdk`) re-exports the `Integration` base class, `@action` and `@resource` decorators, `IntegrationEvent`, `ConnectionContext` and helpers. Actions declare pydantic input and output models, which become the JSON Schemas the UI renders forms from, so a new integration needs no frontend changes.
+The SDK (`shoal.sdk`) re-exports the `Integration` base class, `@action` and `@resource` decorators, `IntegrationEvent`, `ConnectionContext` and helpers. Actions declare pydantic input and output models, which become the JSON Schemas the UI renders forms from, so a new integration needs no frontend changes.
 
-The **test kit** (`awm.sdk.testing`) provides an in-memory engine, a mock HTTP transport, webhook signing helpers and contract tests every integration should pass. `awm integrations new linear` scaffolds a package with entry points, tests and CI.
+The **test kit** (`shoal.sdk.testing`) provides an in-memory engine, a mock HTTP transport, webhook signing helpers and contract tests every integration should pass. `shoal integrations new linear` scaffolds a package with entry points, tests and CI.
 
 ## Remote integrations (any language)
 

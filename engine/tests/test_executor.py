@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from awm.core import clock
-from awm.core.models import Agent, Workflow, parse_resource
+from shoal.core import clock
+from shoal.core.models import Agent, Workflow, parse_resource
 
 
 def wf(doc: dict) -> Workflow:
-    return parse_resource({"apiVersion": "awm.dev/v1", "kind": "Workflow", **doc})
+    return parse_resource({"apiVersion": "shoal.dev/v1", "kind": "Workflow", **doc})
 
 
 async def test_sequential_and_outputs(engine, tenant):
@@ -137,7 +137,7 @@ async def test_agent_step_with_scripted_provider(engine, tenant):
         tenant.id,
         parse_resource(
             {
-                "apiVersion": "awm.dev/v1",
+                "apiVersion": "shoal.dev/v1",
                 "kind": "Agent",
                 "metadata": {"name": "writer"},
                 "spec": {
@@ -217,7 +217,7 @@ async def test_pinned_workflow_versions(engine, tenant):
 
     # a campaign pins the version current at launch, so a mid-campaign change does not split it
     campaign = await engine.campaigns.launch(
-        tenant.id, parse_resource({"apiVersion": "awm.dev/v1", "kind": "Campaign", "metadata": {"name": "c"},
+        tenant.id, parse_resource({"apiVersion": "shoal.dev/v1", "kind": "Campaign", "metadata": {"name": "c"},
                                    "spec": {"workflow": "child", "targets": {"items": [{"id": "a"}, {"id": "b"}]}}}).spec,
         start=False,
     )

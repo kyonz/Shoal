@@ -421,7 +421,7 @@ function ScimCard() {
             <div key={k.id} className="flex items-center gap-3 px-4 py-2 text-[13px]">
               <KeyRound className="size-3.5 text-faint" />
               <span className="font-medium">{k.name}</span>
-              <span className="font-mono text-xs text-faint">awm_{k.prefix}_…</span>
+              <span className="font-mono text-xs text-faint">shoal_{k.prefix}_…</span>
               <span className="flex-1 text-xs text-faint">created {relTime(k.created_at)}</span>
               <Button
                 variant="ghost"

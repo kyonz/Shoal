@@ -52,7 +52,7 @@ export const credentials = {
   set token(value: string | null) {
     write(TOKEN_KEY, value);
   },
-  /** Tenant slug sent as X-AWM-Tenant (needed with the system admin token). */
+  /** Tenant slug sent as X-Shoal-Tenant (needed with the system admin token). */
   get tenant() {
     return read(TENANT_KEY);
   },
@@ -61,11 +61,11 @@ export const credentials = {
   },
   headers(): Record<string, string> {
     // Tags audit entries with source=ui.
-    const h: Record<string, string> = { "X-AWM-Client": "ui" };
+    const h: Record<string, string> = { "X-Shoal-Client": "ui" };
     const token = this.token;
     if (token) h.Authorization = `Bearer ${token}`;
     const tenant = this.tenant;
-    if (tenant) h["X-AWM-Tenant"] = tenant;
+    if (tenant) h["X-Shoal-Tenant"] = tenant;
     return h;
   },
 };
