@@ -295,6 +295,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/hooks/runs/{run_id}/{token}/signals/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Signal a run through its callback URL
+         * @description For systems that can only call a URL: ``{{ run.signal_url }}/<name>``. A JSON body is the payload; any other body is sent as text.
+         */
+        post: operations["run_callback_v1_hooks_runs__run_id___token__signals__name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/scim/v2/Users": {
         parameters: {
             query?: never;
@@ -1001,6 +1021,40 @@ export interface paths {
         put?: never;
         /** Approve Step */
         post: operations["approve_step_v1_runs__run_id__steps__step_id__approval_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/signals/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a signal to a run; a wait step with `signal: {name: ...}` takes it */
+        post: operations["send_signal_v1_runs__run_id__signals__name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Signals sent to a run */
+        get: operations["list_signals_v1_runs__run_id__signals_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4205,6 +4259,42 @@ export interface components {
              */
             created_at: string;
         };
+        /** SignalIn */
+        SignalIn: {
+            /**
+             * Payload
+             * @description Any JSON value; a waiting step outputs it as `payload`.
+             */
+            payload?: unknown;
+        };
+        /** SignalOut */
+        SignalOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Source
+             * @description api, callback or event.
+             */
+            source: string;
+            /** Sender */
+            sender: string;
+            /** Payload */
+            payload?: unknown;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Consumed By
+             * @description The wait step that took it; null while queued.
+             */
+            consumed_by?: string | null;
+            /** Consumed At */
+            consumed_at?: string | null;
+        };
         /** SinkIn */
         SinkIn: {
             /**
@@ -4944,6 +5034,41 @@ export interface operations {
             header?: never;
             path: {
                 webhook_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_callback_v1_hooks_runs__run_id___token__signals__name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                token: string;
+                name: string;
             };
             cookie?: never;
         };
@@ -7129,6 +7254,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StepOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_signal_v1_runs__run_id__signals__name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_signals_v1_runs__run_id__signals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalOut"][];
                 };
             };
             /** @description Validation Error */

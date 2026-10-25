@@ -7,6 +7,7 @@ import {
   Cpu,
   Hand,
   Play,
+  Radio,
   RotateCcw,
   ShieldAlert,
   SkipForward,
@@ -46,6 +47,11 @@ const LOOKS: Record<string, Look> = {
   "step.waiting": { icon: Clock, tone: "text-warn", title: (e) => `Waiting: ${str(e.data.reason)}${e.data.wake_at ? ` · next check ${new Date(str(e.data.wake_at)).toLocaleTimeString()}` : ""}` },
   "approval.requested": { icon: Hand, tone: "text-warn", title: (e) => `Approval requested: ${str(e.data.message)}` },
   "approval.decided": { icon: Hand, tone: "text-ok", title: (e) => `${e.data.approved ? "Approved" : "Rejected"} by ${str(e.data.by)}${e.data.comment ? ` — “${str(e.data.comment)}”` : ""}` },
+  "signal.received": {
+    icon: Radio,
+    tone: "text-info",
+    title: (e) => `Signal ${str(e.data.name)} received${e.data.source === "callback" ? " via callback URL" : e.data.source === "event" ? " from an integration event" : ""}${e.data.sender ? ` from ${str(e.data.sender)}` : ""}`,
+  },
   "action.called": { icon: Zap, tone: "text-accent", title: (e) => `Called ${str(e.data.action)}` },
   "script.started": { icon: SquareTerminal, tone: "text-muted", title: () => "Script started" },
   "script.finished": {
