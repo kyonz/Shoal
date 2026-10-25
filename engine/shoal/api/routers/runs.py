@@ -6,9 +6,9 @@ import json
 import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
 from shoal.api.deps import Ctx, CtxDep
@@ -29,12 +29,13 @@ from shoal.api.schemas import (
     TargetOut,
 )
 from shoal.core import clock
-from shoal.core.errors import InvalidRequest
+from shoal.core.errors import Conflict, InvalidRequest
 from shoal.core.models import CampaignSpec, RunStatus
 from shoal.core.scope import use_namespace
 from shoal.store import tables as t
 
 router = APIRouter(prefix="/v1")
+TERMINAL_EVENTS = {f"run.{status.value}" for status in RunStatus if status.terminal}
 
 
 async def _run(ctx: Ctx, run_id: str, permission: str = "runs:read") -> t.Run:
@@ -53,18 +54,32 @@ async def _initiator(ctx: Ctx) -> dict[str, Any]:
 
 
 @router.post("/namespaces/{namespace}/workflows/{name}/runs", status_code=201, tags=["runs"], response_model=RunOut)
-async def start_run(namespace: str, name: str, body: StartRunIn, ctx: CtxDep) -> Any:
+async def start_run(
+    namespace: str,
+    name: str,
+    body: StartRunIn,
+    ctx: CtxDep,
+    response: Response,
+    idempotency_key: Annotated[
+        str | None,
+        Header(max_length=200, description="Retrying with the same key returns the run the first call started (200)."),
+    ] = None,
+) -> Any:
     await ctx.namespace(namespace, "runs:create")
     with use_namespace(namespace):
-        await ctx.engine.store.get_resource_row(ctx.tenant_id, "Workflow", name, namespace=namespace, fallback=False)
+        row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Workflow", name, namespace=namespace, fallback=False)
         try:
             run = await ctx.engine.executor.start_run(
                 ctx.tenant_id, name, body.inputs, version=body.version, started_by=ctx.actor, labels=body.labels,
-                initiator=await _initiator(ctx),
+                initiator=await _initiator(ctx), idempotency_key=idempotency_key, admit=True, row=row,
+                audit={"workflow": name, "version": row.version if body.version is None else body.version},
             )
         except ValueError as exc:
             raise InvalidRequest(str(exc)) from exc
-    await ctx.audit("run.started", run.id, namespace=namespace, workflow=name, version=run.workflow_version)
+    if getattr(run, "replayed", False):
+        if run.namespace != namespace:
+            raise Conflict("idempotency key was already used in another namespace")
+        response.status_code = 200
     return run
 
 
@@ -82,7 +97,7 @@ async def list_runs(
     await ctx.namespace(namespace, "runs:read")
     rows = await ctx.engine.store.list_runs(
         ctx.tenant_id, namespace=namespace, workflow=workflow, status=status, campaign_id=campaign_id,
-        trigger=trigger, limit=limit + 1, before=cursor,
+        trigger=trigger, limit=limit + 1, before=cursor, replica=True,
     )
     items = list(rows[:limit])
     return Page(items=[RunOut.model_validate(r) for r in items], next_cursor=items[-1].id if len(rows) > limit else None)
@@ -113,26 +128,31 @@ async def run_events(
         events = await store.list_events(ctx.tenant_id, run.id, after=after, step_id=step_id)
         deadline = time.monotonic() + wait
         while not events and not RunStatus(run.status).terminal and (remaining := deadline - time.monotonic()) > 0:
-            await bus.wait(run.id, timeout=min(remaining, 2.0))  # only wakes for this process's events, so re-check
+            woken = await bus.wait(run.id, timeout=min(remaining, bus.poll_seconds))
             events = await store.list_events(ctx.tenant_id, run.id, after=after, step_id=step_id)
-            run = await store.get_run(ctx.tenant_id, run.id)
+            if not woken:
+                run = await store.get_run(ctx.tenant_id, run.id)
         return [EventOut.model_validate(e) for e in events]
     last = int(request.headers.get("last-event-id") or after)
 
     async def stream() -> AsyncIterator[dict[str, Any]]:
         nonlocal last
+        finished = RunStatus(run.status).terminal
         while True:
             events = await store.list_events(ctx.tenant_id, run.id, after=last, step_id=step_id)
             for event in events:
                 last = event.id
+                finished = finished or event.type in TERMINAL_EVENTS
                 yield {"id": str(event.id), "event": event.type, "data": EventOut.model_validate(event).model_dump_json()}
-            current = await store.get_run(ctx.tenant_id, run.id)
-            if RunStatus(current.status).terminal and not events:
+            if finished and not events:
+                current = await store.get_run(ctx.tenant_id, run.id)
                 yield {"event": "end", "data": json.dumps({"status": current.status})}
                 return
             if await request.is_disconnected():
                 return
-            await bus.wait(run.id, timeout=2.0)
+            if not await bus.wait(run.id, timeout=bus.poll_seconds) and not finished:
+                # nothing woke us: re-check the run (a missed notification, or a filtered step stream)
+                finished = RunStatus((await store.get_run(ctx.tenant_id, run.id)).status).terminal
 
     return EventSourceResponse(stream(), ping=15)
 
@@ -178,7 +198,7 @@ async def rerun(run_id: str, ctx: CtxDep) -> Any:
         # Same inputs and context ({{ event }}, {{ trigger }}, {{ target }}), so expressions resolve as they did.
         new = await ctx.engine.executor.start_run(
             ctx.tenant_id, run.workflow_name, run.inputs, version=run.workflow_version, started_by=ctx.actor,
-            labels={**run.labels, "rerun_of": run.id}, initiator=await _initiator(ctx),
+            labels={**run.labels, "rerun_of": run.id}, initiator=await _initiator(ctx), admit=True,
             context={k: v for k, v in (run.context or {}).items() if k != "parent"},
         )
     await ctx.audit("run.started", new.id, namespace=run.namespace, workflow=run.workflow_name, rerun_of=run.id)

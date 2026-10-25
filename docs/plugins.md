@@ -29,6 +29,7 @@ resource that selects the plugin (a SandboxProfile's `config`, a Gateway's `conf
 | `shoal.agent_runtimes` | `AgentRuntime` | Runs an agent: tool loop, CLI agent, remote agent | | Any A2A agent via `a2a` |
 | `shoal.credentials` | `CredentialProvider` | Issues short-lived cloud credentials for a CloudIdentity | | |
 | `shoal.orchestrators` | `Orchestrator` | Drives runs: the built-in Postgres executor, or Temporal | | |
+| `shoal.dispatch_queues` | `DispatchQueue` | Tells workers a run is due: the runs table itself, Amazon SQS, or your queue | `check_dispatch_queue` | |
 | `shoal.skill_sources` | `SkillSource` | Marketplaces that skills are imported from | `check_skill_source` | `shoal.skill-source/v1`, served for any source by `shoal.sdk.skill_server` |
 
 `check_entry_point(group, name)` checks that an installed package exposes the plugin in the right
@@ -74,6 +75,8 @@ the lookup order with `SHOAL_SECRET_PROVIDERS`.
 
 Implement `export_eval`, `export_trace` and `import_dataset`, and describe the settings in
 `config_schema` (JSON Schema). Use `self.client(base_url)` for HTTP so tests can mock it.
+Optionally implement `test_connection` (a cheap call returning `{"ok": bool, "detail": ...}`)
+and `list_datasets` (names), which back the eval platform test and dataset picker.
 Braintrust and Langfuse are the reference implementations.
 
 ## Decision providers (`shoal.decision_providers`)
@@ -109,3 +112,36 @@ wakes) and `drain` (advance everything due, for tests). Take the run's lease wit
 `Store.lease_run` before calling `Executor.advance`, and keep the database as the source of
 truth. Operators pick one with `SHOAL_ORCHESTRATOR`. The Temporal orchestrator
 (`shoal/runtime/temporal/`) is the reference implementation; see [Temporal](temporal.md).
+
+## Dispatch queues (`shoal.dispatch_queues`)
+
+A dispatch queue carries wake-ups ("run X is due at T") from whoever moved a
+run's `next_wake_at` to the workers; the database stays the source of truth and
+workers still claim each run with a lease, so the queue may deliver a message
+more than once, early or late, or lose one (the database sweep finds that run).
+Implement the `DispatchQueue` protocol from `shoal.sdk.plugins` with
+`external = True`:
+
+```python
+from shoal.sdk.plugins import Delivery, DispatchQueue, QueueError, Wakeup
+
+class RedisQueue:
+    name = "redis"
+    external = True
+    batch_size = 100
+
+    def setup(self, engine): self.url = os.environ["SHOAL_REDIS_URL"]
+    async def start(self): ...                                  # connect; raise QueueError on bad config
+    async def close(self): ...
+    def groups(self, lanes): return [tuple(lanes)]              # one receive per group (per queue)
+    async def publish(self, wakeups: list[Wakeup]): ...         # deliver each at or after wakeup.due_at
+    async def receive(self, lanes, max_messages, wait) -> list[Delivery]: ...  # hide them until ack/retry
+    async def ack(self, deliveries): ...
+    async def retry(self, deliveries, delay): ...               # visible again after `delay` seconds
+```
+
+A queue whose longest delay is short may deliver a far-off wake-up early; the
+worker sends it again for the rest of the wait. `check_dispatch_queue(queue)`
+from `shoal.sdk.testing` checks a started queue. Operators pick one with
+`SHOAL_DISPATCH_QUEUE`. The SQS queue (`shoal/runtime/queues/sqs.py`) is the
+reference implementation; see [Dispatch queues](dispatch-queues.md).

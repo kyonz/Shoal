@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -131,3 +132,108 @@ async def test_launch_that_cannot_resolve_targets_leaves_nothing(engine, tenant)
     with pytest.raises(InvalidRequest):
         await engine.campaigns.launch(tenant.id, "repos")
     assert list(await engine.store.list_campaigns(tenant.id)) == []
+
+
+async def test_rejection_stops_the_run_unless_on_reject_continue(engine, tenant):
+    for name, extra in (("strict", {}), ("branching", {"on_reject": "continue"})):
+        await engine.store.apply_resource(tenant.id, res("Workflow", name, {"steps": [
+            {"id": "ok", "type": "approval", "message": "Ship it?", **extra},
+            {"id": "ship", "type": "set", "values": {"shipped": True}},
+        ]}))
+    strict = await engine.executor.start_run(tenant.id, "strict", {})
+    branching = await engine.executor.start_run(tenant.id, "branching", {})
+    await engine.run_until_idle()
+    for run in (strict, branching):
+        await engine.executor.submit_approval(tenant.id, run.id, "ok", approved=False, by="dana", comment="not yet")
+    await engine.run_until_idle()
+
+    strict = await engine.store.get_run(tenant.id, strict.id)
+    assert strict.status == "failed" and strict.error["message"] == "rejected by dana: not yet"
+    steps = {s.step_id: s for s in await engine.store.get_steps(strict.id)}
+    assert steps["ok"].error["message"] == "rejected by dana: not yet" and steps["ship"].status == "cancelled"
+    assert (await engine.store.get_run(tenant.id, branching.id)).status == "succeeded"
+    assert (await engine.store.get_step(branching.id, "ok")).output["approved"] is False
+
+    await engine.store.apply_resource(tenant.id, res("Workflow", "expiring", {"steps": [
+        {"id": "ok", "type": "approval", "message": "Ship it?", "max_wait": "1h"},
+    ]}))
+    expiring = await engine.executor.start_run(tenant.id, "expiring", {})
+    await engine.run_until_idle()
+    clock.advance(timedelta(hours=1, seconds=1))
+    await engine.run_until_idle()
+    assert (await engine.store.get_step(expiring.id, "ok")).error["message"].startswith("not approved within")
+
+
+async def test_approval_decision_is_compare_and_set(engine, tenant):
+    await engine.store.apply_resource(tenant.id, res("Workflow", "gated", {"steps": [{"id": "ok", "type": "approval", "message": "?"}]}))
+    run = await engine.executor.start_run(tenant.id, "gated", {})
+    await engine.run_until_idle()
+    stale = await engine.store.get_step(run.id, "ok")
+    await engine.executor.submit_approval(tenant.id, run.id, "ok", approved=True, by="dana")
+    # a second decider who read the step before the first decision landed loses
+    assert not await engine.store.update_step_if_unchanged(stale, state={**stale.state, "decision": {"approved": False}})
+    assert (await engine.store.get_step(run.id, "ok")).state["decision"]["approved"] is True
+
+
+async def test_poison_run_backs_off_then_fails(engine, tenant, monkeypatch):
+    await engine.store.apply_resource(tenant.id, res("Workflow", "hello", {"steps": [{"id": "a", "type": "set", "values": {}}]}))
+    run = await engine.executor.start_run(tenant.id, "hello", {})
+
+    async def boom(run):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(engine.executor, "_advance_run", boom)
+    for _ in range(200):  # take the lease like a worker (with Temporal, its own passes fail too and count)
+        row = await engine.store.get_run(tenant.id, run.id)
+        if row.status == "failed":
+            break
+        if await engine.store.lease_run(run.id, "w1", timedelta(seconds=30)):
+            await engine.executor.advance(run.id, "w1")
+        else:
+            await asyncio.sleep(0.05)
+    row = await engine.store.get_run(tenant.id, run.id)
+    assert row.status == "failed" and "10 times in a row" in row.error["message"]
+    errors = [e.data for e in await engine.store.list_events(tenant.id, run.id) if e.type == "run.error"]
+    assert [e["attempt"] for e in errors] == list(range(1, 10))
+    assert [e["retry_in_seconds"] for e in errors] == [30, 60, 120, 240, 480, 960, 1920, 3600, 3600]
+
+
+async def test_retry_reruns_only_failed_children(engine, tenant, tmp_path):
+    mark = tmp_path / "failed-once"
+    await engine.store.apply_resource(tenant.id, res("Workflow", "child", {
+        "inputs": {"n": {"type": "integer"}},
+        # n=2 fails the first time only
+        "steps": [{"id": "s", "type": "script", "run": f"test {{{{ inputs.n }}}} -ne 2 || test -f {mark} || {{ touch {mark}; exit 1; }}"}],
+    }))
+    await engine.store.apply_resource(tenant.id, res("Workflow", "fan", {"steps": [{
+        "id": "each", "type": "workflow", "workflow": "child", "for_each": "{{ [1, 2, 3] }}", "with": {"n": "{{ item }}"},
+        "retry": {"max_attempts": 2, "backoff": "1s"},
+    }]}))
+    run = await engine.executor.start_run(tenant.id, "fan", {})
+    for _ in range(150):  # up to ~15s of real time: under load, Temporal delivers child wakes slowly
+        await engine.run_until_idle()
+        if (await engine.store.get_run(tenant.id, run.id)).status == "succeeded":
+            break
+        clock.advance(timedelta(seconds=2))
+        await asyncio.sleep(0.1)  # with Temporal, wakes from finished children arrive asynchronously
+    run = await engine.store.get_run(tenant.id, run.id)
+    step = await engine.store.get_step(run.id, "each")
+    children = await engine.store.list_runs(tenant.id, parent_run_id=run.id)
+    assert run.status == "succeeded", step.error
+    assert step.attempt == 2 and len(children) == 4  # 3 first time, only n=2 again
+
+
+async def test_budget_counts_runs_still_in_flight(engine, tenant):
+    await engine.store.apply_resource(tenant.id, res("Workflow", "slow", {"steps": [{"id": "w", "type": "wait", "duration": "1d"}]}))
+    await engine.store.apply_resource(tenant.id, res("Campaign", "c", {
+        "workflow": "slow", "targets": {"items": [{"name": f"t{i}"} for i in range(4)], "key": "{{ target.name }}"},
+        "policy": {"concurrency": 2, "budget_usd": 1.0},
+    }))
+    row = await engine.campaigns.launch(tenant.id, "c")
+    await engine.run_until_idle()
+    for run in await engine.store.list_runs(tenant.id, campaign_id=row.id):
+        await engine.store.update_run(run.id, usage={"cost_usd": 0.6})
+    clock.advance(timedelta(seconds=31))
+    await engine.run_until_idle()
+    row = await engine.store.get_campaign(tenant.id, row.id)
+    assert row.stats["cost_usd"] == 1.2 and row.status == "paused" and row.stats["pending"] == 2

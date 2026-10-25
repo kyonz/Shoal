@@ -1,0 +1,11 @@
+# "/shoal ship api" in Slack starts the workflow as the person who typed it.
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata:
+  name: slack-ship
+spec:
+  connection: slack
+  event: slash_command
+  filter: "{{ event.args[0] == 'ship' and event.args | length > 1 }}"
+  workflow: ship
+  inputs: {service: "{{ event.args[1] }}"}

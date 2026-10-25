@@ -7,6 +7,7 @@ registered for the trigger -> the bugfix workflow runs -> it writes back to the 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -407,7 +408,7 @@ async def api(engine, jira):
         yield client
 
 
-async def test_api_registers_shows_and_removes_webhooks(api, jira):
+async def test_api_registers_shows_and_removes_webhooks(api, jira, engine):
     ns = "/v1/namespaces/default"
     assert (await api.put(f"{ns}/secrets/jira-token", json={"value": "t0ken"})).status_code == 201
     r = await api.put(f"{ns}/connections/jira", json={"spec": {
@@ -439,12 +440,32 @@ async def test_api_registers_shows_and_removes_webhooks(api, jira):
     [listed] = (await api.get(f"{ns}/connections/jira/webhooks")).json()
     assert listed["trigger"] == "ready-for-ai"
 
-    # Jira delivers over HTTP to the registered URL.
+    # Jira delivers over HTTP to the registered URL; it is verified, queued, then handled by a worker.
     [delivery] = jira.move("BUG-7", "Ready for AI")
-    r = await api.post(delivery.url.replace("http://shoal.test", ""), content=delivery.body, headers=delivery.headers)
-    assert r.status_code == 202 and r.json()["triggers"][0]["status"] == "fired", r.text
-    r = await api.post(delivery.url.replace("http://shoal.test", ""), content=delivery.body, headers={})
+    path = delivery.url.replace("http://shoal.test", "")
+    r = await api.post(path, content=delivery.body, headers=delivery.headers)
+    assert r.status_code == 202 and r.json()["queued"] is True, r.text
+    assert (await api.post(path, content=delivery.body, headers={})).status_code == 422
+    assert await engine.integrations.process_queued_webhooks() == 1
+    handled = await engine.store.get_webhook_delivery(r.json()["delivery"])
+    assert handled.status == "done" and handled.result["triggers"][0]["status"] == "fired", handled.result
+    # The registration's secret is not the connection's: its signature does not open the connection's URL.
+    r = await api.post(path.rsplit("/", 1)[0], content=delivery.body,
+                       headers={**delivery.headers, "x-shoal-registration-id": webhook["id"]})
     assert r.status_code == 422
+    # Nor can a sender of the connection's URL route a delivery to a registration with Shoal's internal header.
+    await api.put(f"{ns}/secrets/jira-hook", json={"value": "conn-secret"})
+    r = await api.put(f"{ns}/connections/jira", json={"spec": {
+        "integration": "jira", "config": {"base_url": "https://acme.atlassian.net", "email": "bot@acme.example"},
+        "secrets": {"api_token": "jira-token", "webhook_secret": "jira-hook"}}})
+    assert r.status_code == 200, r.text
+    signature = "sha256=" + hmac.new(b"conn-secret", delivery.body, hashlib.sha256).hexdigest()
+    r = await api.post(path.rsplit("/", 1)[0], content=delivery.body,
+                       headers={"x-hub-signature": signature, "x-shoal-registration-id": webhook["id"]})
+    assert r.status_code == 202, r.text
+    assert await engine.integrations.process_queued_webhooks() == 1
+    plain = await engine.store.get_webhook_delivery(r.json()["delivery"])
+    assert plain.status == "done" and plain.result["triggers"] == [], plain.result
 
     # Re-sync after someone deleted it in Jira.
     jira.webhooks.clear()

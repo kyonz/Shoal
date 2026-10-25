@@ -4,14 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Response
-from pydantic import TypeAdapter
+from fastapi import APIRouter, Query, Response
+from pydantic import BaseModel, TypeAdapter
 
 import shoal
-from shoal.api.deps import CtxDep, EngineDep, SystemCtxDep
+from shoal.api.deps import CtxDep, EngineDep, InstanceReaderCtxDep, SystemCtxDep
 from shoal.api.schemas import Me, Permissions, TenantCreated, TenantIn, TenantOut
+from shoal.blueprints.defaults import install as install_default_blueprints
 from shoal.core.models import KIND_BY_PLURAL, RESOURCE_KINDS, Step
 from shoal.core.scope import TENANT_SCOPED_KINDS
+from shoal.limits import TenantQuotas
+
+
+class QuotasOut(BaseModel):
+    tenant: TenantQuotas
+    effective: TenantQuotas
 
 router = APIRouter()
 
@@ -46,7 +53,8 @@ async def info(engine: EngineDep) -> dict[str, Any]:
         "api_version": "v1",
         "public_url": engine.settings.public_url,
         "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "skill-sources", "evals", "decisions", "a2a",
-                     "assistant", "script-languages", "cloud-identities"],
+                     "assistant", "script-languages", "cloud-identities", "instance-accounts"],
+        "instance_sign_in": engine.settings.instance_oidc is not None,
         "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "skill_sources", "steps", "credentials")},
     }
 
@@ -66,24 +74,26 @@ async def metrics(engine: EngineDep) -> Response:
 @router.post("/v1/tenants", status_code=201, tags=["tenants"], response_model=TenantCreated)
 async def create_tenant(body: TenantIn, ctx: SystemCtxDep) -> TenantCreated:
     engine = ctx.engine
-    tenant = await engine.store.create_tenant(body.slug, body.name)
+    tenant = await engine.store.create_tenant(body.slug, body.name, description=body.description)
     admin = await engine.directory.create_user(tenant.id, "admin", kind="service", display_name="Bootstrap admin")
     await engine.directory.bind(tenant.id, "tenant-admin", "user", admin.id, actor=ctx.actor)
-    if body.admin_email:
-        human = await engine.directory.create_user(tenant.id, body.admin_email, email=body.admin_email)
-        await engine.directory.bind(tenant.id, "tenant-admin", "user", human.id, actor=ctx.actor)
+    if body.admin_email:  # links their instance account when they have one, so the tenant shows up in their switcher
+        await engine.accounts.add_to_tenant(tenant.id, body.admin_email, "tenant-admin", actor=ctx.actor)
     _, token = await engine.store.create_api_key(tenant.id, "bootstrap", ["*"], owner_id=admin.id, created_by=ctx.actor)
+    if engine.settings.default_blueprints:
+        await install_default_blueprints(engine, tenant.id, actor=ctx.actor)
     await engine.store.audit(tenant.id, ctx.actor, "tenant.created", tenant.slug)
+    await engine.store.audit(None, ctx.actor, "tenant.created", tenant.slug)
     return TenantCreated(tenant=TenantOut.model_validate(tenant), api_key=token)
 
 
 @router.get("/v1/tenants", tags=["tenants"], response_model=list[TenantOut])
-async def list_tenants(ctx: SystemCtxDep) -> Any:
+async def list_tenants(ctx: InstanceReaderCtxDep) -> Any:
     return await ctx.engine.store.list_tenants()
 
 
 @router.get("/v1/tenants/{slug}", tags=["tenants"], response_model=TenantOut)
-async def get_tenant(slug: str, ctx: SystemCtxDep) -> Any:
+async def get_tenant(slug: str, ctx: InstanceReaderCtxDep) -> Any:
     from shoal.core.errors import NotFound
 
     tenant = await ctx.engine.store.get_tenant_by_slug(slug)
@@ -96,6 +106,45 @@ async def get_tenant(slug: str, ctx: SystemCtxDep) -> Any:
 async def delete_tenant(slug: str, ctx: SystemCtxDep) -> None:
     await ctx.engine.store.delete_tenant(slug)
     await ctx.engine.store.audit(None, ctx.actor, "tenant.deleted", slug)
+
+
+async def _tenant(ctx: SystemCtxDep, slug: str) -> Any:
+    from shoal.core.errors import NotFound
+
+    tenant = await ctx.engine.store.get_tenant_by_slug(slug)
+    if tenant is None:
+        raise NotFound(f"tenant '{slug}' not found")
+    return tenant
+
+
+@router.get("/v1/tenants/{slug}/quotas", tags=["tenants"], response_model=QuotasOut)
+async def get_tenant_quotas(slug: str, ctx: SystemCtxDep) -> QuotasOut:
+    tenant = await _tenant(ctx, slug)
+    return await _quotas(ctx, tenant)
+
+
+@router.put("/v1/tenants/{slug}/quotas", tags=["tenants"], response_model=QuotasOut,
+            summary="Set a tenant's quotas (unset fields use the server defaults; 0 means unlimited)")
+async def put_tenant_quotas(slug: str, body: TenantQuotas, ctx: SystemCtxDep) -> QuotasOut:
+    tenant = await _tenant(ctx, slug)
+    own = body.model_dump(exclude_none=True)
+    tenant = await ctx.engine.store.update_tenant_settings(tenant.id, quotas=own or None)
+    ctx.engine.quotas.forget(tenant.id)
+    await ctx.engine.store.audit(tenant.id, ctx.actor, "tenant.quotas", slug, quotas=own)
+    return await _quotas(ctx, tenant)
+
+
+async def _quotas(ctx: Any, tenant: Any) -> QuotasOut:
+    own = TenantQuotas.model_validate((tenant.settings or {}).get("quotas") or {})
+    ctx.engine.quotas.forget(tenant.id)
+    return QuotasOut(tenant=own, effective=await ctx.engine.quotas.for_tenant(tenant.id))
+
+
+@router.get("/v1/quotas", tags=["me"], response_model=QuotasOut, summary="The calling tenant's quotas")
+async def my_quotas(ctx: CtxDep) -> QuotasOut:
+    tenant = await ctx.engine.store.get_tenant(ctx.tenant_id)
+    own = TenantQuotas.model_validate((tenant.settings or {}).get("quotas") or {})
+    return QuotasOut(tenant=own, effective=await ctx.engine.quotas.for_tenant(tenant.id))
 
 
 # --------------------------------------------------------------------------- the caller
@@ -114,6 +163,8 @@ async def me(ctx: CtxDep) -> Me:
         display_name=p.display_name,
         email=p.email,
         is_system_admin=p.is_system_admin,
+        account_id=p.account_id,
+        instance_role=p.instance_role,
         namespaces=namespaces,
         federated=bool(p.tenant_id and await ctx.engine.federation.federated_link_id(p.tenant_id)),
     )
@@ -128,14 +179,20 @@ async def my_permissions(ctx: CtxDep) -> Any:
 # --------------------------------------------------------------------------- catalogues
 
 
-@router.get("/v1/integrations", tags=["catalog"])
-async def integrations(ctx: CtxDep) -> list[dict[str, Any]]:
-    return ctx.engine.integrations.catalog()
+@router.get("/v1/integrations", tags=["catalog"], summary="Installed integrations and the ones the organisation registered")
+async def integrations(ctx: CtxDep, namespace: str | None = Query(
+    None, description="Only the registered integrations this namespace may use (default: all of them)."
+)) -> list[dict[str, Any]]:
+    return await ctx.engine.integrations.catalog(ctx.principal.tenant_id, namespace=namespace)
 
 
 @router.get("/v1/integrations/{key}", tags=["catalog"])
 async def integration(key: str, ctx: CtxDep) -> dict[str, Any]:
-    return type(ctx.engine.integrations.get(key)).catalog()
+    if ctx.principal.tenant_id:
+        found = await ctx.engine.integrations.resolve(ctx.principal.tenant_id, key)
+    else:
+        found = ctx.engine.integrations.get(key)
+    return type(found).catalog()
 
 
 @router.get("/v1/plugins", tags=["catalog"], summary="Installed plugins of every kind")

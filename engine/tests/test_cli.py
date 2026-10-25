@@ -198,9 +198,93 @@ def test_approve_and_reject(cli, tenant_key):
     assert result.exit_code == 0, result.output
     assert "step review rejected" in result.output
     run = _wait_for(cli, auth, rejected_id, "succeeded", "failed")
+    assert run["status"] == "failed" and run["error"]["message"].startswith("rejected by")  # a rejection stops the run
     steps = {s["step_id"]: s for s in run["steps"]}
-    assert steps["review"]["output"]["approved"] is False
-    assert steps["done"]["status"] == "skipped"
+    assert steps["review"]["status"] == "failed" and steps["done"]["status"] == "cancelled"
+
+
+FLEET = """
+apiVersion: shoal.dev/v1
+kind: Campaign
+metadata: {name: greet-all}
+spec:
+  workflow: hello
+  targets: {items: [{id: ada}, {id: grace}], key: "{{ target.id }}"}
+  inputs: {name: "{{ target.id }}"}
+---
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata: {name: by-hand}
+spec:
+  workflow: hello
+  event: schedule
+  schedule: "0 0 1 1 *"
+  inputs: {name: "{{ event.who }}"}
+---
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata: {name: greeter}
+spec:
+  title: Greeter
+  summary: Greets
+  status: published
+  params: {greeting: {default: Hello}}
+  resources:
+    - kind: Workflow
+      metadata: {name: "{{ prefix }}greet"}
+      spec: {steps: [{id: g, type: set, values: {text: "{{ params.greeting }}"}}]}
+"""
+
+
+def test_rerun_triggers_campaigns_and_blueprints(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0
+    applied = cli(*auth, "apply", "-f", "-", input=FLEET)
+    assert applied.exit_code == 0, applied.output
+
+    first = cli(*auth, "run", "hello", "-i", "name=Ada", "--wait", "-o", "json")
+    run_id = json.loads(first.stdout)["id"]
+    again = cli(*auth, "rerun", run_id, "--wait")
+    assert again.exit_code == 0, again.output
+    assert "rerun of" in again.output and "Hello Ada" in again.output
+
+    fired = cli(*auth, "triggers", "fire", "by-hand", "-d", '{"who": "Grace"}', "-o", "json")
+    assert fired.exit_code == 0, fired.output
+    fired_run = json.loads(fired.stdout)["run_id"]
+    assert _wait_for(cli, auth, fired_run, "succeeded", "failed")["outputs"] == {"greeting": "Hello Grace"}
+    assert cli(*auth, "triggers", "fire", "by-hand", "-d", "[1]").exit_code == 2
+
+    launched = cli(*auth, "campaigns", "launch", "greet-all", "--paused", "-o", "json")
+    assert launched.exit_code == 0, launched.output
+    campaign_id = json.loads(launched.stdout)["id"]
+    assert campaign_id in cli(*auth, "campaigns", "list").output
+    resumed = cli(*auth, "campaigns", "resume", campaign_id)
+    assert resumed.exit_code == 0, resumed.output
+    for _ in range(200):
+        shown = json.loads(cli(*auth, "campaigns", "get", campaign_id, "-o", "json").stdout)
+        if shown["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert shown["stats"]["succeeded"] == 2
+    assert "2/2" in cli(*auth, "campaigns", "get", campaign_id).output
+
+    dry = cli(*auth, "blueprints", "adopt", "greeter", "--prefix", "cli", "--dry-run")
+    assert dry.exit_code == 0 and "workflow/cli-greet" in dry.output and "dry run" in dry.output
+    adopted = cli(*auth, "blueprints", "adopt", "greeter", "--prefix", "cli", "-p", "greeting=Hi")
+    assert adopted.exit_code == 0, adopted.output
+    assert "adoption" in adopted.output
+    assert "cli-greet" in cli(*auth, "get", "workflows").output
+
+
+def test_blueprints_install_defaults(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "delete", "blueprints", "github-pr-review").exit_code == 0
+    dry = cli(*auth, "blueprints", "install-defaults", "--dry-run")
+    assert dry.exit_code == 0, dry.output
+    assert "blueprint/github-pr-review v1.0.0 created (dry run)" in dry.output and "slack-bot v1.0.0 unchanged" in dry.output
+    done = cli(*auth, "blueprints", "install-defaults", "-o", "json")
+    assert done.exit_code == 0, done.output
+    assert {r["name"]: r["outcome"] for r in json.loads(done.stdout)}["github-pr-review"] == "created"
 
 
 def test_delete_names_the_kind(cli, tenant_key):
@@ -291,6 +375,17 @@ def test_eval_run_gates(cli, tenant_key):
     started = cli(*auth, "eval", "run", "triage-eval", "-o", "name")
     assert started.exit_code == 0 and started.stdout.strip()
 
+    listed = cli(*auth, "eval", "list", "triage-eval")
+    assert listed.exit_code == 0 and "triage-eval" in listed.output and "failed" in listed.output, listed.output
+    names = cli(*auth, "eval", "list", "-o", "name").stdout.split()
+    assert row["id"] in names and len(names) == 3
+    compared = cli(*auth, "eval", "compare", row["id"], names[-1])
+    assert compared.exit_code == 0 and "over 2 shared cases" in compared.output, compared.output
+    scores = cli(*auth, "eval", "scores", "triage-eval")
+    assert scores.exit_code == 0 and "v1" in scores.output and "0.500" in scores.output
+    cancelled = cli(*auth, "eval", "cancel", row["id"])
+    assert cancelled.exit_code == 1 and "completed" in cancelled.output  # finished runs cannot be cancelled
+
 
 def test_integrations_new(tmp_path):
     runner = CliRunner()
@@ -380,3 +475,44 @@ spec: {workflow: noop, connection: jira, event: issue_updated, webhook: {statuse
     assert len(jira.webhooks) == 1
     url = cli(*auth, "connections", "webhook-url", "jira")
     assert url.stdout.strip().startswith(f"{SERVER}/v1/hooks/wh_")
+
+
+def test_integrations_register_and_list(cli, tenant_key, server):
+    engine = server.app.state.engine
+    engine.settings.integration_allow_imports = True
+    auth = ("--token", tenant_key)
+    bad = cli(*auth, "integrations", "register", "x")
+    assert bad.exit_code == 2 and "exactly one of --url or --package" in bad.output
+    done = cli(*auth, "integrations", "register", "hooks", "--package", "shoal.integrations.webhook:WebhookIntegration",
+               "--scope", "namespace", "--allow-namespace", "default")
+    assert done.exit_code == 0, done.output
+    assert "registered hooks" in done.stdout and "namespace level" in done.stdout
+    listed = json.loads(cli(*auth, "integrations", "list", "-o", "json").stdout)
+    hooks = next(i for i in listed if i["key"] == "hooks")
+    assert hooks["source"] == "custom" and hooks["connection_scopes"] == ["namespace"]
+    assert cli(*auth, "get", "custom-integrations", "-o", "name").stdout.split() == ["custom-integrations/hooks"]
+    assert cli(*auth, "integrations", "refresh", "hooks").exit_code == 0
+
+
+def test_instance_admin_manages_tenants(cli, tenant_key):
+    added = cli("--token", ADMIN, "tenants", "add-member", "acme", "dana@acme.test", "--role", "viewer")
+    assert added.exit_code == 0 and "viewer" in added.output, added.output
+    assert cli("--token", ADMIN, "tenants", "suspend", "acme").exit_code == 0
+    listed = cli("--token", ADMIN, "tenants", "list", "-o", "json")
+    assert json.loads(listed.stdout)[0]["status"] == "suspended"
+    blocked = cli("--token", tenant_key, "get", "workflows")
+    assert blocked.exit_code == 1 and "suspended" in blocked.output
+    assert cli("--token", ADMIN, "tenants", "resume", "acme").exit_code == 0
+    assert cli("--token", tenant_key, "get", "workflows").exit_code == 0
+
+
+def test_connection_webhook_url(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    hooks = "apiVersion: shoal.dev/v1\nkind: Connection\nmetadata: {name: hooks}\nspec: {integration: webhook, config: {allow_unsigned: true}}\n"
+    assert cli(*auth, "apply", "-f", "-", input=hooks).exit_code == 0
+    shown = cli(*auth, "connections", "webhook-url", "hooks", "-o", "json")
+    assert shown.exit_code == 0, shown.output
+    url = json.loads(shown.stdout)["url"]
+    assert "/v1/hooks/" in url
+    assert url in cli(*auth, "connections", "webhook-url", "hooks").output.replace("\n", "")
+    assert cli(*auth, "connections", "webhook-url", "missing").exit_code != 0

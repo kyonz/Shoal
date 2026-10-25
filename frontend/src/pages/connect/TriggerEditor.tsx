@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CalendarClock, CheckCircle2, FlaskConical, Play, Rocket, Save, Trash2, Workflow, XCircle, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { ApiError, rawJson, type Schemas } from "@/api/client";
 import { useDeleteResource, useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
@@ -35,6 +35,7 @@ import {
   Tr,
   useConfirm,
 } from "@/components/ui";
+import { SchemaForm } from "@/components/forms/SchemaForm";
 import { ChoiceCard, Crumb, ErrorList, ExprInput, NAME_RE, VersionsPanel, YamlPanel, useYamlSync } from "./shared";
 import { WebhookFields, WebhookStatusCard } from "./TriggerWebhook";
 import { deliveryStatus } from "./Triggers";
@@ -49,6 +50,8 @@ interface Spec {
   timezone?: string;
   overlap?: "allow" | "skip";
   filter?: string;
+  match?: Record<string, unknown>;
+  rate_limit?: { max: number; per: string; key?: string };
   inputs?: Record<string, unknown>;
   dedupe_key?: string;
   enabled?: boolean;
@@ -84,12 +87,13 @@ function timezones(): string[] {
 function clean(spec: Spec): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(spec)) {
-    if (v === undefined || v === "" || (k === "inputs" && v && !Object.keys(v as object).length)) continue;
+    if (v === undefined || v === "" || ((k === "inputs" || k === "match") && v && !Object.keys(v as object).length)) continue;
     out[k] = v;
   }
   if (spec.event === "schedule") {
     delete out.connection;
     delete out.webhook;
+    delete out.match;
   } else {
     delete out.schedule;
     delete out.timezone;
@@ -118,7 +122,14 @@ export default function TriggerEditor() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [spec, setSpec] = useState<Spec>({ event: "", enabled: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" });
+  const [params] = useSearchParams();
+  const [spec, setSpec] = useState<Spec>(() => ({
+    event: params.get("event") ?? "",
+    enabled: true,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    ...(params.get("connection") ? { connection: params.get("connection")! } : {}),
+    ...(params.get("channel") ? { match: { channels: [params.get("channel")!] } } : {}),
+  }));
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("settings");
 
@@ -315,7 +326,18 @@ export default function TriggerEditor() {
                   <CardHeader title="3 · Conditions" description={<>Expressions over <code className="font-mono">event</code>. Leave the filter empty to fire on every event.</>} />
                   <div className="space-y-3.5 p-4">
                     {source === "event" && (
-                      <Field label="Filter" description={<>e.g. <code className="font-mono">{"{{ event.status_change.to == 'Ready for AI' }}"}</code></>}>
+                      <Field
+                        label="Filter"
+                        description={
+                          <>
+                            e.g. <code className="font-mono">{"{{ event.status_change.to == 'Ready for AI' }}"}</code>. To limit it to a{" "}
+                            <Link to={nsPath(ns, "target-lists")} className="text-accent hover:underline">
+                              target list
+                            </Link>
+                            : <code className="font-mono">{"{{ event.repository.full_name in lists['core-repos'] }}"}</code>
+                          </>
+                        }
+                      >
                         <ExprInput value={spec.filter ?? ""} onChange={(v) => set({ filter: v || undefined })} placeholder="{{ event... }}" />
                       </Field>
                     )}
@@ -332,6 +354,16 @@ export default function TriggerEditor() {
                         </NativeSelect>
                       </Field>
                     </div>
+                    {source === "event" && catalog?.trigger_filter_schema && (
+                      <div className="rounded-lg border border-border p-3">
+                        <div className="mb-2 text-[13px] font-medium">{catalog.title} filters</div>
+                        <p className="mb-3 text-xs text-muted">Every filter you set must hold. {integrationKey === "slack" && "Add the app to a channel and pick it here to wire the channel to this workflow."}</p>
+                        <SchemaForm schema={catalog.trigger_filter_schema} value={spec.match ?? {}} onChange={(v) => set({ match: v })} collapseOptional />
+                      </div>
+                    )}
+                    {source === "event" && (
+                      <RateLimitFields value={spec.rate_limit} onChange={(v) => set({ rate_limit: v })} />
+                    )}
                     {spec.triage != null && <Badge tone="info">Semantic triage configured (edit in YAML)</Badge>}
                   </div>
                 </Card>
@@ -375,6 +407,28 @@ export default function TriggerEditor() {
         </aside>
       </div>
     </Page>
+  );
+}
+
+function RateLimitFields({ value, onChange }: { value?: Spec["rate_limit"]; onChange: (v: Spec["rate_limit"]) => void }) {
+  const on = !!value;
+  return (
+    <div className="space-y-2">
+      <Switch checked={on} onCheckedChange={(c) => onChange(c ? { max: 5, per: "1m" } : undefined)} label="Rate limit" />
+      {value && (
+        <div className="grid gap-3.5 sm:grid-cols-3">
+          <Field label="At most">
+            <Input type="number" min={1} value={value.max} onChange={(e) => onChange({ ...value, max: Math.max(1, Number(e.target.value) || 1) })} />
+          </Field>
+          <Field label="Per" description="e.g. 1m, 1h">
+            <Input mono value={value.per} onChange={(e) => onChange({ ...value, per: e.target.value })} />
+          </Field>
+          <Field label="For each" description="Optional key, e.g. per user">
+            <ExprInput value={value.key ?? ""} onChange={(v) => onChange({ ...value, key: v || undefined })} placeholder="{{ event.user }}" />
+          </Field>
+        </div>
+      )}
+    </div>
   );
 }
 

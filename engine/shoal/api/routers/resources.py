@@ -34,8 +34,10 @@ from shoal.core.ids import new_id
 from shoal.core.models import (
     KIND_BY_PLURAL,
     Connection,
+    CustomIntegration,
     ResourceBase,
     SandboxProfile,
+    TargetListSpec,
     Trigger,
     parse_resource,
 )
@@ -46,6 +48,7 @@ from shoal.integrations.base import (
     describe_actions,
     describe_resources,
 )
+from shoal.integrations.manager import shared_with
 from shoal.store import tables as t
 from shoal.triggers import validate_cron
 
@@ -64,7 +67,11 @@ TENANT_VERBS = {"identities": {"read": "identities:read", "write": "identities:w
                 "model-policies": {"read": "model-policies:read", "write": "model-policies:manage",
                                    "delete": "model-policies:manage"},
                 "skill-sources": {"read": "skill-sources:read", "write": "skill-sources:manage",
-                                  "delete": "skill-sources:manage"}}
+                                  "delete": "skill-sources:manage"},
+                "eval-platforms": {"read": "eval-platforms:read", "write": "eval-platforms:manage",
+                                   "delete": "eval-platforms:manage"},
+                "custom-integrations": {"read": "custom-integrations:read", "write": "custom-integrations:manage",
+                                        "delete": "custom-integrations:manage"}}
 
 
 async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
@@ -74,6 +81,10 @@ async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
     if row.kind == "Connection":
         with use_namespace(row.namespace):
             status["webhook_url"] = await ctx.engine.integrations.webhook_url(ctx.tenant_id, row.name)
+    elif row.kind == "CustomIntegration":
+        loaded = await ctx.engine.integrations.custom.load(ctx.tenant_id, row.name)
+        if loaded is not None:
+            status.update(loaded.status())
     elif row.kind == "Trigger" and doc["spec"].get("webhook") is not None:
         # A compact summary (it also lands in Terraform state); GET .../triggers/{name}/webhook has the details.
         registration = await ctx.engine.webhooks.get(ctx.tenant_id, row.namespace, row.name)
@@ -170,10 +181,19 @@ async def sync_webhook(ctx: Ctx, kind: str, namespace: str, name: str) -> None:
 MessageQuery = Query(None, max_length=2000, description="Change note stored with the new version.")
 
 
+async def check_apply(ctx: Ctx, resource: ResourceBase, namespace: str) -> None:
+    """Checks that need the tenant's state: connection levels, custom integration sources."""
+    if isinstance(resource, Connection):
+        await ctx.engine.integrations.check_connection(ctx.tenant_id, resource, namespace)
+    elif isinstance(resource, CustomIntegration):
+        await ctx.engine.integrations.custom.check(ctx.tenant_id, resource)
+
+
 async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response,
                message: str | None = None) -> ResourceOut:
     resource = build_resource(kind, name, body)
     validate_plugin_config(ctx.engine, resource)
+    await check_apply(ctx, resource, namespace)
     await validate_webhook(ctx, resource, namespace)
     row, outcome = await ctx.engine.store.apply_resource(
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec), message=message
@@ -280,11 +300,15 @@ def _tenant_routes(plural: str, kind: str) -> None:
         await ctx.engine.store.delete_resource(ctx.tenant_id, kind, name)
         await ctx.audit(f"{kind.lower()}.deleted", name)
 
-
     @router.get(f"/{plural}/{{name}}/versions", tags=tag, response_model=list[ResourceVersionOut], name=f"versions_{plural}")
     async def versions(name: str, ctx: CtxDep) -> Any:
         await ctx.require(verbs["read"])
         return await ctx.engine.store.resource_versions(ctx.tenant_id, kind, name)
+
+    @router.get(f"/{plural}/{{name}}/versions/{{version}}", tags=tag, response_model=ResourceVersionOut, name=f"version_{plural}")
+    async def version(name: str, version: int, ctx: CtxDep) -> Any:
+        await ctx.require(verbs["read"])
+        return await ctx.engine.store.get_resource_version_row(ctx.tenant_id, kind, name, version)
 
     @router.get(f"/{plural}/{{name}}/diff", tags=tag, response_model=VersionDiffOut, name=f"diff_{plural}")
     async def diff_versions(name: str, ctx: CtxDep, from_: int = Query(alias="from", ge=1), to: int | None = Query(None, ge=1)) -> Any:
@@ -393,6 +417,11 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
                 await _require_feature(ctx, resource.metadata.name, doc.get("spec"))
         else:
             await ctx.namespace(ns, f"{plural}:write")
+        try:
+            await check_apply(ctx, resource, ns)
+        except InvalidRequest as exc:
+            results.append(ApplyResult(kind=kind, name=name, namespace=ns, outcome="invalid", error=str(exc)))
+            continue
         parsed.append((resource, ns, strip_nulls(doc.get("spec") or {})))
     if any(r.outcome == "invalid" for r in results):
         raise InvalidRequest("some documents are invalid; nothing was applied", details={"results": [r.model_dump() for r in results]})
@@ -454,6 +483,27 @@ async def delete_secret(namespace: str, name: str, ctx: CtxDep) -> None:
 # --------------------------------------------------------------------------- connections
 
 
+@router.get("/namespaces/{namespace}/org-connections", tags=["connections"], response_model=list[ResourceOut],
+            summary="Organisation connections (in `shared`) this namespace may use")
+async def org_connections(namespace: str, ctx: CtxDep) -> Any:
+    await ctx.namespace(namespace, "connections:read")
+    if namespace == SHARED_NAMESPACE:
+        return []
+    rows = await ctx.engine.store.list_resources(ctx.tenant_id, "Connection", namespace=SHARED_NAMESPACE)
+    return [await to_out(ctx, r) for r in rows if shared_with(r.document, r.namespace, namespace)]
+
+
+@router.post("/custom-integrations/{name}/refresh", tags=["custom-integrations"],
+             summary="Pull a registered integration's manifest again (settings schema, actions, events)")
+async def refresh_custom_integration(name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.require("custom-integrations:manage")
+    loaded = await ctx.engine.integrations.custom.load(ctx.tenant_id, name, refresh=True)
+    if loaded is None:
+        raise NotFound(f"CustomIntegration '{name}' not found")
+    await ctx.audit("customintegration.refreshed", name, ready=loaded.integration is not None)
+    return {"name": name, **loaded.status()}
+
+
 async def _connection(ctx: Ctx, namespace: str, name: str) -> Connection:
     row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace)
     return Connection.model_validate(row.document)
@@ -489,8 +539,93 @@ async def connection_webhook(namespace: str, name: str, ctx: CtxDep) -> dict[str
     with use_namespace(namespace):
         url = await ctx.engine.integrations.webhook_url(ctx.tenant_id, name)
         conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
-    return {"url": url, "instructions": integration.webhook_setup_instructions(url)}
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
+    out: dict[str, Any] = {"url": url, "instructions": integration.webhook_setup_instructions(url)}
+    manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name,
+                                          config=_plain_config(integration, conn))
+    if manifest is not None:
+        out["manifest"] = manifest
+    out["install"] = bool(integration.install_fields)
+    out["setup"] = bool(integration.setup_features)
+    return out
+
+
+def _plain_config(integration: Any, conn: Connection) -> Any:
+    """The connection's non-secret settings as the integration's model (None if they do not validate alone)."""
+    try:
+        return integration.connection_model.model_validate(conn.spec.config)
+    except ValidationError:
+        return None
+
+
+@router.get("/namespaces/{namespace}/connections/{name}/setup", tags=["connections"],
+            summary="Guided app setup: features with the permissions they need, the generated manifest, progress")
+async def connection_setup(
+    namespace: str, name: str, ctx: CtxDep,
+    features: str | None = Query(None, description="Comma-separated features to preview instead of the connection's"),
+) -> dict[str, Any]:
+    await ctx.namespace(namespace, "connections:read")
+    with use_namespace(namespace):
+        url = await ctx.engine.integrations.webhook_url(ctx.tenant_id, name)
+        conn = await _connection(ctx, namespace, name)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
+    config = _plain_config(integration, conn)
+    chosen = None if features is None else [f for f in features.split(",") if f]
+    enabled = integration.enabled_features(config, chosen)
+    triggers = [Trigger.model_validate(r.document)
+                for r in await ctx.engine.store.list_resources(ctx.tenant_id, "Trigger", all_namespaces=True)]
+    triggers = [tr for tr in triggers if tr.spec.connection == name]
+    workflows = []
+    for row in await ctx.engine.store.list_resources(ctx.tenant_id, "Workflow", namespace=namespace):
+        try:
+            workflow = parse_resource(row.document)
+        except (ValidationError, ValueError):
+            continue
+        if name in (workflow.spec.connections or {}).values():
+            workflows.append(workflow)
+    used = integration.features_used(triggers, workflows)
+    redirect = ctx.engine.integrations.install_redirect_uri
+    manifest = integration.setup_manifest(url, redirect, name, config=config, features=chosen)
+    scopes, events = integration.setup_permissions(enabled)
+    secrets = {s.name for s in await ctx.engine.store.list_secrets(ctx.tenant_id, namespace=namespace)}
+    secrets |= {s.name for s in await ctx.engine.store.list_secrets(ctx.tenant_id, namespace=SHARED_NAMESPACE)}
+    fields = {}
+    for field in integration.secret_fields():
+        secret = conn.spec.secrets.get(field)
+        fields[field] = {"secret": secret, "set": bool(secret and secret in secrets)}
+    out: dict[str, Any] = {
+        "integration": integration.key,
+        "url": url,
+        "install_redirect_url": redirect,
+        "instructions": integration.webhook_setup_instructions(url),
+        "features": [{**f.model_dump(), "enabled": f.key in enabled, "used_by": used.get(f.key, [])}
+                     for f in integration.setup_features],
+        "custom": chosen is not None or getattr(config, "features", None) is not None,
+        "scopes": scopes,
+        "events": events,
+        "secrets": fields,
+        "config": conn.spec.config,
+        "install": bool(integration.install_fields),
+    }
+    if manifest is not None:
+        out["manifest"] = manifest
+        out["manifest_yaml"] = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
+        create_url = integration.setup_create_url(manifest)
+        if create_url:
+            out["create_url"] = create_url
+    return out
+
+
+@router.post("/namespaces/{namespace}/connections/{name}/install", tags=["connections"],
+             summary="Start an app install (e.g. Add to Slack); returns the URL to send the admin to")
+async def install_connection(
+    namespace: str, name: str, ctx: CtxDep,
+    then: str | None = Query(None, pattern="^setup$", description="Come back to the guided setup instead of the connection"),
+) -> dict[str, Any]:
+    await ctx.namespace(namespace, "connections:write")
+    await ctx.require("secrets:write", namespace)
+    url = await ctx.engine.integrations.install_start(ctx.tenant_id, namespace, name, ctx.actor, then=then)
+    return {"authorize_url": url}
 
 
 @router.get("/namespaces/{namespace}/connections/{name}/webhooks", tags=["connections"], response_model=list[TriggerWebhookOut],
@@ -511,7 +646,7 @@ async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]
     """The integration catalogue lists static actions; dynamic integrations (remote) only know theirs per connection."""
     await ctx.namespace(namespace, "connections:read")
     conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     actions, resources = integration.actions, integration.resources
     if not actions and not resources:  # dynamic: ask the connection (needs its secrets, or the caller's own)
         initiator = await _caller(ctx)
@@ -525,7 +660,7 @@ async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]
 async def call_action(namespace: str, name: str, action: str, body: ActionCallIn, ctx: CtxDep) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:use")
     conn = await _connection(ctx, namespace, name)
-    integration = ctx.engine.integrations.get(conn.spec.integration)
+    integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     initiator = await _caller(ctx)
     actions = integration.actions
     if not actions:  # dynamic integrations (remote) list their actions per connection
@@ -556,6 +691,51 @@ async def query_resource(namespace: str, name: str, resource: str, body: QueryIn
     return page.model_dump()
 
 
+# --------------------------------------------------------------------------- target lists
+
+PREVIEW_LIMIT = 1000
+
+
+def _resolution(resolved: Any) -> dict[str, Any]:
+    targets = [{"key": k, **v} for k, v in resolved.targets.items()]
+    return {
+        "total": len(targets),
+        "targets": targets[:PREVIEW_LIMIT],
+        "truncated": len(targets) > PREVIEW_LIMIT,
+        "missing": resolved.missing,
+    }
+
+
+@router.get("/namespaces/{namespace}/target-lists/{name}/resolve", tags=["target-lists"],
+            summary="The targets a target list resolves to now")
+async def resolve_target_list(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "target-lists:read")
+    with use_namespace(namespace):
+        try:
+            resolved = await ctx.engine.target_lists.resolve(ctx.tenant_id, name)
+        except NotFound:
+            raise
+        except Exception as exc:
+            raise InvalidRequest(f"could not resolve target list: {exc}") from exc
+    return _resolution(resolved)
+
+
+@router.post("/namespaces/{namespace}/target-lists/preview", tags=["target-lists"],
+             summary="Resolve an unsaved target list spec")
+async def preview_target_list(namespace: str, body: TargetListSpec, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "target-lists:read")
+    if body.connection:
+        await ctx.namespace(namespace, "connections:use")
+    with use_namespace(namespace):
+        try:
+            resolved = await ctx.engine.target_lists.resolve_spec(ctx.tenant_id, body)
+        except NotFound:
+            raise
+        except Exception as exc:
+            raise InvalidRequest(f"could not resolve target list: {exc}") from exc
+    return _resolution(resolved)
+
+
 # --------------------------------------------------------------------------- triggers
 
 
@@ -569,7 +749,13 @@ async def test_trigger(namespace: str, name: str, body: TriggerTestIn, ctx: CtxD
     await ctx.namespace(namespace, "triggers:read")
     trigger = await _trigger(ctx, namespace, name)
     event = IntegrationEvent(type=body.event_type or trigger.spec.event.replace("*", "test"), id=new_id("evt"), data=body.data)
-    outcome = ctx.engine.triggers.evaluate(trigger, event)
+    with use_namespace(namespace):
+        outcome = await ctx.engine.triggers.check(ctx.tenant_id, trigger, event)
+    if outcome["matched"] and trigger.spec.connection:
+        with use_namespace(namespace):
+            reason = await ctx.engine.triggers.integration_match(ctx.tenant_id, trigger, event)
+        if reason is not None:
+            outcome = {"matched": False, "reason": reason}
     if outcome["matched"] and trigger.spec.triage is not None:
         with use_namespace(namespace):
             outcome["triage"] = await ctx.engine.triggers.triage(ctx.tenant_id, trigger, event)

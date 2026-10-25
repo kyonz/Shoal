@@ -1,0 +1,41 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+A reusable, named set of targets (e.g. repositories) for campaigns and trigger filters.
+
+- ``items`` alone: exactly these targets, as written.
+- ``connection`` + ``resource`` alone: a saved query, resolved each time it is used.
+- both: exactly the listed targets, each looked up through the query so it carries the
+  integration's details (a listed target the query does not return is reported missing).
+
+These are the top-level fields of the TargetList spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `description` | string | optional |  |
+| `connection` | string | optional | Connection to query or look targets up through. |
+| `resource` | string | optional | Integration resource, e.g. 'repository'. |
+| `filter` | map | optional | Query filter, e.g. {org: acme}. |
+| `items` | list of map | optional | The targets, e.g. [{full_name: acme/api}]; with a connection, looked up by key. |
+| `key` | string | optional | Expression giving a stable key per target, e.g. '{{"{{"}} target.full_name }}'. Default: `{{"{{"}} target.id }}`. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

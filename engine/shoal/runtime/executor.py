@@ -26,6 +26,7 @@ from shoal.core.models import (
     StepBase,
     StepStatus,
     WorkflowSpec,
+    calls_models,
     validate_params,
 )
 from shoal.core.scope import current_namespace, use_namespace
@@ -43,6 +44,8 @@ log = logging.getLogger(__name__)
 
 # Waits longer than this park run-scoped sandboxes (suspend) to free compute.
 SUSPEND_THRESHOLD = timedelta(minutes=10)
+# A run whose passes keep raising backs off (30s, 1m, 2m, ... up to an hour) and fails after this many.
+MAX_ADVANCE_ERRORS = 10
 _DONE_OK = (StepStatus.succeeded, StepStatus.skipped)
 
 
@@ -58,6 +61,26 @@ class Executor:
     def __init__(self, engine: Engine):
         self.engine = engine
         self.store = engine.store
+        self._lease_owner: dict[str, str] = {}
+
+    async def _save(
+        self,
+        run: t.Run,
+        *,
+        steps: tuple[t.StepRun, ...] | list[t.StepRun] = (),
+        run_values: dict[str, Any] | None = None,
+        events: list[tuple[str, dict[str, Any], str | None]] | None = None,
+        clear_waits: str | bool | None = None,
+        set_waits: tuple[str, list[str]] | None = None,
+        release_lease: str | None = None,
+    ) -> None:
+        """Checkpoint progress in one transaction, then tell the event bus's waiters and listeners."""
+        await self.store.checkpoint(
+            run.id, run.tenant_id, steps=steps, run_values=run_values, events=events or (), clear_waits=clear_waits,
+            set_waits=set_waits, release_lease=release_lease,
+        )
+        for kind, data, step_id in events or ():
+            await self.engine.events.notify(run, kind, data, step_id=step_id)
 
     # ------------------------------------------------------------------ start
 
@@ -77,8 +100,21 @@ class Executor:
         parent_step_id: str | None = None,
         labels: dict[str, str] | None = None,
         initiator: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        admit: bool = False,
+        row: t.Resource | None = None,
+        audit: dict[str, Any] | None = None,
     ) -> t.Run:
-        row = await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
+        """Create a run. ``admit`` applies the tenant's queue quota (API entry points); ``row`` saves a lookup."""
+        if idempotency_key:
+            existing = await self.store.run_by_idempotency_key(tenant_id, idempotency_key)
+            if existing is not None:
+                return self._replay(existing, workflow_name)
+        if (await self.store.get_tenant(tenant_id)).status == "suspended":
+            raise Forbidden("this tenant is suspended; no new runs start until an instance admin resumes it")
+        if admit:
+            await self.engine.quotas.admit_run(tenant_id)
+        row = row or await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
         document = row.document
         if version is not None and version != row.version:
             document = await self.store.get_resource_version(tenant_id, "Workflow", workflow_name, version)
@@ -91,6 +127,7 @@ class Executor:
             initiator = initiator if initiator is not None else parent.initiator
         if initiator is None:
             initiator = await self.engine.identities.resolve(tenant_id, actor=started_by, source="api")
+        await self.engine.orchestrators.refresh()  # an orchestrator switched in the instance console
         now = clock.now()
         run = t.Run(
             id=new_id("run"),
@@ -113,36 +150,46 @@ class Executor:
             parent_run_id=parent_run_id,
             parent_step_id=parent_step_id,
             orchestrator=self.engine.orchestrator.name,
+            lane="agent" if calls_models(document["spec"].get("steps", [])) else "standard",
+            idempotency_key=idempotency_key,
             next_wake_at=now,
             created_at=now,
             updated_at=now,
         )
         steps = [new_step_row(tenant_id, run.id, s.id, s.type) for s in spec.steps]
-        await self.store.create_run(run, steps)
-        await self.engine.events.emit(
-            run,
-            "run.created",
-            {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by, "initiator": initiator},
-        )
+        created = {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by, "initiator": initiator}
+        extra: list[Any] = [t.RunEvent(tenant_id=tenant_id, run_id=run.id, type="run.created", data=created)]
+        if audit is not None:  # the caller's audit entry, written with the run
+            extra.append(self.store.audit_entry(tenant_id, started_by, "run.started", run.id, namespace=namespace, **audit))
+        stored = await self.store.create_run(run, steps, extra)
+        if stored is not run:  # a concurrent retry with the same key won
+            return self._replay(stored, workflow_name)
+        await self.engine.events.notify(run, "run.created", created)
         await self.engine.orchestrator.submit(run)
+        return run
+
+    @staticmethod
+    def _replay(run: t.Run, workflow_name: str) -> t.Run:
+        if run.workflow_name != workflow_name:
+            raise Conflict(f"idempotency key was already used to start a run of '{run.workflow_name}'")
+        run.replayed = True  # type: ignore[attr-defined]
         return run
 
     # ------------------------------------------------------------------ advance
 
     async def advance(self, run_id: str, worker_id: str) -> None:
         heartbeat = asyncio.create_task(self._heartbeat(run_id, worker_id))
+        self._lease_owner[run_id] = worker_id  # the final checkpoint of the pass releases the lease with it
         try:
             await self._advance(run_id)
-        except Exception:
+        except Exception as exc:
             log.exception("error advancing run %s", run_id)
-            # Back off so a poison run does not spin; the error is visible in events.
             with contextlib.suppress(Exception):
-                run = await self.store.get_run(None, run_id)
-                await self.engine.events.emit(run, "run.error", {"message": "internal error while advancing"})
-                await self.store.update_run(run_id, next_wake_at=clock.now() + timedelta(seconds=30))
+                await self._advance_failed(run_id, exc)
         finally:
             heartbeat.cancel()
-            await self.store.release_lease(run_id, worker_id)
+            if self._lease_owner.pop(run_id, None) is not None:
+                await self.store.release_lease(run_id, worker_id)
 
     async def _heartbeat(self, run_id: str, worker_id: str) -> None:
         lease = timedelta(seconds=self.engine.settings.lease_seconds)
@@ -158,8 +205,31 @@ class Executor:
         if RunStatus(run.status).terminal:
             await self.store.update_run(run.id, next_wake_at=None)
             return
+        failing = "_advance_errors" in (run.state or {})
         with use_namespace(run.namespace):
             await self._advance_run(run)
+        if failing:  # a pass went through: forget the earlier errors
+            fresh = await self.store.get_run(None, run.id)
+            await self.store.update_run(run.id, state={k: v for k, v in fresh.state.items() if k != "_advance_errors"})
+
+    async def _advance_failed(self, run_id: str, exc: Exception) -> None:
+        """Back off a run whose pass raised, so a poison run does not spin; fail it after repeated errors."""
+        run = await self.store.get_run(None, run_id)
+        if RunStatus(run.status).terminal:
+            return
+        errors = int((run.state or {}).get("_advance_errors", 0)) + 1
+        await self.store.update_run(run_id, state={**(run.state or {}), "_advance_errors": errors})
+        if errors >= MAX_ADVANCE_ERRORS:
+            message = f"internal error while advancing ({type(exc).__name__}), {errors} times in a row"
+            with use_namespace(run.namespace):
+                await self._finish(run, WorkflowSpec.model_validate(run.workflow), RunStatus.failed, {"message": message})
+            return
+        delay = timedelta(seconds=min(30 * 2 ** (errors - 1), 3600))
+        await self.engine.events.emit(
+            run, "run.error",
+            {"message": "internal error while advancing", "attempt": errors, "retry_in_seconds": delay.total_seconds()},
+        )
+        await self.store.update_run(run_id, next_wake_at=clock.now() + delay)
 
     async def _advance_run(self, run: t.Run) -> None:
         spec = WorkflowSpec.model_validate(run.workflow)
@@ -172,8 +242,9 @@ class Executor:
         if run.status == RunStatus.pending:
             run.status = RunStatus.running
             run.started_at = now
-            await self.store.update_run(run.id, status=run.status, started_at=now)
-            await self.engine.events.emit(run, "run.started", {"inputs": run.inputs})
+            await self._save(
+                run, run_values={"status": run.status, "started_at": now}, events=[("run.started", {"inputs": run.inputs}, None)]
+            )
 
         if spec.timeout and run.started_at and now > run.started_at + spec.timeout:
             await self._finish(run, spec, RunStatus.failed, {"message": f"workflow timed out after {spec.timeout}"})
@@ -252,14 +323,15 @@ class Executor:
         if spec.timeout and run.started_at:
             deadline = run.started_at + spec.timeout
             next_wake = min(next_wake, deadline) if next_wake else deadline
-        await self.store.update_run(run.id, status=status, next_wake_at=next_wake)
-        if status != run.status:
-            await self.engine.events.emit(
-                run, f"run.{status.value}", {"next_wake_at": next_wake.isoformat() if next_wake else None}
-            )
+        changed = status != run.status
         run.status = status
         if waiting and (next_wake is None or next_wake - clock.now() > SUSPEND_THRESHOLD):
-            await self.engine.sandboxes.suspend_run(run)
+            await self.engine.sandboxes.suspend_run(run)  # before parking: once parked, another worker may take it
+        event = (f"run.{status.value}", {"next_wake_at": next_wake.isoformat() if next_wake else None}, None)
+        await self._save(
+            run, run_values={"status": status, "next_wake_at": next_wake}, events=[event] if changed else None,
+            release_lease=self._lease_owner.pop(run.id, None),
+        )
 
     # ------------------------------------------------------------------ steps
 
@@ -320,16 +392,16 @@ class Executor:
             if not should_run:
                 row.status = StepStatus.skipped
                 row.finished_at = clock.now()
-                await self.store.save_step(row)
-                await events.emit(run, "step.skipped", {"reason": "condition false", "if": step.if_}, step_id=step.id)
+                await self._save(
+                    run, steps=[row], events=[("step.skipped", {"reason": "condition false", "if": step.if_}, step.id)]
+                )
                 return
             row.attempt += 1
             row.status = StepStatus.running
             row.started_at = row.started_at or clock.now()
             row.wake_at = None
             row.error = None
-            await self.store.save_step(row)
-            await events.emit(run, "step.started", {"type": step.type, "attempt": row.attempt}, step_id=step.id)
+            await self._save(run, steps=[row], events=[("step.started", {"type": step.type, "attempt": row.attempt}, step.id)])
         else:
             row.status = StepStatus.running
             row.wake_at = None
@@ -367,36 +439,34 @@ class Executor:
             return
 
         row.usage = add_usage(row.usage, result.usage)
+        usage: dict[str, Any] | None = None
         if result.usage:
             run.usage = add_usage(run.usage, result.usage)
-            await self.store.update_run(run.id, usage=run.usage)
+            usage = {"usage": run.usage}
 
         if isinstance(result, Completed):
             row.status = StepStatus.succeeded
             row.output = redactor(result.output)
             row.finished_at = clock.now()
             row.wake_at = None
-            await self.store.save_step(row)
-            await self.store.clear_wait_keys(run.id, step.id)
-            await events.emit(run, "step.succeeded", {"output": row.output}, step_id=step.id)
+            await self._save(
+                run, steps=[row], run_values=usage, clear_waits=step.id,
+                events=[("step.succeeded", {"output": row.output}, step.id)],
+            )
         elif isinstance(result, Suspended):
             first = not row.state.get("_suspended")
             row.state = {**row.state, "_suspended": True}
             row.status = StepStatus.waiting
             row.wake_at = result.wake_at
-            await self.store.save_step(row)
-            await self.store.set_wait_keys(run.tenant_id, run.id, step.id, result.wait_keys)
-            if first:
-                await events.emit(
-                    run,
-                    "step.waiting",
-                    {
-                        "reason": result.reason,
-                        "wake_at": result.wake_at.isoformat() if result.wake_at else None,
-                        "wait_keys": result.wait_keys,
-                    },
-                    step_id=step.id,
-                )
+            waiting = {
+                "reason": result.reason,
+                "wake_at": result.wake_at.isoformat() if result.wake_at else None,
+                "wait_keys": result.wait_keys,
+            }
+            await self._save(
+                run, steps=[row], run_values=usage, set_waits=(step.id, result.wait_keys),
+                events=[("step.waiting", waiting, step.id)] if first else None,
+            )
 
     async def _fail_step(
         self, ctx: StepContext, message: str, *, retryable: bool, details: dict[str, Any] | None = None
@@ -409,15 +479,14 @@ class Executor:
             delay = step.retry.delay_for(row.attempt + 1)
             row.status = StepStatus.pending
             row.wake_at = clock.now() + delay
-            await self.store.save_step(row)
-            await ctx.emit("step.retrying", {"error": message, "attempt": row.attempt, "delay_seconds": delay.total_seconds()})
+            retrying = {"error": message, "attempt": row.attempt, "delay_seconds": delay.total_seconds()}
+            await self._save(ctx.run, steps=[row], events=[("step.retrying", ctx.redactor(retrying), step.id)])
             return
         row.status = StepStatus.failed
         row.finished_at = clock.now()
         row.wake_at = None
-        await self.store.save_step(row)
-        await self.store.clear_wait_keys(ctx.run.id, step.id)
-        await ctx.emit("step.failed", {"error": message, "attempt": row.attempt, "on_error": step.on_error})
+        failed = {"error": message, "attempt": row.attempt, "on_error": step.on_error}
+        await self._save(ctx.run, steps=[row], clear_waits=step.id, events=[("step.failed", ctx.redactor(failed), step.id)])
 
     # ------------------------------------------------------------------ finish
 
@@ -459,8 +528,9 @@ class Executor:
                 details={"approvers": approvers},
             )
         decision = {"approved": approved, "by": by, "comment": comment, "at": clock.now().isoformat()}
-        row.state = {**row.state, "decision": decision}
-        await self.store.save_step(row)
+        if not await self.store.update_step_if_unchanged(row, state={**row.state, "decision": decision}):
+            raise Conflict(f"step '{step_id}' changed while deciding (decided by someone else?); reload and try again")
+        row = await self.store.get_step(run.id, step_id)
         await self.engine.events.emit(run, "approval.decided", decision, step_id=step_id)
         await self.store.wake_by_keys(tenant_id, [f"approval:{run.id}:{step_id}"])
         await self.store.wake_run(run.id)
@@ -506,6 +576,7 @@ class Executor:
                 outputs = Redactor(list((secrets or {}).values()))(outputs)
             except ExpressionError as exc:
                 status, error = RunStatus.failed, {"message": f"failed to compute outputs: {exc}"}
+        cancelled: list[t.StepRun] = []
         if status != RunStatus.succeeded:
             # cancel steps that never got to run or were still waiting, and child runs still in flight
             for row in (rows or {r.step_id: r for r in await self.store.get_steps(run.id)}).values():
@@ -513,16 +584,17 @@ class Executor:
                     row.status = StepStatus.cancelled
                     row.finished_at = clock.now()
                     row.wake_at = None
-                    await self.store.save_step(row)
+                    cancelled.append(row)
             for child in await self.store.list_runs(run.tenant_id, parent_run_id=run.id, limit=1000):
                 if not RunStatus(child.status).terminal:
                     await self.request_cancel(run.tenant_id, child.id)
         now = clock.now()
         run.status, run.outputs, run.error, run.finished_at = status, outputs, error, now
-        await self.store.update_run(
-            run.id, status=status, outputs=outputs, error=error, finished_at=now, next_wake_at=None
+        await self._save(
+            run, steps=cancelled, clear_waits=True,
+            run_values={"status": status, "outputs": outputs, "error": error, "finished_at": now, "next_wake_at": None},
+            events=[(f"run.{status.value}", {"outputs": outputs, "error": error}, None)],
+            release_lease=self._lease_owner.pop(run.id, None),  # finished runs are never claimed again
         )
-        await self.store.clear_wait_keys(run.id)
-        await self.engine.events.emit(run, f"run.{status.value}", {"outputs": outputs, "error": error})
         await self.engine.sandboxes.release_run(run)
         await self.engine.on_run_finished(run)

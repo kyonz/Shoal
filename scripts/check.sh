@@ -30,7 +30,7 @@ engine() {
   cd "$root/engine"
   uv sync --locked --all-extras --quiet
   uv run ruff check .
-  SHOAL_TEST_DATABASE_URL= uv run pytest -q  # SQLite
+  SHOAL_TEST_DATABASE_URL= uv run pytest -q  # SQLite; with SHOAL_TEST_SQS_ENDPOINT (LocalStack, moto_server) also against real SQS
   if [ -n "${SHOAL_TEST_DATABASE_URL:-}" ]; then  # e.g. postgresql+asyncpg://postgres@127.0.0.1:5432/shoal_test
     echo "again against Postgres"
     uv run pytest -q
@@ -73,6 +73,16 @@ terraform_provider() {
   TF_ACC=1 go test ./... -count=1 -timeout 20m
 }
 
+terraform_modules() {
+  local dir
+  for dir in "$root"/deploy/terraform/*/; do
+    terraform -chdir="$dir" fmt -check -diff
+    terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+    terraform -chdir="$dir" validate
+    rm -rf "$dir/.terraform" "$dir/.terraform.lock.hcl"
+  done
+}
+
 helm_chart() {
   local chart="$root/deploy/helm/shoal"
   helm lint --strict "$chart"
@@ -87,6 +97,10 @@ helm_chart() {
     --set orchestrator.temporal.apiKeySecret.name=temporal-key,orchestrator.temporal.mtlsSecret=temporal-tls \
     --set orchestrator.temporal.versioning.buildId=v1 \
     | kubeconform -strict -summary -skip ServiceMonitor
+  helm template shoal "$chart" --set dispatch.queue=sqs,worker.agentPool.enabled=true \
+    --set dispatch.sqs.queueUrl=https://sqs.eu-west-1.amazonaws.com/123456789012/shoal-dispatch \
+    --set dispatch.sqs.agentQueueUrl=https://sqs.eu-west-1.amazonaws.com/123456789012/shoal-dispatch-agent \
+    | kubeconform -strict -summary -skip ServiceMonitor
   helm template shoal "$chart" --set secrets.existingSecret=shoal-creds,worker.enabled=false \
     --set kubernetesSandboxes.enabled=true,kubernetesSandboxes.clusterWide=true \
     | kubeconform -strict -summary
@@ -95,7 +109,7 @@ helm_chart() {
 image() {
   cd "$root"
   docker build -f deploy/Dockerfile -t shoal:check .
-  docker compose -f deploy/docker-compose.yaml config -q
+  docker compose -f deploy/docker-compose.yaml --env-file deploy/.env.example config -q
   local name="shoal-check-$$" port="${SHOAL_CHECK_PORT:-18080}"
   docker run -d --name "$name" -p "$port:8080" -e SHOAL_ADMIN_TOKEN=check shoal:check >/dev/null
   trap 'docker rm -f '"$name"' >/dev/null 2>&1 || true' RETURN
@@ -111,6 +125,8 @@ fi
 if want terraform; then
   if have go; then step "terraform provider"; run terraform terraform_provider
   else skipped+=("terraform (go not installed)"); fi
+  if have terraform; then step "terraform modules"; run terraform-modules terraform_modules
+  else skipped+=("terraform modules (terraform not installed)"); fi
 fi
 if want helm; then
   if have helm; then step "helm chart"; run helm helm_chart

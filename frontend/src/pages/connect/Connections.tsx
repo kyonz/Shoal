@@ -1,23 +1,26 @@
-import { Cable, Plus, Search } from "lucide-react";
+import { Building2, Cable, Plus, Search } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { useIntegrations, useResources } from "@/api/hooks";
+import type { Resource } from "@/api/client";
+import { useIntegrations, useOrgConnections, useResources } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
 import { relTime } from "@/lib/format";
-import { nsPath, useNs } from "@/lib/ns";
+import { SHARED_NS, nsPath, useNs, useOrgScope } from "@/lib/ns";
 import { Badge, Button, Card, EmptyState, ErrorNotice, Input, Page, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { IntegrationMark, RowSkeleton, useSecrets } from "./shared";
 
 export default function Connections() {
   const ns = useNs();
+  const org = useOrgScope();
   const navigate = useNavigate();
   const { can } = useAuth();
   const [params, setParams] = useSearchParams();
   const filter = params.get("integration") ?? "";
   const [q, setQ] = useState("");
   const { data, isLoading, error } = useResources("connections", ns);
-  const integrations = useIntegrations();
+  const integrations = useIntegrations(org ? undefined : ns);
   const secrets = useSecrets(ns, can("secrets:read", ns));
+  const fromOrg = useOrgConnections(ns, !org);
   const known = new Set((secrets.data ?? []).map((s) => s.name));
   const titles = new Map((integrations.data ?? []).map((i) => [i.key, i.title]));
 
@@ -30,9 +33,13 @@ export default function Connections() {
   return (
     <Page>
       <PageHeader
-        icon={<Cable className="size-4" />}
-        title="Connections"
-        description="Credentials and settings for an integration, used by actions, triggers and campaign targets in this namespace."
+        icon={org ? <Building2 className="size-4" /> : <Cable className="size-4" />}
+        title={org ? "Organisation connections" : "Connections"}
+        description={
+          org
+            ? "Connections the whole organisation shares. Each one is available to every namespace, or only to the namespaces you pick; its secrets live in the shared namespace."
+            : "Credentials and settings for an integration, used by actions, triggers and campaign targets in this namespace."
+        }
         actions={
           can("connections:write", ns) && (
             <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(nsPath(ns, "connections", "new"))}>
@@ -65,6 +72,7 @@ export default function Connections() {
               <tr>
                 <Th>Name</Th>
                 <Th>Integration</Th>
+                {org && <Th>Shared with</Th>}
                 <Th>Secrets</Th>
                 <Th>Updated</Th>
               </tr>
@@ -86,6 +94,11 @@ export default function Connections() {
                         <span>{titles.get(integration) ?? integration}</span>
                       </div>
                     </Td>
+                    {org && (
+                      <Td>
+                        <SharedWith spec={c.spec} />
+                      </Td>
+                    )}
                     <Td>
                       {missing.length ? (
                         <Badge tone="warn" title={`Not set: ${missing.join(", ")}`}>
@@ -108,16 +121,79 @@ export default function Connections() {
         ) : (
           <EmptyState
             icon={<Cable className="size-5" />}
-            title={data?.length ? "No connections match" : "No connections yet"}
-            description="Connect GitHub, Jira or any installed integration so workflows can act on it and triggers can listen to it."
+            title={data?.length ? "No connections match" : org ? "No organisation connections yet" : "No connections yet"}
+            description={
+              org
+                ? "Connect an integration once for the whole organisation, then choose which namespaces may use it."
+                : "Connect GitHub, Jira or any installed integration so workflows can act on it and triggers can listen to it."
+            }
             action={
-              <Link to={nsPath(ns, "integrations")}>
-                <Button variant="primary">Browse integrations</Button>
+              <Link to={org ? nsPath(SHARED_NS, "connections", "new") : nsPath(ns, "integrations")}>
+                <Button variant="primary">{org ? "New organisation connection" : "Browse integrations"}</Button>
               </Link>
             }
           />
         )}
       </Card>
+      {!org && !!fromOrg.data?.length && (
+        <OrgConnections rows={fromOrg.data} titles={titles} filter={filter} canOpen={can("connections:read", SHARED_NS)} />
+      )}
     </Page>
+  );
+}
+
+function SharedWith({ spec }: { spec: Record<string, unknown> }) {
+  const list = (spec.namespaces as string[] | undefined) ?? [];
+  if (!list.length) return <span className="text-xs text-muted">All namespaces</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {list.map((n) => (
+        <Badge key={n}>{n}</Badge>
+      ))}
+    </div>
+  );
+}
+
+/** Organisation connections this namespace may use; admins manage them in the admin console. */
+function OrgConnections({ rows, titles, filter, canOpen }: { rows: Resource[]; titles: Map<string, string>; filter: string; canOpen: boolean }) {
+  const navigate = useNavigate();
+  const shown = rows.filter((c) => !filter || c.spec.integration === filter);
+  if (!shown.length) return null;
+  return (
+    <Card className="mt-5">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+        <Building2 className="size-4 text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold">From your organisation</div>
+          <div className="text-xs text-muted">
+            Shared with this namespace by your admins. Use them by name like your own; a connection here with the same name takes precedence.
+          </div>
+        </div>
+      </div>
+      <Table>
+        <tbody>
+          {shown.map((c) => {
+            const integration = String(c.spec.integration);
+            return (
+              <Tr key={c.metadata.name} onClick={canOpen ? () => navigate(nsPath(SHARED_NS, "connections", c.metadata.name)) : undefined}>
+                <Td>
+                  <div className="font-medium">{c.metadata.name}</div>
+                  {c.metadata.description && <div className="max-w-md truncate text-xs text-muted">{c.metadata.description}</div>}
+                </Td>
+                <Td>
+                  <div className="flex items-center gap-2">
+                    <IntegrationMark integrationKey={integration} size="sm" />
+                    <span>{titles.get(integration) ?? integration}</span>
+                  </div>
+                </Td>
+                <Td className="text-right">
+                  <Badge tone="info">Organisation</Badge>
+                </Td>
+              </Tr>
+            );
+          })}
+        </tbody>
+      </Table>
+    </Card>
   );
 }

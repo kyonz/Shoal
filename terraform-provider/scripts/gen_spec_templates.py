@@ -14,8 +14,9 @@ from shoal.core.models import RESOURCE_KINDS
 OUT = pathlib.Path(__file__).resolve().parent.parent / "templates" / "resources"
 TYPE_NAMES = {
     "Workflow": "workflow", "Agent": "agent", "Skill": "skill", "Connection": "connection", "Trigger": "trigger",
-    "Campaign": "campaign", "SandboxProfile": "sandbox_profile", "Gateway": "gateway", "ModelPolicy": "model_policy",
+    "Campaign": "campaign", "TargetList": "target_list", "SandboxProfile": "sandbox_profile", "Gateway": "gateway", "ModelPolicy": "model_policy",
     "Eval": "eval", "Identity": "identity", "CloudIdentity": "cloud_identity", "Blueprint": "blueprint", "SkillSource": "skill_source",
+    "CustomIntegration": "custom_integration",
 }
 
 
@@ -45,7 +46,7 @@ def default_of(prop: dict[str, Any]) -> str:
     d = prop["default"]
     if isinstance(d, bool):
         d = str(d).lower()
-    return f" Default: `{d}`."
+    return f" Default: `{d}`.".replace("{{", '{{"{{"}}')
 
 
 def main() -> None:

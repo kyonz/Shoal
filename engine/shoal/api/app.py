@@ -24,6 +24,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sse_starlette.sse import EventSourceResponse
 
 from shoal import __version__
@@ -38,6 +39,7 @@ from shoal.api.routers import (
     evals,
     federation,
     hooks,
+    instance,
     resources,
     runs,
     scim,
@@ -83,6 +85,8 @@ def install_error_handlers(app: FastAPI) -> None:
             log.error("request failed: %s", exc.message, extra={"details": exc.details})
         status = exc.status_code
         headers = {"WWW-Authenticate": "Bearer"} if status == 401 else None
+        if status == 429 and exc.details.get("retry_after"):
+            headers = {"Retry-After": str(exc.details["retry_after"])}
         response = problem(request, status, exc.code, exc.message, details=exc.details)
         if headers:
             response.headers.update(headers)
@@ -100,6 +104,13 @@ def install_error_handlers(app: FastAPI) -> None:
             return problem(request, 422, "invalid_request", str(exc))
         return problem(request, 502, "skill_source_error", str(exc), upstream_status=exc.status)
 
+    @app.exception_handler(PoolTimeout)
+    async def _pool_timeout(request: Request, exc: PoolTimeout) -> JSONResponse:
+        # every database connection of this process is busy: ask the client to come back
+        response = problem(request, 503, "overloaded", "the server is busy; retry later")
+        response.headers["Retry-After"] = "1"
+        return response
+
     @app.exception_handler(RequestValidationError)
     async def _request_invalid(request: Request, exc: RequestValidationError) -> JSONResponse:
         return problem(request, 422, "invalid_request", "request validation failed", errors=_errors(exc))
@@ -109,7 +120,39 @@ def install_error_handlers(app: FastAPI) -> None:
         return problem(request, 422, "invalid_request", f"invalid {exc.title}", errors=_errors(exc))
 
 
+# Long-lived requests that mostly wait, and so do not take a slot of the concurrency limit.
+UNLIMITED_PATHS = (re.compile(r"^/v1/runs/[^/]+/events$"), re.compile(r"^/v1/federation/tunnel$"))
+
+
+def install_load_shedding(app: FastAPI) -> None:
+    """Bound the requests one process works on at once. Beyond ``api_max_concurrent_requests`` a request
+    waits up to ``api_queue_timeout_seconds`` for a slot, then gets 503 with Retry-After, so an overloaded
+    process answers quickly instead of queueing every caller until they time out."""
+    settings = app.state.engine.settings
+    if not settings.api_max_concurrent_requests:
+        return
+    slots = asyncio.Semaphore(settings.api_max_concurrent_requests)
+    timeout = settings.api_queue_timeout_seconds
+
+    @app.middleware("http")
+    async def load_shedding(request: Request, call_next: Any) -> Any:
+        path = request.url.path
+        if not path.startswith(("/v1/", "/scim/")) or any(p.match(path) for p in UNLIMITED_PATHS):
+            return await call_next(request)
+        try:
+            await asyncio.wait_for(slots.acquire(), timeout)
+        except TimeoutError:
+            response = problem(request, 503, "overloaded", "the server is busy; retry later")
+            response.headers["Retry-After"] = "1"
+            return response
+        try:
+            return await call_next(request)
+        finally:
+            slots.release()
+
+
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
+NOT_AUDITED_STATUS = {429, 503}  # throttled or shed: recording each one would add writes exactly when overloaded
 UNAUDITED_PREFIXES = ("/v1/hooks/", "/v1/auth/")  # webhook deliveries and sign-in keep their own records
 
 
@@ -164,6 +207,7 @@ def install_request_context(app: FastAPI) -> None:
                 request.method in MUTATING
                 and not info.audited
                 and not request.url.path.startswith(UNAUDITED_PREFIXES)
+                and status not in NOT_AUDITED_STATUS
             ):
                 principal = getattr(request.state, "principal", None)
                 if principal is not None or status >= 400:
@@ -189,6 +233,7 @@ def install_request_context(app: FastAPI) -> None:
 HUB_LOCAL_PREFIXES = (
     "/v1/federation", "/v1/auth", "/v1/tenants", "/v1/hooks", "/v1/users", "/v1/groups", "/v1/service-accounts",
     "/v1/api-keys", "/v1/oidc-providers", "/v1/openapi.json", "/v1/docs", "/v1/info",
+    "/v1/instance", "/v1/me/tenant",  # instance accounts and tenant switching live on the hub
     "/.well-known",  # each deployment is its own workload identity issuer
 )
 
@@ -322,12 +367,14 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         eng = app.state.engine
         await eng.start()
+        eng.events.start_listening()  # live run views wake on Postgres notifications instead of polling
         eng.federation_member.start(app)
         if run_worker:
             eng.start_background_worker()
         try:
             yield
         finally:
+            await eng.events.stop_listening()
             if owns_engine:
                 await eng.close()
 
@@ -345,7 +392,8 @@ def create_app(
     app.state.engine = engine
     install_error_handlers(app)
     install_federation(app)
-    install_request_context(app)  # outermost: request ids and audit context wrap federation routing too
+    install_request_context(app)  # request ids and audit context wrap federation routing too
+    install_load_shedding(app)  # outermost: a shed request costs no database work
     app.add_middleware(
         CORSMiddleware,
         allow_origins=engine.settings.cors_origins,
@@ -354,7 +402,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
+    for module in (system, instance, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
                    credentials, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:

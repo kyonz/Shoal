@@ -1,6 +1,7 @@
-import { Package, Plus, Search, Star } from "lucide-react";
+import { Package, PackagePlus, Plus, Search, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
+import { toast } from "sonner";
 import { useResources } from "@/api/hooks";
 import { useCan } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -8,7 +9,7 @@ import { nsPath, useNs } from "@/lib/ns";
 import { Badge, Button, Card, EmptyState, ErrorNotice, Input, Page, PageHeader, Skeleton, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
 import { isMissingEndpoint } from "../evals/api";
 import { KINDS } from "../kinds";
-import { isFeatured, spec, useAdoptions } from "./api";
+import { isFeatured, spec, useAdoptions, useInstallDefaults } from "./api";
 import { AdoptionsTable, BlueprintIcon, BlueprintStatus } from "./components";
 
 export default function BlueprintsPage() {
@@ -16,6 +17,9 @@ export default function BlueprintsPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const canPublish = useCan("blueprints:publish");
+  const canFeature = useCan("blueprints:feature");
+  const canInstallDefaults = canPublish && canFeature;
+  const installDefaults = useInstallDefaults();
   const { data, isLoading, error } = useResources("blueprints", ns);
   const adoptions = useAdoptions(ns);
   const [q, setQ] = useState("");
@@ -41,7 +45,22 @@ export default function BlueprintsPage() {
       return [r.metadata.name, s.title, s.summary, s.author, ...(s.tags ?? []), ...(s.categories ?? [])].filter(Boolean).join(" ").toLowerCase().includes(needle);
     })
     .sort((a, b) => Number(isFeatured(spec(b))) - Number(isFeatured(spec(a))) || spec(a).title.localeCompare(spec(b).title));
-  const latest = Object.fromEntries(all.map((r) => [r.metadata.name, spec(r).version]));
+  const specs = Object.fromEntries(all.map((r) => [r.metadata.name, spec(r)]));
+  const addDefaults = async () => {
+    try {
+      const res = await installDefaults.mutateAsync();
+      const added = res.filter((r) => r.outcome === "created" || r.outcome === "updated");
+      if (added.length) toast.success(`Added ${added.length} of Shoal's blueprints`, { description: added.map((r) => r.name).join(", ") });
+      else toast.success("Shoal's blueprints are already in the catalogue");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not add Shoal's blueprints");
+    }
+  };
+  const defaultsButton = (
+    <Button icon={<PackagePlus className="size-4" />} onClick={addDefaults} loading={installDefaults.isPending}>
+      Add Shoal's blueprints
+    </Button>
+  );
   const adoptedCount = (bp: string) => (adoptions.data ?? []).filter((a) => a.blueprint === bp).length;
 
   return (
@@ -52,9 +71,12 @@ export default function BlueprintsPage() {
         description={KINDS.blueprints.blurb}
         actions={
           canPublish && (
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(nsPath(ns, "blueprints", "new"))}>
-              Publish a blueprint
-            </Button>
+            <>
+              {canInstallDefaults && defaultsButton}
+              <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(nsPath(ns, "blueprints", "new"))}>
+                Publish a blueprint
+              </Button>
+            </>
           )
         }
       />
@@ -100,8 +122,15 @@ export default function BlueprintsPage() {
               <EmptyState
                 icon={<Package className="size-5" />}
                 title="No blueprints published yet"
-                description="Teams publish workflows here as blueprints so other namespaces can adopt them in a few clicks."
-                action={canPublish && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(nsPath(ns, "blueprints", "new"))}>Publish a blueprint</Button>}
+                description="Teams publish workflows here as blueprints so other namespaces can adopt them in a few clicks. Shoal ships ready-made ones for GitHub PR review, Jira bugfixes, Slack bots and approvals, AWS reports and quality evals."
+                action={
+                  canPublish && (
+                    <div className="flex gap-2">
+                      {canInstallDefaults && defaultsButton}
+                      <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate(nsPath(ns, "blueprints", "new"))}>Publish a blueprint</Button>
+                    </div>
+                  )
+                }
               />
             </Card>
           ) : !filtered.length ? (
@@ -160,7 +189,7 @@ export default function BlueprintsPage() {
             ) : !adoptions.data?.length ? (
               <EmptyState icon={<Package className="size-5" />} title={`Nothing adopted in ${ns}`} description="Adopt a blueprint from the catalogue to get a ready-made workflow wired to your connections." />
             ) : (
-              <AdoptionsTable ns={ns} adoptions={adoptions.data} latest={latest} />
+              <AdoptionsTable ns={ns} adoptions={adoptions.data} specs={specs} />
             )}
           </Card>
         </TabsContent>

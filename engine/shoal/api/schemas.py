@@ -20,6 +20,8 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shoal.runtime.orchestrators import OrchestratorSetting
+
 NAME = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
 
 
@@ -51,6 +53,7 @@ class Page(BaseModel, Generic[T]):
 class TenantIn(BaseModel):
     slug: str = Field(pattern=NAME)
     name: str | None = None
+    description: str | None = None
     admin_email: str | None = Field(None, description="Optional first human admin (bound to tenant-admin).")
 
 
@@ -58,7 +61,83 @@ class TenantOut(Out):
     id: str
     slug: str
     name: str
+    description: str | None = None
+    status: str = "active"
     created_at: datetime
+
+
+class TenantPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: Literal["active", "suspended"] | None = Field(
+        None, description="Suspended tenants refuse every call except from instance admins; their data is kept."
+    )
+
+
+class TenantSummary(TenantOut):
+    users: int = Field(description="Active people (not service accounts).")
+    namespaces: int
+    federated: bool = Field(description="Managed by a member deployment through federation.")
+
+
+class MyTenant(BaseModel):
+    slug: str
+    name: str
+    status: str
+    member: bool = Field(description="False when an instance admin or auditor can open it without being a member.")
+    current: bool
+
+
+class SwitchTenantIn(BaseModel):
+    tenant: str | None = Field(description="Tenant slug; null leaves every tenant (instance admins only).")
+
+
+class SessionOut(BaseModel):
+    session: str = Field(description="The new session token (also set as the session cookie).")
+    tenant: TenantOut | None
+
+
+class AccountOut(Out):
+    id: str
+    email: str | None
+    display_name: str
+    instance_role: str | None
+    active: bool
+    oidc_issuer: str
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+class AccountMembership(BaseModel):
+    tenant: str
+    tenant_name: str
+    username: str
+    roles: list[str]
+
+
+class AccountDetail(AccountOut):
+    tenants: list[AccountMembership]
+
+
+class AccountPatch(BaseModel):
+    instance_role: Literal["instance-admin", "instance-auditor"] | None = Field(
+        None, description="Set to grant; send null to remove (use the field explicitly)."
+    )
+    active: bool | None = None
+
+
+class TenantMemberIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field("tenant-admin", description="A role in that tenant, granted tenant-wide.")
+
+
+class TenantMemberOut(BaseModel):
+    user_id: str
+    username: str
+    email: str | None
+    display_name: str
+    roles: list[str]
+    linked: bool = Field(description="Linked to an instance account (has signed in through the instance or SSO).")
 
 
 class TenantCreated(BaseModel):
@@ -74,6 +153,8 @@ class Me(BaseModel):
     display_name: str | None
     email: str | None
     is_system_admin: bool
+    account_id: str | None = None
+    instance_role: str | None = None
     namespaces: list[str] = Field(description="Namespaces visible here; for a federated tenant ask /v1/me/permissions, which the member answers.")
     federated: bool = Field(False, description="The tenant's data lives in a member deployment that this hub forwards to.")
 
@@ -565,3 +646,37 @@ class AuditOut(Out):
     user_agent: str | None = None
     data: dict[str, Any]
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- orchestrator (instance console)
+
+
+class OrchestratorEnvironment(BaseModel):
+    """What SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* say (used while nothing is saved in the console)."""
+
+    orchestrator: str
+    temporal_address: str
+    temporal_namespace: str
+    temporal_task_queue: str
+    temporal_tls: bool = Field(description="TLS, an API key or client certificates are configured.")
+
+
+class OrchestratorStatus(BaseModel):
+    source: Literal["environment", "console"] = Field(description="Where the orchestrator for new runs comes from.")
+    orchestrator: str = Field(description="What new runs start on.")
+    driving: list[str] = Field(description="Every orchestrator this server drives runs with.")
+    setting: OrchestratorSetting | None = Field(None, description="What the instance console saved.")
+    environment: OrchestratorEnvironment
+    runs: dict[str, int] = Field(description="Unfinished runs per orchestrator, across every tenant.")
+    temporal_installed: bool = Field(description="The temporal extra is installed on this server.")
+    error: str | None = Field(None, description="Why the saved setting could not be applied (e.g. a deleted secret).")
+    revision: int | None = None
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+
+
+class TemporalCheck(BaseModel):
+    ok: bool
+    detail: str
+    server_version: str | None = None
+    pollers: int | None = Field(None, description="Workers polling the task queue right now.")

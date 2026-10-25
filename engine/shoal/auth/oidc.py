@@ -24,7 +24,7 @@ from sqlalchemy import delete, select
 
 from shoal.auth.sessions import issue_session
 from shoal.core import clock
-from shoal.core.errors import Forbidden, InvalidRequest, Unauthorized
+from shoal.core.errors import Forbidden, InvalidRequest, NotFound, Unauthorized
 from shoal.secrets.providers import Cipher
 from shoal.store import tables as t
 
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from shoal.engine import Engine
 
 LOGIN_STATE_TTL = timedelta(minutes=10)
+INSTANCE_PROVIDER = "instance"
 ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
 
 
@@ -75,9 +76,27 @@ class OIDCService:
         self._jwks[jwks_uri] = (response.json(), time.time() + 3600)
         return self._jwks[jwks_uri][0]
 
-    async def begin(self, tenant_id: str, provider_name: str, redirect_uri: str, redirect_to: str | None = None) -> str:
-        """Start sign-in; returns the provider's authorization URL."""
-        provider = await self.engine.directory.get_oidc_provider(tenant_id, provider_name)
+    def instance_provider(self) -> t.OIDCProvider:
+        """The instance-wide sign-in (``SHOAL_INSTANCE_OIDC``), shaped like a tenant provider but never stored."""
+        cfg = self.engine.settings.instance_oidc
+        if cfg is None:
+            raise NotFound("this instance has no instance-wide sign-in; sign in through your tenant")
+        secret_field = cfg.client_secret or self.engine.settings.instance_oidc_client_secret
+        secret = secret_field.get_secret_value() if secret_field else None
+        return t.OIDCProvider(
+            tenant_id=None, name=INSTANCE_PROVIDER, display_name=cfg.display_name, issuer=cfg.issuer.rstrip("/"),
+            client_id=cfg.client_id, client_secret=self.cipher.encrypt(secret) if secret else None, scopes=cfg.scopes,
+            allowed_domains=cfg.allowed_domains, enabled=True, auto_provision=False,
+        )
+
+    async def _provider(self, tenant_id: str | None, name: str) -> t.OIDCProvider:
+        if tenant_id is None:
+            return self.instance_provider()
+        return await self.engine.directory.get_oidc_provider(tenant_id, name)
+
+    async def begin(self, tenant_id: str | None, provider_name: str, redirect_uri: str, redirect_to: str | None = None) -> str:
+        """Start sign-in (``tenant_id`` None: the instance-wide sign-in); returns the provider's authorization URL."""
+        provider = await self._provider(tenant_id, provider_name)
         if not provider.enabled:
             raise Forbidden(f"sign-in with '{provider_name}' is disabled")
         config = await self.discovery(provider.issuer)
@@ -106,7 +125,7 @@ class OIDCService:
             await s.execute(delete(t.LoginState).where(t.LoginState.created_at < clock.now() - LOGIN_STATE_TTL))
         if login is None or clock.now() - login.created_at > LOGIN_STATE_TTL:
             raise Unauthorized("sign-in expired or was already used; start again")
-        provider = await self.engine.directory.get_oidc_provider(login.tenant_id, login.provider)
+        provider = await self._provider(login.tenant_id, login.provider)
         config = await self.discovery(provider.issuer)
         form = {
             "grant_type": "authorization_code",
@@ -125,10 +144,40 @@ class OIDCService:
         if not id_token:
             raise Unauthorized("provider returned no id_token")
         claims = await self.verify_id_token(provider, config, id_token, login.nonce)
+        if login.tenant_id is None:
+            return await self._instance_sign_in(provider, claims, login.redirect_to)
         user = await self._user_for(provider, claims)
-        token = issue_session(self.engine.settings, tenant_id=login.tenant_id, user_id=user.id)
+        accounts = self.engine.accounts
+        account = await accounts.sign_in(issuer=provider.issuer, subject=claims["sub"], email=claims.get("email"),
+                                         name=claims.get("name"))
+        await accounts.link_user(account, user)
+        await accounts.link_matching_users(account, verified_email=None)  # same identity in other tenants
+        token = issue_session(self.engine.settings, tenant_id=login.tenant_id, user_id=user.id, account_id=account.id)
         await self.engine.store.audit(login.tenant_id, f"user:{user.username}", "auth.login", provider.name, user_id=user.id)
         return {"session": token, "user_id": user.id, "redirect_to": login.redirect_to}
+
+    async def _instance_sign_in(self, provider: t.OIDCProvider, claims: dict[str, Any], redirect_to: str | None) -> dict[str, Any]:
+        """Instance-wide sign-in: the account, then the first tenant it belongs to (or none, for instance admins)."""
+        email = claims.get("email")
+        verified = email if email and claims.get("email_verified", False) else None
+        if provider.allowed_domains and (not email or email.rsplit("@", 1)[-1].lower() not in {d.lower() for d in provider.allowed_domains}):
+            raise Forbidden("your email domain is not allowed to sign in to this instance")
+        accounts = self.engine.accounts
+        account = await accounts.sign_in(issuer=provider.issuer, subject=claims["sub"], email=email,
+                                         name=claims.get("name") or claims.get("preferred_username"), trusted_email=bool(verified))
+        await accounts.link_matching_users(account, verified_email=verified)
+        memberships = await accounts.memberships(account.id)
+        active = [m for m in memberships if m.tenant.status == "active"] or memberships
+        if not active and account.instance_role is None:
+            raise Forbidden("you are not a member of any tenant on this instance yet; ask an admin to add you")
+        first = active[0] if active else None
+        if first is not None:
+            await self.engine.directory.update_user(first.tenant.id, first.user.id, last_login_at=clock.now())
+        token = issue_session(self.engine.settings, tenant_id=first.tenant.id if first else None,
+                              user_id=first.user.id if first else None, account_id=account.id)
+        await self.engine.store.audit(None, f"account:{account.email or account.id}", "auth.login", INSTANCE_PROVIDER,
+                                      account_id=account.id)
+        return {"session": token, "user_id": first.user.id if first else None, "redirect_to": redirect_to}
 
     async def verify_id_token(self, provider: t.OIDCProvider, config: dict[str, Any], id_token: str, nonce: str) -> dict[str, Any]:
         try:

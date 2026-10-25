@@ -1,4 +1,4 @@
-# Jira webhooks that Shoal registers
+# Webhooks Shoal registers
 
 A Jira trigger can have Shoal create the webhook in Jira for it, instead of someone
 copying a URL into Jira's admin screens. Add a `webhook` block to the trigger:
@@ -114,7 +114,7 @@ no column 'Ready'") and is retried.
 
 `shoal.sdk.testing.MockJira` is a Jira site in memory: issues, workflows, boards, and admin
 and dynamic webhooks that deliver, signed the way Jira signs them. See
-`engine/tests/test_jira_webhooks.py` for the whole journey: a ticket moves into the column,
+[`engine/tests/test_jira_webhooks.py`](../../engine/tests/test_jira_webhooks.py) for the whole journey: a ticket moves into the column,
 the bugfix workflow runs, and it writes back to the ticket.
 
 ```python

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Coins, Gauge, Pause, Play, RotateCcw, Rocket, Target } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -11,8 +11,12 @@ import { nsPath, useNs } from "@/lib/ns";
 import { Button, Card, CardHeader, EmptyState, ErrorNotice, JsonBlock, Page, PageHeader, Skeleton, Stat, StatusBadge, Table, Td, Th, Tr, useConfirm } from "@/components/ui";
 import { TARGET_SEGMENTS, TargetBar, type CampaignRun as CampaignRunT } from "./Campaigns";
 import { Crumb } from "./shared";
+import { actorName } from "@/lib/actor";
 
 type TargetRow = Schemas["TargetOut"];
+
+/** Targets per request; more load on demand so large campaigns are not cut off. */
+const TARGET_PAGE = 500;
 
 export default function CampaignRun() {
   const ns = useNs();
@@ -30,11 +34,15 @@ export default function CampaignRun() {
     refetchInterval: (q) => (q.state.data?.status === "running" ? 5000 : false),
   });
   const active = run.data?.status === "running";
-  const targets = useQuery({
+  const targets = useInfiniteQuery({
     queryKey: ["campaign-targets", id, filter],
-    queryFn: () => rawJson<TargetRow[]>(`/v1/campaign-runs/${id}/targets?${new URLSearchParams(filter ? { status: filter, limit: "5000" } : { limit: "5000" })}`),
+    queryFn: ({ pageParam }) =>
+      rawJson<TargetRow[]>(`/v1/campaign-runs/${id}/targets?${new URLSearchParams({ ...(filter ? { status: filter } : {}), offset: String(pageParam), limit: String(TARGET_PAGE) })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => (last.length < TARGET_PAGE ? undefined : pages.length * TARGET_PAGE),
     refetchInterval: active ? 5000 : false,
   });
+  const targetRows = targets.data?.pages.flat() ?? [];
 
   const op = useMutation({
     mutationFn: (operation: string) => rawJson<CampaignRunT>(`/v1/campaign-runs/${id}/${operation}`, { method: "POST" }),
@@ -83,10 +91,10 @@ export default function CampaignRun() {
       <PageHeader
         breadcrumb={
           <>
-            <Crumb to={nsPath(ns, "campaigns")}>Campaigns</Crumb>
-            <Link to={nsPath(ns, "campaigns", c.name)} className="hover:text-fg">
-              {c.name}
-            </Link>
+              <Crumb to={nsPath(ns, "campaigns")}>Campaigns</Crumb>
+              <Link to={nsPath(ns, "campaigns", c.name)} className="hover:text-fg">
+                {c.name}
+              </Link>
           </>
         }
         icon={<Rocket className="size-4" />}
@@ -98,7 +106,7 @@ export default function CampaignRun() {
         }
         description={
           <>
-            Runs <Link className="text-accent hover:underline" to={nsPath(ns, "workflows", String(c.spec.workflow))}>{String(c.spec.workflow)}</Link> · launched by {String(c.initiator?.display_name ?? c.created_by ?? "unknown")} {relTime(c.created_at)} · <span className="font-mono text-xs">{c.id}</span>
+            Runs <Link className="text-accent hover:underline" to={nsPath(ns, "workflows", String(c.spec.workflow))}>{String(c.spec.workflow)}</Link> · launched by {String(c.initiator?.display_name ?? actorName(c.created_by))} {relTime(c.created_at)} · <span className="font-mono text-xs">{c.id}</span>
           </>
         }
         actions={
@@ -128,7 +136,13 @@ export default function CampaignRun() {
           )
         }
       />
-      {c.error && <ErrorNotice className="mb-4" error={String(c.error.message ?? JSON.stringify(c.error))} />}
+      {c.error && c.status === "paused" ? (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+          <Pause className="size-4" /> Paused: {String(c.error.message ?? JSON.stringify(c.error))}
+        </div>
+      ) : (
+        c.error && <ErrorNotice className="mb-4" error={String(c.error.message ?? JSON.stringify(c.error))} />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Progress" icon={<Target className="size-4" />} value={total ? `${Math.round((done / total) * 100)}%` : "—"} sub={`${done} of ${total} targets finished`} />
@@ -175,8 +189,13 @@ export default function CampaignRun() {
             </button>
           ))}
           <span className="ml-auto text-xs text-faint">
-            {c.started_at ? `Running for ${between(c.started_at, c.finished_at)}` : "Not started"}
-            {c.finished_at && ` · finished ${dateTime(c.finished_at)}`}
+            {!c.started_at
+              ? "Not started"
+              : c.finished_at
+                ? `Took ${between(c.started_at, c.finished_at)} · finished ${dateTime(c.finished_at)}`
+                : c.status === "running"
+                  ? `Running for ${between(c.started_at, null)}`
+                  : `${c.status === "paused" ? "Paused" : "Stopped"} · started ${relTime(c.started_at)}`}
           </span>
         </div>
       </Card>
@@ -201,7 +220,8 @@ export default function CampaignRun() {
               <Skeleton key={i} className="h-9" />
             ))}
           </div>
-        ) : targets.data?.length ? (
+        ) : targetRows.length ? (
+          <>
           <Table>
             <thead>
               <tr>
@@ -214,11 +234,20 @@ export default function CampaignRun() {
               </tr>
             </thead>
             <tbody>
-              {targets.data.map((t) => (
+              {targetRows.map((t) => (
                 <TargetRowView key={t.id} t={t} ns={ns} expanded={expanded === t.id} onToggle={() => setExpanded(expanded === t.id ? null : t.id)} onOpenRun={() => t.run_id && navigate(nsPath(ns, "runs", t.run_id))} />
               ))}
             </tbody>
           </Table>
+          {targets.hasNextPage && (
+            <div className="flex items-center justify-center gap-3 border-t border-border p-3 text-xs text-muted">
+              Showing {targetRows.length} of {filter ? (s[filter] ?? "?") : total}
+              <Button size="sm" loading={targets.isFetchingNextPage} onClick={() => void targets.fetchNextPage()}>
+                Show more
+              </Button>
+            </div>
+          )}
+          </>
         ) : (
           <EmptyState title={filter ? `No ${filter} targets` : "No targets"} description={filter ? "Try another status." : "The target set was empty when the campaign launched."} />
         )}

@@ -2,6 +2,7 @@ import { lazy } from "react";
 import type { RouteObject } from "react-router";
 import { Lazy } from "@/App";
 import { adminCatalogRoutes } from "@/pages/catalog/routes";
+import { orgConnectRoutes } from "@/pages/connect/routes";
 import { AdminLayout } from "./AdminLayout";
 
 const Overview = lazy(() => import("./Overview"));
@@ -120,6 +121,7 @@ export const adminRoutes: RouteObject[] = [
         ),
       },
       ...adminCatalogRoutes,
+      ...orgConnectRoutes,
     ],
   },
 ];

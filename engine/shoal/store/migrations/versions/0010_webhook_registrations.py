@@ -1,7 +1,7 @@
 """webhook registrations
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0010
+Revises: 0009
 Create Date: 2026-10-25 10:58:43
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 import shoal.store.tables
 
-revision = '0006'
-down_revision = '0005'
+revision = '0010'
+down_revision = '0009'
 branch_labels = None
 depends_on = None
 

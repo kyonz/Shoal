@@ -37,6 +37,7 @@ var declarativeKinds = []declarativeKind{
 	{"connection", "Connection", "connections", false, "A configured integration (GitHub, Jira, webhook, or any installed plugin). `status.webhook_url` is the URL to register with the external system.", ""},
 	{"trigger", "Trigger", "triggers", false, "A trigger that starts a workflow from an integration event, a schedule, or a poll, with optional filters and triage.", ""},
 	{"campaign", "Campaign", "campaigns", false, "A campaign: a workflow fanned out over many targets with concurrency, rate and failure policies.", ""},
+	{"target_list", "TargetList", "target-lists", false, "A target list: a named set of targets (such as the repositories a team owns) given as items, a saved integration query, or items looked up through the query. Campaigns use it with `targets = { list = \"name\" }`; trigger filters read its keys as `lists['name']`.", ""},
 	{"sandbox_profile", "SandboxProfile", "sandbox-profiles", false, "A sandbox profile: backend (local, docker, kubernetes, e2b, space, remote), image, resources, network policy and TTL.", ""},
 	{"gateway", "Gateway", "gateways", true, "An LLM gateway: how model requests are sent (provider, base URL, headers). Tenant-wide and managed by tenant admins (`gateways:manage`); credentials are secrets in the `shared` namespace (`api_key_secret`, `secret_headers`), never clear text.", ""},
 	{"model_policy", "ModelPolicy", "model-policies", true, "A model policy: which model serves which agent or workflow, with fallbacks and weighted routing. Tenant-wide and managed by tenant admins (`model-policies:manage`).", ""},
@@ -45,6 +46,7 @@ var declarativeKinds = []declarativeKind{
 	{"identity", "Identity", "identities", true, "A person across systems (email, GitHub login, Jira account, Shoal users), used to attribute runs and pull requests to the human who drove them. Tenant-wide.", ""},
 	{"blueprint", "Blueprint", "blueprints", true, "A blueprint in the tenant's catalogue: a versioned bundle of templated resources that namespace owners adopt into their namespace. Tenant-wide.", ""},
 	{"skill_source", "SkillSource", "skill-sources", true, "A skill source (marketplace): a git repository in the Agent Skills layout, a skill registry, or any installed skill source plugin, from which namespaces import skills. Tenant-wide and managed by tenant admins (`skill-sources:manage`); credentials are secrets in the `shared` namespace, never clear text.", ""},
+	{"custom_integration", "CustomIntegration", "custom-integrations", true, "A custom integration registered for the organisation: a remote service speaking the Shoal integration protocol (`url`) or an installed Python package (`package`). Shoal pulls its manifest (connection settings, auth, actions, resources, events) so connecting to it works like a built-in; `status` reports whether it is ready. Tenant-wide and managed by tenant admins (`custom-integrations:manage`); the service token is a secret in the `shared` namespace.", ""},
 }
 
 type declarativeModel struct {

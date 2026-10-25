@@ -1,0 +1,47 @@
+# A named list of repositories that campaigns and triggers can share.
+# The listed repos are looked up through the GitHub connection, so each target carries
+# the repository's details (default branch, language, ...); a repo the query does not
+# return (renamed, archived, no access) is reported as missing and skipped.
+apiVersion: shoal.dev/v1
+kind: TargetList
+metadata:
+  name: core-repos
+  description: The services the platform team owns.
+spec:
+  connection: github-acme
+  resource: repository
+  filter:
+    org: acme
+    archived: false
+  key: "{{ target.full_name }}"
+  items:
+    - full_name: acme/api
+    - full_name: acme/web
+---
+# Uplift only the repos on the list.
+apiVersion: shoal.dev/v1
+kind: Campaign
+metadata:
+  name: core-uplift
+  description: The core repos to 100% test coverage.
+spec:
+  workflow: repo-uplift
+  targets:
+    list: core-repos
+  inputs:
+    repo: "{{ target.full_name }}"
+    goal: Raise test coverage to 100%
+  policy:
+    concurrency: 5
+---
+# React to pushes on the listed repos only.
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata:
+  name: core-repo-push
+spec:
+  connection: github-acme
+  event: push
+  filter: "{{ event.repository.full_name in lists['core-repos'] and event.ref == 'refs/heads/main' }}"
+  campaign: core-uplift
+  enabled: false

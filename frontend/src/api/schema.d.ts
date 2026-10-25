@@ -88,6 +88,42 @@ export interface paths {
         delete: operations["delete_tenant_v1_tenants__slug__delete"];
         options?: never;
         head?: never;
+        /** Rename, describe, suspend or resume a tenant */
+        patch: operations["patch_tenant_v1_tenants__slug__patch"];
+        trace?: never;
+    };
+    "/v1/tenants/{slug}/quotas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tenant Quotas */
+        get: operations["get_tenant_quotas_v1_tenants__slug__quotas_get"];
+        /** Set a tenant's quotas (unset fields use the server defaults; 0 means unlimited) */
+        put: operations["put_tenant_quotas_v1_tenants__slug__quotas_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/quotas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The calling tenant's quotas */
+        get: operations["my_quotas_v1_quotas_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -132,7 +168,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Integrations */
+        /** Installed integrations and the ones the organisation registered */
         get: operations["integrations_v1_integrations_get"];
         put?: never;
         post?: never;
@@ -261,6 +297,163 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/me/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tenants you can switch to */
+        get: operations["my_tenants_v1_me_tenants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/tenant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Switch your session to another tenant */
+        post: operations["switch_tenant_v1_me_tenant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every tenant with people, namespace counts and federation */
+        get: operations["tenant_summaries_v1_instance_tenants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{slug}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** People with tenant-wide roles in a tenant */
+        get: operations["tenant_members_v1_tenants__slug__members_get"];
+        put?: never;
+        /** Give someone a role in a tenant (invites them when they have not signed in yet) */
+        post: operations["add_tenant_member_v1_tenants__slug__members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** People who have signed in */
+        get: operations["list_accounts_v1_instance_accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Account */
+        get: operations["get_account_v1_instance_accounts__account_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Make someone an instance admin or auditor, or deactivate them everywhere */
+        patch: operations["patch_account_v1_instance_accounts__account_id__patch"];
+        trace?: never;
+    };
+    "/v1/instance/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Instance-level audit: tenants created, suspended or deleted, instance roles, instance sign-ins */
+        get: operations["instance_audit_v1_instance_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/orchestrator": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What drives runs: the built-in orchestrator or Temporal, and where that is set */
+        get: operations["get_orchestrator_v1_instance_orchestrator_get"];
+        /** Save a Temporal connection and choose what new runs start on (overrides SHOAL_ORCHESTRATOR) */
+        put: operations["put_orchestrator_v1_instance_orchestrator_put"];
+        post?: never;
+        /** Forget the console setting and go back to SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* */
+        delete: operations["reset_orchestrator_v1_instance_orchestrator_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/orchestrator/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Try a Temporal connection without saving it */
+        post: operations["test_orchestrator_v1_instance_orchestrator_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/providers": {
         parameters: {
             query?: never;
@@ -268,8 +461,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Sign-in options for a tenant (public) */
+        /** Sign-in options (public): the instance-wide sign-in, or a tenant's own providers */
         get: operations["providers_v1_auth_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/login/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Start the instance-wide sign-in (redirects to the provider) */
+        get: operations["login_instance_v1_auth_login_instance_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1420,6 +1630,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/eval-platforms/{name}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check an eval platform's settings and credentials with a cheap call */
+        post: operations["test_eval_platform_v1_eval_platforms__name__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dataset names on an eval platform, for import pickers */
+        get: operations["eval_platform_datasets_v1_eval_platforms__name__datasets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/eval-sinks": {
         parameters: {
             query?: never;
@@ -1536,6 +1780,27 @@ export interface paths {
         post?: never;
         /** Remove an adoption and the resources it created */
         delete: operations["remove_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/blueprints/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add the blueprints that ship with Shoal to the catalogue
+         * @description Creates the bundled blueprints the catalogue lacks and upgrades older bundled copies. Blueprints the
+         *     tenant wrote itself are never touched, and an upgraded copy keeps its status.
+         */
+        post: operations["install_defaults_v1_blueprints_defaults_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2512,6 +2777,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/target-lists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Target-Lists */
+        get: operations["list_target_lists_v1_namespaces__namespace__target_lists_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Target-Lists */
+        get: operations["get_target_lists_v1_namespaces__namespace__target_lists__name__get"];
+        /** Create or replace a TargetList */
+        put: operations["put_target_lists_v1_namespaces__namespace__target_lists__name__put"];
+        post?: never;
+        /** Delete Target-Lists */
+        delete: operations["delete_target_lists_v1_namespaces__namespace__target_lists__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions Target-Lists */
+        get: operations["versions_target_lists_v1_namespaces__namespace__target_lists__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Target-Lists */
+        get: operations["version_target_lists_v1_namespaces__namespace__target_lists__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What changed between two versions of a TargetList */
+        get: operations["diff_target_lists_v1_namespaces__namespace__target_lists__name__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore an earlier version of a TargetList as a new version */
+        post: operations["rollback_target_lists_v1_namespaces__namespace__target_lists__name__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/cloud-identities": {
         parameters: {
             query?: never;
@@ -2773,6 +3142,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/identities/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Identities */
+        get: operations["version_identities_v1_identities__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/identities/{name}/diff": {
         parameters: {
             query?: never;
@@ -2852,6 +3238,23 @@ export interface paths {
         };
         /** Versions Gateways */
         get: operations["versions_gateways_v1_gateways__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/gateways/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Gateways */
+        get: operations["version_gateways_v1_gateways__name__versions__version__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2947,6 +3350,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model-policies/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Model-Policies */
+        get: operations["version_model_policies_v1_model_policies__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model-policies/{name}/diff": {
         parameters: {
             query?: never;
@@ -3026,6 +3446,23 @@ export interface paths {
         };
         /** Versions Blueprints */
         get: operations["versions_blueprints_v1_blueprints__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/blueprints/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Blueprints */
+        get: operations["version_blueprints_v1_blueprints__name__versions__version__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3121,6 +3558,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skill-sources/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Skill-Sources */
+        get: operations["version_skill_sources_v1_skill_sources__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/skill-sources/{name}/diff": {
         parameters: {
             query?: never;
@@ -3149,6 +3603,214 @@ export interface paths {
         put?: never;
         /** Rollback Skill-Sources */
         post: operations["rollback_skill_sources_v1_skill_sources__name__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval-Platforms */
+        get: operations["list_eval_platforms_v1_eval_platforms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Eval-Platforms */
+        get: operations["get_eval_platforms_v1_eval_platforms__name__get"];
+        /** Put Eval-Platforms */
+        put: operations["put_eval_platforms_v1_eval_platforms__name__put"];
+        post?: never;
+        /** Delete Eval-Platforms */
+        delete: operations["delete_eval_platforms_v1_eval_platforms__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions Eval-Platforms */
+        get: operations["versions_eval_platforms_v1_eval_platforms__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Eval-Platforms */
+        get: operations["version_eval_platforms_v1_eval_platforms__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Diff Eval-Platforms */
+        get: operations["diff_eval_platforms_v1_eval_platforms__name__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Eval-Platforms */
+        post: operations["rollback_eval_platforms_v1_eval_platforms__name__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Custom-Integrations */
+        get: operations["list_custom_integrations_v1_custom_integrations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Custom-Integrations */
+        get: operations["get_custom_integrations_v1_custom_integrations__name__get"];
+        /** Put Custom-Integrations */
+        put: operations["put_custom_integrations_v1_custom_integrations__name__put"];
+        post?: never;
+        /** Delete Custom-Integrations */
+        delete: operations["delete_custom_integrations_v1_custom_integrations__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions Custom-Integrations */
+        get: operations["versions_custom_integrations_v1_custom_integrations__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Custom-Integrations */
+        get: operations["version_custom_integrations_v1_custom_integrations__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Diff Custom-Integrations */
+        get: operations["diff_custom_integrations_v1_custom_integrations__name__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Custom-Integrations */
+        post: operations["rollback_custom_integrations_v1_custom_integrations__name__rollback_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3208,6 +3870,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/org-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Organisation connections (in `shared`) this namespace may use */
+        get: operations["org_connections_v1_namespaces__namespace__org_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pull a registered integration's manifest again (settings schema, actions, events) */
+        post: operations["refresh_custom_integration_v1_custom_integrations__name__refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/cloud-identities/{name}/trust-policy": {
         parameters: {
             query?: never;
@@ -3253,6 +3949,40 @@ export interface paths {
         get: operations["connection_webhook_v1_namespaces__namespace__connections__name__webhook_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/connections/{name}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Guided app setup: features with the permissions they need, the generated manifest, progress */
+        get: operations["connection_setup_v1_namespaces__namespace__connections__name__setup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/connections/{name}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start an app install (e.g. Add to Slack); returns the URL to send the admin to */
+        post: operations["install_connection_v1_namespaces__namespace__connections__name__install_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3324,6 +4054,40 @@ export interface paths {
         put?: never;
         /** Query Resource */
         post: operations["query_resource_v1_namespaces__namespace__connections__name__resources__resource__query_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The targets a target list resolves to now */
+        get: operations["resolve_target_list_v1_namespaces__namespace__target_lists__name__resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve an unsaved target list spec */
+        post: operations["preview_target_list_v1_namespaces__namespace__target_lists_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3456,6 +4220,73 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccountDetail */
+        AccountDetail: {
+            /** Id */
+            id: string;
+            /** Email */
+            email: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Instance Role */
+            instance_role: string | null;
+            /** Active */
+            active: boolean;
+            /** Oidc Issuer */
+            oidc_issuer: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Login At */
+            last_login_at: string | null;
+            /** Tenants */
+            tenants: components["schemas"]["AccountMembership"][];
+        };
+        /** AccountMembership */
+        AccountMembership: {
+            /** Tenant */
+            tenant: string;
+            /** Tenant Name */
+            tenant_name: string;
+            /** Username */
+            username: string;
+            /** Roles */
+            roles: string[];
+        };
+        /** AccountOut */
+        AccountOut: {
+            /** Id */
+            id: string;
+            /** Email */
+            email: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Instance Role */
+            instance_role: string | null;
+            /** Active */
+            active: boolean;
+            /** Oidc Issuer */
+            oidc_issuer: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Login At */
+            last_login_at: string | null;
+        };
+        /** AccountPatch */
+        AccountPatch: {
+            /**
+             * Instance Role
+             * @description Set to grant; send null to remove (use the field explicitly).
+             */
+            instance_role?: ("instance-admin" | "instance-auditor") | null;
+            /** Active */
+            active?: boolean | null;
+        };
         /** ActionCallIn */
         ActionCallIn: {
             /** Params */
@@ -3821,6 +4652,11 @@ export interface components {
              * @description The UI route the user is on, for context.
              */
             page?: string | null;
+            /**
+             * Context
+             * @description What the user sees that the API can't show, e.g. a workflow open in the builder with unsaved edits.
+             */
+            context?: string | null;
         };
         /** ChatMessage */
         ChatMessage: {
@@ -3894,12 +4730,17 @@ export interface components {
         DatasetImportIn: {
             /**
              * Sink
-             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'.
+             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'. Set this or `platform`.
              */
-            sink: string;
+            sink?: string | null;
+            /**
+             * Platform
+             * @description An EvalPlatform by name; `config` is merged over its settings.
+             */
+            platform?: string | null;
             /**
              * Config
-             * @description Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. Empty on an eval run export: the Eval's own sinks[] settings for this sink.
+             * @description Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. Empty on an eval run export: the Eval's own sinks[] settings for this sink or platform.
              */
             config?: {
                 [key: string]: unknown;
@@ -3921,6 +4762,26 @@ export interface components {
             approve: boolean;
             /** Note */
             note?: string | null;
+        };
+        /** DefaultBlueprint */
+        DefaultBlueprint: {
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            /**
+             * Outcome
+             * @description created, updated (an older bundled copy), unchanged, or kept (the tenant's own blueprint has the name, or its copy is newer).
+             */
+            outcome: string;
+        };
+        /** DefaultsIn */
+        DefaultsIn: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
         };
         /** DeliveryOut */
         DeliveryOut: {
@@ -4029,6 +4890,13 @@ export interface components {
             mode: string;
             /** Status */
             status: string;
+            /**
+             * Spec
+             * @description The Eval spec as it was when the run started (threshold, graders, ...).
+             */
+            spec: {
+                [key: string]: unknown;
+            };
             /** Summary */
             summary: {
                 [key: string]: unknown;
@@ -4127,6 +4995,13 @@ export interface components {
             mode: string;
             /** Status */
             status: string;
+            /**
+             * Spec
+             * @description The Eval spec as it was when the run started (threshold, graders, ...).
+             */
+            spec: {
+                [key: string]: unknown;
+            };
             /** Summary */
             summary: {
                 [key: string]: unknown;
@@ -4187,6 +5062,8 @@ export interface components {
         ExportOut: {
             /** Sink */
             sink: string;
+            /** Platform */
+            platform?: string | null;
             /** Url */
             url: string | null;
             /** Ids */
@@ -4405,6 +5282,15 @@ export interface components {
              */
             grants?: components["schemas"]["GrantIn"][];
         };
+        /** KeptResource */
+        KeptResource: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+        };
         /** LinkCreated */
         LinkCreated: {
             link: components["schemas"]["LinkOut"];
@@ -4519,6 +5405,10 @@ export interface components {
             email: string | null;
             /** Is System Admin */
             is_system_admin: boolean;
+            /** Account Id */
+            account_id?: string | null;
+            /** Instance Role */
+            instance_role?: string | null;
             /**
              * Namespaces
              * @description Namespaces visible here; for a federated tenant ask /v1/me/permissions, which the member answers.
@@ -4595,6 +5485,22 @@ export interface components {
             namespaces?: string[] | null;
             /** Visibility */
             visibility?: ("full" | "metadata") | null;
+        };
+        /** MyTenant */
+        MyTenant: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /**
+             * Member
+             * @description False when an instance admin or auditor can open it without being a member.
+             */
+            member: boolean;
+            /** Current */
+            current: boolean;
         };
         /** NamespaceIn */
         NamespaceIn: {
@@ -4692,6 +5598,81 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * OrchestratorEnvironment
+         * @description What SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* say (used while nothing is saved in the console).
+         */
+        OrchestratorEnvironment: {
+            /** Orchestrator */
+            orchestrator: string;
+            /** Temporal Address */
+            temporal_address: string;
+            /** Temporal Namespace */
+            temporal_namespace: string;
+            /** Temporal Task Queue */
+            temporal_task_queue: string;
+            /**
+             * Temporal Tls
+             * @description TLS, an API key or client certificates are configured.
+             */
+            temporal_tls: boolean;
+        };
+        /** OrchestratorSetting */
+        OrchestratorSetting: {
+            /**
+             * Orchestrator
+             * @default builtin
+             * @enum {string}
+             */
+            orchestrator: "builtin" | "temporal";
+            /** @description Saved Temporal connection. Kept when switching back, so Temporal finishes its runs. */
+            temporal?: components["schemas"]["TemporalSettings"] | null;
+        };
+        /** OrchestratorStatus */
+        OrchestratorStatus: {
+            /**
+             * Source
+             * @description Where the orchestrator for new runs comes from.
+             * @enum {string}
+             */
+            source: "environment" | "console";
+            /**
+             * Orchestrator
+             * @description What new runs start on.
+             */
+            orchestrator: string;
+            /**
+             * Driving
+             * @description Every orchestrator this server drives runs with.
+             */
+            driving: string[];
+            /** @description What the instance console saved. */
+            setting?: components["schemas"]["OrchestratorSetting"] | null;
+            environment: components["schemas"]["OrchestratorEnvironment"];
+            /**
+             * Runs
+             * @description Unfinished runs per orchestrator, across every tenant.
+             */
+            runs: {
+                [key: string]: number;
+            };
+            /**
+             * Temporal Installed
+             * @description The temporal extra is installed on this server.
+             */
+            temporal_installed: boolean;
+            /**
+             * Error
+             * @description Why the saved setting could not be applied (e.g. a deleted secret).
+             */
+            error?: string | null;
+            /** Revision */
+            revision?: number | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
         };
         /** Page[AuditOut] */
         Page_AuditOut_: {
@@ -4791,6 +5772,20 @@ export interface components {
                 [key: string]: string[];
             };
         };
+        /** PlatformTestOut */
+        PlatformTestOut: {
+            /**
+             * Ok
+             * @description null when the sink cannot check its settings.
+             */
+            ok: boolean | null;
+            /** Sink */
+            sink?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Project */
+            project?: string | null;
+        };
         /** QueryIn */
         QueryIn: {
             /** Filter */
@@ -4804,6 +5799,24 @@ export interface components {
              * @default 100
              */
             limit: number;
+        };
+        /** QuotasOut */
+        QuotasOut: {
+            tenant: components["schemas"]["TenantQuotas"];
+            effective: components["schemas"]["TenantQuotas"];
+        };
+        /** RemoveResult */
+        RemoveResult: {
+            /**
+             * Removed
+             * @description Resources deleted with the adoption.
+             */
+            removed: components["schemas"]["ResourceRef"][];
+            /**
+             * Kept
+             * @description Resources left alone: already deleted, or no longer labelled with this adoption.
+             */
+            kept?: components["schemas"]["KeptResource"][];
         };
         /**
          * ResourceIn
@@ -5162,6 +6175,15 @@ export interface components {
              */
             created_at: string;
         };
+        /** SessionOut */
+        SessionOut: {
+            /**
+             * Session
+             * @description The new session token (also set as the session cookie).
+             */
+            session: string;
+            tenant: components["schemas"]["TenantOut"] | null;
+        };
         /** SignalIn */
         SignalIn: {
             /**
@@ -5202,12 +6224,17 @@ export interface components {
         SinkIn: {
             /**
              * Sink
-             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'.
+             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'. Set this or `platform`.
              */
-            sink: string;
+            sink?: string | null;
+            /**
+             * Platform
+             * @description An EvalPlatform by name; `config` is merged over its settings.
+             */
+            platform?: string | null;
             /**
              * Config
-             * @description Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. Empty on an eval run export: the Eval's own sinks[] settings for this sink.
+             * @description Sink settings; secrets by name (api_key_secret, ...), which needs evals:write. Empty on an eval run export: the Eval's own sinks[] settings for this sink or platform.
              */
             config?: {
                 [key: string]: unknown;
@@ -5336,6 +6363,57 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SwitchTenantIn */
+        SwitchTenantIn: {
+            /**
+             * Tenant
+             * @description Tenant slug; null leaves every tenant (instance admins only).
+             */
+            tenant: string | null;
+        };
+        /**
+         * TargetListSpec
+         * @description A reusable, named set of targets (e.g. repositories) for campaigns and trigger filters.
+         *
+         *     - ``items`` alone: exactly these targets, as written.
+         *     - ``connection`` + ``resource`` alone: a saved query, resolved each time it is used.
+         *     - both: exactly the listed targets, each looked up through the query so it carries the
+         *       integration's details (a listed target the query does not return is reported missing).
+         */
+        TargetListSpec: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Connection
+             * @description Connection to query or look targets up through.
+             */
+            connection?: string | null;
+            /**
+             * Resource
+             * @description Integration resource, e.g. 'repository'.
+             */
+            resource?: string | null;
+            /**
+             * Filter
+             * @description Query filter, e.g. {org: acme}.
+             */
+            filter?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Items
+             * @description The targets, e.g. [{full_name: acme/api}]; with a connection, looked up by key.
+             */
+            items?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Key
+             * @description Expression giving a stable key per target, e.g. '{{ target.full_name }}'.
+             * @default {{ target.id }}
+             */
+            key: string;
+        };
         /** TargetOut */
         TargetOut: {
             /** Id */
@@ -5363,6 +6441,73 @@ export interface components {
             /** Finished At */
             finished_at: string | null;
         };
+        /** TemporalCheck */
+        TemporalCheck: {
+            /** Ok */
+            ok: boolean;
+            /** Detail */
+            detail: string;
+            /** Server Version */
+            server_version?: string | null;
+            /**
+             * Pollers
+             * @description Workers polling the task queue right now.
+             */
+            pollers?: number | null;
+        };
+        /**
+         * TemporalSettings
+         * @description A Temporal connection as the instance console saves it: secrets by name, never their values.
+         */
+        TemporalSettings: {
+            /**
+             * Address
+             * @description Frontend host:port.
+             */
+            address: string;
+            /**
+             * Namespace
+             * @default default
+             */
+            namespace: string;
+            /**
+             * Task Queue
+             * @description One per Shoal installation sharing a namespace.
+             * @default shoal
+             */
+            task_queue: string;
+            /**
+             * Tls
+             * @description TLS without client certificates (implied by an API key or certificates).
+             * @default false
+             */
+            tls: boolean;
+            /**
+             * Secrets Tenant
+             * @description Tenant whose shared namespace holds the secrets below.
+             */
+            secrets_tenant?: string | null;
+            /**
+             * Api Key Secret
+             * @description Secret holding a Temporal Cloud API key.
+             */
+            api_key_secret?: string | null;
+            /**
+             * Tls Cert Secret
+             * @description Secret holding the mTLS client certificate (PEM).
+             */
+            tls_cert_secret?: string | null;
+            /**
+             * Tls Key Secret
+             * @description Secret holding the mTLS client key (PEM).
+             */
+            tls_key_secret?: string | null;
+            /**
+             * Tls Ca Secret
+             * @description Secret holding the CA for the server certificate (PEM).
+             */
+            tls_ca_secret?: string | null;
+        };
         /** TenantCreated */
         TenantCreated: {
             tenant: components["schemas"]["TenantOut"];
@@ -5378,11 +6523,42 @@ export interface components {
             slug: string;
             /** Name */
             name?: string | null;
+            /** Description */
+            description?: string | null;
             /**
              * Admin Email
              * @description Optional first human admin (bound to tenant-admin).
              */
             admin_email?: string | null;
+        };
+        /** TenantMemberIn */
+        TenantMemberIn: {
+            /** Email */
+            email: string;
+            /**
+             * Role
+             * @description A role in that tenant, granted tenant-wide.
+             * @default tenant-admin
+             */
+            role: string;
+        };
+        /** TenantMemberOut */
+        TenantMemberOut: {
+            /** User Id */
+            user_id: string;
+            /** Username */
+            username: string;
+            /** Email */
+            email: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Roles */
+            roles: string[];
+            /**
+             * Linked
+             * @description Linked to an instance account (has signed in through the instance or SSO).
+             */
+            linked: boolean;
         };
         /** TenantOut */
         TenantOut: {
@@ -5392,11 +6568,89 @@ export interface components {
             slug: string;
             /** Name */
             name: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Status
+             * @default active
+             */
+            status: string;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+        };
+        /** TenantPatch */
+        TenantPatch: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /**
+             * Status
+             * @description Suspended tenants refuse every call except from instance admins; their data is kept.
+             */
+            status?: ("active" | "suspended") | null;
+        };
+        /**
+         * TenantQuotas
+         * @description Per-tenant overrides of the server-wide defaults. Unset fields use the defaults; 0 means unlimited.
+         */
+        TenantQuotas: {
+            /**
+             * Requests Per Second
+             * @description API requests per second, per API process.
+             */
+            requests_per_second?: number | null;
+            /**
+             * Request Burst
+             * @description Requests allowed in a burst above the rate.
+             */
+            request_burst?: number | null;
+            /**
+             * Max Pending Runs
+             * @description Runs waiting for a worker before new runs get 429.
+             */
+            max_pending_runs?: number | null;
+            /**
+             * Max Concurrent Runs
+             * @description Runs workers advance at once for this tenant.
+             */
+            max_concurrent_runs?: number | null;
+        };
+        /** TenantSummary */
+        TenantSummary: {
+            /** Id */
+            id: string;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Status
+             * @default active
+             */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Users
+             * @description Active people (not service accounts).
+             */
+            users: number;
+            /** Namespaces */
+            namespaces: number;
+            /**
+             * Federated
+             * @description Managed by a member deployment through federation.
+             */
+            federated: boolean;
         };
         /** TriggerTestIn */
         TriggerTestIn: {
@@ -5800,6 +7054,127 @@ export interface operations {
             };
         };
     };
+    patch_tenant_v1_tenants__slug__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tenant_quotas_v1_tenants__slug__quotas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotasOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_tenant_quotas_v1_tenants__slug__quotas_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantQuotas"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotasOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_quotas_v1_quotas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotasOut"];
+                };
+            };
+        };
+    };
     me_v1_me_get: {
         parameters: {
             query?: never;
@@ -5842,7 +7217,10 @@ export interface operations {
     };
     integrations_v1_integrations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the registered integrations this namespace may use (default: all of them). */
+                namespace?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5858,6 +7236,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6027,10 +7414,386 @@ export interface operations {
             };
         };
     };
+    my_tenants_v1_me_tenants_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyTenant"][];
+                };
+            };
+        };
+    };
+    switch_tenant_v1_me_tenant_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchTenantIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tenant_summaries_v1_instance_tenants_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantSummary"][];
+                };
+            };
+        };
+    };
+    tenant_members_v1_tenants__slug__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantMemberOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_tenant_member_v1_tenants__slug__members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantMemberIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantMemberOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_accounts_v1_instance_accounts_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                instance_role?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_v1_instance_accounts__account_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_account_v1_instance_accounts__account_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    instance_audit_v1_instance_audit_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                action?: string | null;
+                before?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_orchestrator_v1_instance_orchestrator_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+        };
+    };
+    put_orchestrator_v1_instance_orchestrator_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrchestratorSetting"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_orchestrator_v1_instance_orchestrator_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+        };
+    };
+    test_orchestrator_v1_instance_orchestrator_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemporalSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemporalCheck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     providers_v1_auth_providers_get: {
         parameters: {
-            query: {
-                tenant: string;
+            query?: {
+                tenant?: string | null;
             };
             header?: never;
             path?: never;
@@ -6045,6 +7808,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LoginProvider"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_instance_v1_auth_login_instance_get: {
+        parameters: {
+            query?: {
+                redirect_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -6162,9 +7956,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -8233,7 +10025,10 @@ export interface operations {
     start_run_v1_namespaces__namespace__workflows__name__runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Retrying with the same key returns the run the first call started (200). */
+                "idempotency-key"?: string | null;
+            };
             path: {
                 namespace: string;
                 name: string;
@@ -9116,6 +10911,68 @@ export interface operations {
             };
         };
     };
+    test_eval_platform_v1_eval_platforms__name__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformTestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eval_platform_datasets_v1_eval_platforms__name__datasets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_eval_sinks_v1_eval_sinks_get: {
         parameters: {
             query?: never;
@@ -9387,11 +11244,46 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RemoveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    install_defaults_v1_blueprints_defaults_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultBlueprint"][];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -11851,6 +13743,284 @@ export interface operations {
             };
         };
     };
+    list_target_lists_v1_namespaces__namespace__target_lists_get: {
+        parameters: {
+            query?: {
+                label?: string[];
+            };
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_target_lists_v1_namespaces__namespace__target_lists__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_target_lists_v1_namespaces__namespace__target_lists__name__put: {
+        parameters: {
+            query?: {
+                /** @description Change note stored with the new version. */
+                message?: string | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_target_lists_v1_namespaces__namespace__target_lists__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_target_lists_v1_namespaces__namespace__target_lists__name__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_target_lists_v1_namespaces__namespace__target_lists__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_target_lists_v1_namespaces__namespace__target_lists__name__diff_get: {
+        parameters: {
+            query: {
+                from: number;
+                /** @description Defaults to the current version. */
+                to?: number | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_target_lists_v1_namespaces__namespace__target_lists__name__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"] | components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_cloud_identities_v1_namespaces__namespace__cloud_identities_get: {
         parameters: {
             query?: {
@@ -12556,6 +14726,38 @@ export interface operations {
             };
         };
     };
+    version_identities_v1_identities__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     diff_identities_v1_identities__name__diff_get: {
         parameters: {
             query: {
@@ -12761,6 +14963,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_gateways_v1_gateways__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
                 };
             };
             /** @description Validation Error */
@@ -12992,6 +15226,38 @@ export interface operations {
             };
         };
     };
+    version_model_policies_v1_model_policies__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     diff_model_policies_v1_model_policies__name__diff_get: {
         parameters: {
             query: {
@@ -13197,6 +15463,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_blueprints_v1_blueprints__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
                 };
             };
             /** @description Validation Error */
@@ -13428,6 +15726,38 @@ export interface operations {
             };
         };
     };
+    version_skill_sources_v1_skill_sources__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     diff_skill_sources_v1_skill_sources__name__diff_get: {
         parameters: {
             query: {
@@ -13463,6 +15793,506 @@ export interface operations {
         };
     };
     rollback_skill_sources_v1_skill_sources__name__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"] | components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_platforms_v1_eval_platforms_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+        };
+    };
+    get_eval_platforms_v1_eval_platforms__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_eval_platforms_v1_eval_platforms__name__put: {
+        parameters: {
+            query?: {
+                /** @description Change note stored with the new version. */
+                message?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eval_platforms_v1_eval_platforms__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_eval_platforms_v1_eval_platforms__name__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_eval_platforms_v1_eval_platforms__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_eval_platforms_v1_eval_platforms__name__diff_get: {
+        parameters: {
+            query: {
+                from: number;
+                to?: number | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_eval_platforms_v1_eval_platforms__name__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"] | components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_custom_integrations_v1_custom_integrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+        };
+    };
+    get_custom_integrations_v1_custom_integrations__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_custom_integrations_v1_custom_integrations__name__put: {
+        parameters: {
+            query?: {
+                /** @description Change note stored with the new version. */
+                message?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_custom_integrations_v1_custom_integrations__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_custom_integrations_v1_custom_integrations__name__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_custom_integrations_v1_custom_integrations__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_custom_integrations_v1_custom_integrations__name__diff_get: {
+        parameters: {
+            query: {
+                from: number;
+                to?: number | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_custom_integrations_v1_custom_integrations__name__rollback_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13660,6 +16490,70 @@ export interface operations {
             };
         };
     };
+    org_connections_v1_namespaces__namespace__org_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_custom_integration_v1_custom_integrations__name__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cloud_identity_trust_policy_v1_namespaces__namespace__cloud_identities__name__trust_policy_get: {
         parameters: {
             query?: never;
@@ -13731,6 +16625,80 @@ export interface operations {
     connection_webhook_v1_namespaces__namespace__connections__name__webhook_get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connection_setup_v1_namespaces__namespace__connections__name__setup_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated features to preview instead of the connection's */
+                features?: string | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    install_connection_v1_namespaces__namespace__connections__name__install_post: {
+        parameters: {
+            query?: {
+                /** @description Come back to the guided setup instead of the connection */
+                then?: string | null;
+            };
             header?: never;
             path: {
                 namespace: string;
@@ -13881,6 +16849,77 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["QueryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_target_list_v1_namespaces__namespace__target_lists__name__resolve_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_target_list_v1_namespaces__namespace__target_lists_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TargetListSpec"];
             };
         };
         responses: {

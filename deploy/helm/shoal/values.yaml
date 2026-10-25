@@ -1,7 +1,7 @@
 # Default values for the shoal chart.
 
 image:
-  repository: ghcr.io/kyonz/ai-workflow-manager
+  repository: ghcr.io/kyonz/shoal
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -59,6 +59,40 @@ orchestrator:
       deploymentName: ""
       behavior: auto-upgrade
 
+# How workers hear that a run is due. "database" (default): they poll the runs
+# table about once a second. "sqs": they long-poll Amazon SQS and sweep the
+# database only every sweepSeconds; the database stays the source of truth.
+# Give the service account an AWS role that can send, receive, delete and
+# change visibility on the queues (deploy/terraform/sqs-dispatch). See
+# docs/dispatch-queues.md.
+dispatch:
+  queue: database
+  sweepSeconds: 15
+  sqs:
+    # Standard (not FIFO) queue for every lane, e.g. https://sqs.eu-west-1.amazonaws.com/123456789012/shoal-dispatch
+    queueUrl: ""
+    # Its own queue for the agent lane (recommended with worker.agentPool.enabled).
+    agentQueueUrl: ""
+    region: ""
+    # LocalStack or a VPC endpoint.
+    endpoint: ""
+    fairQueues: true
+
+# Instance-wide sign-in. People sign in once and switch between the tenants
+# they belong to; instance admins create and manage tenants. Leave oidc.issuer
+# empty to keep sign-in per tenant only.
+instance:
+  # Emails that become instance admins when they first sign in.
+  admins: []
+  oidc:
+    issuer: ""
+    clientId: ""
+    # Client secret: a key in an existing Secret (recommended) or a literal.
+    clientSecret: ""
+    clientSecretRef: {name: "", key: ""}
+    displayName: Single sign-on
+    allowedDomains: []
+
 # Credentials. Leave secretKey/adminToken empty to generate them once (they are
 # kept across upgrades), or point existingSecret at a Secret you manage with keys
 # SHOAL_SECRET_KEY, SHOAL_ADMIN_TOKEN and, when the database is external,
@@ -72,6 +106,17 @@ secrets:
 database:
   # e.g. postgresql+asyncpg://shoal:password@db.example.com:5432/shoal
   url: ""
+  # When url points at a pooler (PgBouncer, RDS Proxy, ...): the direct URL that
+  # migrations and live-update notifications (LISTEN/NOTIFY) use, and set
+  # pgbouncer: true if the pooler runs in transaction mode.
+  directUrl: ""
+  pgbouncer: false
+  # Connections each Shoal process keeps. Postgres (or the pooler) must allow
+  # (api replicas x api processes + worker replicas) x (size + maxOverflow).
+  pool:
+    size: 20
+    maxOverflow: 10
+    timeoutSeconds: 10
 
 # A single-instance Postgres for evaluation and small installs. Use a managed
 # or operator-run database in production and set database.url instead.
@@ -93,6 +138,25 @@ postgresql:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 1Gi}
+  maxConnections: 200
+
+# PgBouncer in front of the bundled Postgres (transaction pooling), so scaling API
+# and worker replicas does not exhaust Postgres connections. For an external
+# database, run your own pooler and set database.url, directUrl and pgbouncer.
+pgbouncer:
+  enabled: true
+  image:
+    repository: edoburu/pgbouncer
+    tag: "v1.26.0-p0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  maxClientConn: 2000
+  # Server connections per database/user pair, and the cap across all of them.
+  defaultPoolSize: 50
+  maxDbConnections: 150
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {memory: 128Mi}
 
 # Extra environment for every Shoal pod (model provider keys, sandbox services, ...).
 extraEnv: []
@@ -158,6 +222,16 @@ worker:
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
+  # A separate pool for runs that call models (agent, decide and grade steps), so short
+  # workflows never queue behind long agent runs. Agent steps mostly wait on the model,
+  # so these workers run many at once.
+  agentPool:
+    enabled: false
+    replicaCount: 2
+    concurrency: 200
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {memory: 2Gi}
   # Scratch space for 'local' sandboxes.
   sandboxVolume:
     sizeLimit: 10Gi

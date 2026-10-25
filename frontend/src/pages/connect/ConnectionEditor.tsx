@@ -1,14 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, KeyRound, PlugZap, UserRound, Save, Trash2, Webhook, XCircle } from "lucide-react";
+import { Building2, CheckCircle2, Copy, Download, KeyRound, MessagesSquare, PlugZap, UserRound, Save, Trash2, TriangleAlert, Wand2, Webhook, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { ApiError, rawJson } from "@/api/client";
-import { useDeleteResource, useIntegrations, usePutResource, useResource, type IntegrationCatalog } from "@/api/hooks";
+import { allowsScope, useDeleteResource, useIntegrations, usePutResource, useResource, useResources, type IntegrationCatalog } from "@/api/hooks";
 import { SchemaForm, humanize, unwrapNullable } from "@/components/forms/SchemaForm";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
-import { nsPath, useNs } from "@/lib/ns";
+import { SHARED_NS, lastNamespace, nsPath, useNs, useOrgScope } from "@/lib/ns";
+import { NamespaceMultiPicker } from "@/pages/catalog/widgets";
 import {
   Badge,
   Button,
@@ -21,6 +22,7 @@ import {
   JsonBlock,
   Page,
   PageHeader,
+  Segmented,
   Skeleton,
   Tabs,
   TabsContent,
@@ -35,6 +37,7 @@ import { Crumb, ErrorList, IntegrationMark, NAME_RE, SecretPicker, VersionsPanel
 
 export default function ConnectionEditor() {
   const ns = useNs();
+  const org = useOrgScope();
   const { name: routeName } = useParams();
   const isNew = !routeName;
   const [params] = useSearchParams();
@@ -44,7 +47,7 @@ export default function ConnectionEditor() {
   const canWrite = can("connections:write", ns);
 
   const existing = useResource("connections", ns, routeName);
-  const integrations = useIntegrations();
+  const integrations = useIntegrations(org ? undefined : ns);
   const put = usePutResource("connections", ns);
   const del = useDeleteResource("connections", ns);
 
@@ -54,34 +57,43 @@ export default function ConnectionEditor() {
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [personal, setPersonal] = useState<PersonalSpec>({});
+  const [namespaces, setNamespaces] = useState<string[]>([]);
   const [tab, setTab] = useState("settings");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (existing.data && !loaded) {
-      const s = existing.data.spec as unknown as { integration: string; config?: Record<string, unknown>; secrets?: Record<string, string> } & PersonalSpec;
+      const s = existing.data.spec as unknown as { integration: string; config?: Record<string, unknown>; secrets?: Record<string, string>; namespaces?: string[] } & PersonalSpec;
       setName(existing.data.metadata.name);
       setDescription(existing.data.metadata.description ?? "");
       setIntegration(s.integration);
       setConfig(s.config ?? {});
       setSecrets(s.secrets ?? {});
       setPersonal(pickPersonal(s));
+      setNamespaces(s.namespaces ?? []);
       setLoaded(true);
     }
   }, [existing.data, loaded]);
 
   const catalog: IntegrationCatalog | undefined = integrations.data?.find((i) => i.key === integration);
   const spec = useMemo(
-    () => ({ integration, ...(Object.keys(config).length ? { config } : {}), ...(Object.keys(secrets).length ? { secrets } : {}), ...personal }),
-    [integration, config, secrets, personal],
+    () => ({
+      integration,
+      ...(Object.keys(config).length ? { config } : {}),
+      ...(Object.keys(secrets).length ? { secrets } : {}),
+      ...personal,
+      ...(org && namespaces.length ? { namespaces } : {}),
+    }),
+    [integration, config, secrets, personal, org, namespaces],
   );
   const yaml = useYamlSync("Connection", name, description, spec, (p) => {
     setDescription(p.description ?? "");
-    const s = p.spec as { integration?: string; config?: Record<string, unknown>; secrets?: Record<string, string> } & PersonalSpec;
+    const s = p.spec as { integration?: string; config?: Record<string, unknown>; secrets?: Record<string, string>; namespaces?: string[] } & PersonalSpec;
     if (s.integration) setIntegration(s.integration);
     setConfig(s.config ?? {});
     setSecrets(s.secrets ?? {});
     setPersonal(pickPersonal(s));
+    setNamespaces(s.namespaces ?? []);
   });
 
   const nameError = isNew && name && !NAME_RE.test(name) ? "Lowercase letters, digits and dashes; start and end with a letter or digit." : undefined;
@@ -90,7 +102,10 @@ export default function ConnectionEditor() {
     try {
       const res = await put.mutateAsync({ name, body: { metadata: { description: description || null }, spec } });
       toast.success(isNew ? `Connection ${name} created` : `Saved ${name} (v${res.metadata.version})`);
-      if (isNew) navigate(nsPath(ns, "connections", name), { replace: true });
+      if (isNew) {
+        const guided = catalog?.setup_features?.length;
+        navigate(guided ? nsPath(ns, "connections", name, "setup") : nsPath(ns, "connections", name), { replace: true });
+      }
     } catch {
       /* shown inline */
     }
@@ -124,7 +139,9 @@ export default function ConnectionEditor() {
       </Page>
     );
 
-  if (isNew && !integration) return <PickIntegration integrations={integrations.data ?? []} onPick={setIntegration} loading={integrations.isLoading} />;
+  if (isNew && !integration) return <PickIntegration integrations={integrations.data ?? []} onPick={setIntegration} loading={integrations.isLoading} org={org} />;
+  const level = org ? "org" : "namespace";
+  const wrongLevel = !!catalog && !allowsScope(catalog, level);
 
   const secretFields = catalog?.secret_fields ?? Object.keys(secrets);
   const personalFields = userFields({ ...personal, secrets });
@@ -132,9 +149,9 @@ export default function ConnectionEditor() {
   return (
     <Page>
       <PageHeader
-        breadcrumb={<Crumb to={nsPath(ns, "connections")}>Connections</Crumb>}
+        breadcrumb={<Crumb to={nsPath(ns, "connections")}>{org ? "Organisation connections" : "Connections"}</Crumb>}
         icon={<IntegrationMark integrationKey={integration} size="sm" />}
-        title={isNew ? `New ${catalog?.title ?? integration} connection` : name}
+        title={isNew ? `New ${org ? "organisation " : ""}${catalog?.title ?? integration} connection` : name}
         description={isNew ? catalog?.description : description || undefined}
         actions={
           <>
@@ -144,7 +161,7 @@ export default function ConnectionEditor() {
               </Button>
             )}
             {canWrite && (
-              <Button variant="primary" icon={<Save className="size-4" />} loading={put.isPending} disabled={!name || !!nameError || !!yaml.error} onClick={() => void save()}>
+              <Button variant="primary" icon={<Save className="size-4" />} loading={put.isPending} disabled={!name || !!nameError || !!yaml.error || (isNew && wrongLevel)} onClick={() => void save()}>
                 {isNew ? "Create connection" : "Save"}
               </Button>
             )}
@@ -167,6 +184,7 @@ export default function ConnectionEditor() {
               {!isNew && <TabsTrigger value="history">History</TabsTrigger>}
             </TabsList>
             <TabsContent value="settings" className="space-y-5">
+              {wrongLevel && <WrongLevel org={org} integration={catalog!} />}
               <ErrorList error={put.error} />
               <Card className="p-4">
                 <div className="grid gap-3.5 sm:grid-cols-2">
@@ -184,7 +202,9 @@ export default function ConnectionEditor() {
                   description={
                     personal.credentials === "per_user"
                       ? "Each person supplies their own credential. Secret fields that are not theirs still come from namespace secrets."
-                      : "Secret fields point at namespace secrets, so values never appear in the resource."
+                      : org
+                        ? "Secret fields point at shared secrets (organisation-wide), so values never appear in the resource."
+                        : "Secret fields point at namespace secrets, so values never appear in the resource."
                   }
                 />
                 <div className="space-y-3.5 p-4">
@@ -219,6 +239,7 @@ export default function ConnectionEditor() {
                 </div>
               </Card>
               <WhoConnects ns={ns} value={personal} onChange={setPersonal} secretFields={secretFields} disabled={!canWrite} />
+              {org && <SharedWithCard value={namespaces} onChange={setNamespaces} disabled={!canWrite} />}
               <Card>
                 <CardHeader title="Settings" description="Non-secret configuration, rendered from the integration's schema." />
                 <div className="p-4">
@@ -254,20 +275,29 @@ export default function ConnectionEditor() {
           )}
           {!isNew && <ConnectionSidebar ns={ns} name={name} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}
           {!isNew && <ConnectionWebhooks ns={ns} name={name} />}
+          {!isNew && existing.data?.spec.integration === "slack" && <SlackBots ns={ns} name={name} />}
         </aside>
       </div>
     </Page>
   );
 }
 
-function PickIntegration({ integrations, onPick, loading }: { integrations: IntegrationCatalog[]; onPick: (k: string) => void; loading: boolean }) {
+function PickIntegration({ integrations, onPick, loading, org }: { integrations: IntegrationCatalog[]; onPick: (k: string) => void; loading: boolean; org: boolean }) {
   const ns = useNs();
+  const { can } = useAuth();
+  const level = org ? "org" : "namespace";
+  const usable = integrations.filter((i) => allowsScope(i, level));
+  const elsewhere = integrations.length - usable.length;
   return (
     <Page>
-      <PageHeader breadcrumb={<Crumb to={nsPath(ns, "connections")}>Connections</Crumb>} title="New connection" description="Pick the integration to connect." />
+      <PageHeader
+        breadcrumb={<Crumb to={nsPath(ns, "connections")}>{org ? "Organisation connections" : "Connections"}</Crumb>}
+        title={org ? "New organisation connection" : "New connection"}
+        description={org ? "Pick the integration to connect once for the whole organisation." : "Pick the integration to connect."}
+      />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {loading && Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
-        {integrations.map((i) => (
+        {usable.map((i) => (
           <button key={i.key} onClick={() => onPick(i.key)} className="flex items-start gap-3 rounded-xl border border-border bg-panel p-4 text-left shadow-card transition hover:border-accent hover:shadow-pop">
             <IntegrationMark integrationKey={i.key} />
             <div className="min-w-0">
@@ -277,17 +307,98 @@ function PickIntegration({ integrations, onPick, loading }: { integrations: Inte
           </button>
         ))}
       </div>
+      {elsewhere > 0 && (
+        <p className="mt-4 text-xs text-muted">
+          {elsewhere === 1 ? "One integration" : `${elsewhere} integrations`}{" "}
+          {org ? "can only be connected inside a namespace, by its team." : "can only be connected for the whole organisation, by your admins."}{" "}
+          {!org && can("connections:write", SHARED_NS) && (
+            <Link className="text-accent hover:underline" to={nsPath(SHARED_NS, "connections", "new")}>
+              New organisation connection
+            </Link>
+          )}
+        </p>
+      )}
     </Page>
   );
 }
 
+function WrongLevel({ org, integration }: { org: boolean; integration: IntegrationCatalog }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-warn/25 bg-warn-soft px-3 py-2.5 text-[13px] text-warn">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+      <span>
+        {integration.title} connections {org ? "live in a namespace: each team connects it with its own credentials." : "are set up once for the whole organisation."}{" "}
+        <Link className="font-medium underline" to={org ? nsPath(lastNamespace(), "connections", "new") + `?integration=${integration.key}` : nsPath(SHARED_NS, "connections", "new") + `?integration=${integration.key}`}>
+          {org ? "Connect it in a namespace" : "Connect it in the admin console"}
+        </Link>
+      </span>
+    </div>
+  );
+}
+
+/** Organisation connections are shared with every namespace, or only with the ones picked here. */
+function SharedWithCard({ value, onChange, disabled }: { value: string[]; onChange: (v: string[]) => void; disabled: boolean }) {
+  const [mode, setMode] = useState<"all" | "some">(value.length ? "some" : "all");
+  useEffect(() => {
+    if (value.length) setMode("some");
+  }, [value.length]);
+  return (
+    <Card>
+      <CardHeader
+        title={<span className="flex items-center gap-1.5"><Building2 className="size-3.5" /> Shared with</span>}
+        description="Which namespaces may use this connection. Their workflows, agents and triggers refer to it by name, without seeing its secrets."
+      />
+      <fieldset disabled={disabled} className="space-y-3 p-4">
+        <Segmented
+          value={mode}
+          onChange={(m) => {
+            setMode(m);
+            if (m === "all") onChange([]);
+          }}
+          options={[
+            { value: "all", label: "All namespaces" },
+            { value: "some", label: "Selected namespaces" },
+          ]}
+        />
+        {mode === "some" && (
+          <Field label="Namespaces" description="Only these namespaces can use it. Leave empty to share with every namespace.">
+            <NamespaceMultiPicker value={value.length ? value : undefined} onChange={(v) => onChange((v as string[] | undefined) ?? [])} />
+          </Field>
+        )}
+      </fieldset>
+    </Card>
+  );
+}
+
+type WebhookSetup = { url: string; instructions: string; manifest?: Record<string, unknown>; install?: boolean; setup?: boolean };
+
 function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string; webhookUrl?: string }) {
   const { can } = useAuth();
+  const [params, setParams] = useSearchParams();
   const webhook = useQuery({
     queryKey: ["connection-webhook", ns, name],
-    queryFn: () => rawJson<{ url: string; instructions: string }>(`/v1/namespaces/${ns}/connections/${name}/webhook`),
+    queryFn: () => rawJson<WebhookSetup>(`/v1/namespaces/${ns}/connections/${name}/webhook`),
     retry: false,
   });
+  const install = useMutation({
+    mutationFn: () => rawJson<{ authorize_url: string }>(`/v1/namespaces/${ns}/connections/${name}/install`, { method: "POST" }),
+    onSuccess: (r) => window.location.assign(r.authorize_url),
+    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+  });
+  const manifest = webhook.data?.manifest;
+  const copyManifest = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(manifest, null, 2));
+      toast.success("Manifest copied");
+    } catch {
+      toast.error("Could not copy; select the text instead");
+    }
+  };
+  const dismissInstalled = () => {
+    const next = new URLSearchParams(params);
+    next.delete("installed");
+    setParams(next, { replace: true });
+  };
   const test = useMutation({
     mutationFn: () => rawJson<Record<string, unknown>>(`/v1/namespaces/${ns}/connections/${name}/test`, { method: "POST" }),
   });
@@ -296,6 +407,41 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
   const url = webhook.data?.url ?? webhookUrl;
   return (
     <>
+      {params.get("installed") && (
+        <div role="status" className="flex items-center gap-2 rounded-lg border border-ok/25 bg-ok-soft px-3 py-2 text-[13px] text-ok">
+          <CheckCircle2 className="size-4 shrink-0" /> App installed; its token is stored as a secret.
+          <button className="ml-auto text-xs underline-offset-2 hover:underline" onClick={dismissInstalled}>
+            Dismiss
+          </button>
+        </div>
+      )}
+      {(manifest || webhook.data?.install) && (
+        <Card>
+          <CardHeader title="App setup" description={webhook.data?.setup ? "A step-by-step guide: what the app needs and why, its manifest, install and a check." : "Create the app from this manifest, then install it."} />
+          <div className="space-y-3 p-4">
+            {webhook.data?.setup && (
+              <Link to={nsPath(ns, "connections", name, "setup")} className="block">
+                <Button className="w-full justify-center" variant="primary" icon={<Wand2 className="size-4" />}>
+                  Guided setup
+                </Button>
+              </Link>
+            )}
+            {manifest && (
+              <>
+                <JsonBlock value={manifest} maxHeight="220px" />
+                <Button className="w-full justify-center" variant="secondary" icon={<Copy className="size-4" />} onClick={copyManifest}>
+                  Copy manifest
+                </Button>
+              </>
+            )}
+            {webhook.data?.install && can("connections:write", ns) && can("secrets:write", ns) && (
+              <Button className="w-full justify-center" variant={webhook.data?.setup ? "secondary" : "primary"} icon={<Download className="size-4" />} loading={install.isPending} onClick={() => install.mutate()}>
+                Install app
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
       {can("connections:use", ns) && (
         <Card>
           <CardHeader title="Test connection" description="Checks the credentials against the service." />
@@ -333,6 +479,45 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
         </Card>
       )}
     </>
+  );
+}
+
+/** Triggers wired to this Slack connection: which channels run which workflows, and the message builder. */
+function SlackBots({ ns, name }: { ns: string; name: string }) {
+  const { can } = useAuth();
+  const triggers = useResources("triggers", ns, { enabled: can("triggers:read", ns) });
+  const mine = (triggers.data ?? []).filter((t) => t.spec.connection === name);
+  return (
+    <Card>
+      <CardHeader title={<span className="flex items-center gap-1.5"><MessagesSquare className="size-3.5" /> Slack bots</span>} description="Channels, mentions and commands wired to workflows." />
+      <div className="space-y-2 p-4">
+        {mine.length === 0 && <p className="text-xs text-muted">Nothing is wired yet. Add the app to a channel, then wire it to a workflow.</p>}
+        {mine.map((t) => {
+          const match = (t.spec.match ?? {}) as { channels?: string[]; mentioned?: boolean; contains?: string[]; regex?: string };
+          const where = match.channels?.length ? match.channels.join(", ") : "any channel";
+          const how = [match.mentioned ? "when mentioned" : null, match.contains?.length ? `contains ${match.contains.join(" / ")}` : null, match.regex ? `matches /${match.regex}/` : null].filter(Boolean).join(", ");
+          return (
+            <Link key={t.metadata.name} to={nsPath(ns, "triggers", t.metadata.name)} className="block rounded-lg border border-border px-3 py-2 text-xs hover:border-accent">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono font-medium">{t.metadata.name}</span>
+                <Badge tone={t.spec.enabled === false ? "neutral" : "ok"}>{String(t.spec.event)}</Badge>
+              </div>
+              <div className="mt-0.5 text-muted">{where}{how ? ` · ${how}` : ""} → {String(t.spec.workflow ?? t.spec.campaign)}</div>
+            </Link>
+          );
+        })}
+        <div className="flex flex-wrap gap-2 pt-1">
+          {can("triggers:write", ns) && (
+            <Link to={`${nsPath(ns, "triggers", "new")}?connection=${encodeURIComponent(name)}&event=message`}>
+              <Button size="sm" variant="primary">Wire a channel</Button>
+            </Link>
+          )}
+          <Link to={nsPath(ns, "slack", "builder")}>
+            <Button size="sm">Message builder</Button>
+          </Link>
+        </div>
+      </div>
+    </Card>
   );
 }
 

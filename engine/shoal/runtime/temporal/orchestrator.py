@@ -24,7 +24,6 @@ import asyncio
 import contextlib
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from temporalio import activity
@@ -34,37 +33,58 @@ from temporalio.exceptions import ApplicationError
 from shoal.core import clock
 from shoal.core.errors import NotFound
 from shoal.core.models import RunStatus
+from shoal.runtime.orchestrators import TemporalConnection
 from shoal.runtime.temporal.workflow import ADVANCE, CANCEL, WAKE, RunWorkflow, workflow_id
 
 if TYPE_CHECKING:
     from temporalio.worker import WorkerDeploymentConfig
 
-    from shoal.config import Settings
     from shoal.engine import Engine
     from shoal.store.tables import Run
 
 log = logging.getLogger(__name__)
 
 
-def _read(path: str | None) -> bytes | None:
-    return Path(path).read_bytes() if path else None
+def tls_config(conn: TemporalConnection) -> bool | TLSConfig:
+    if conn.client_cert or conn.server_ca:
+        return TLSConfig(client_cert=conn.client_cert, client_private_key=conn.client_key, server_root_ca_cert=conn.server_ca)
+    return conn.tls or conn.api_key is not None
 
 
-def tls_config(settings: Settings) -> bool | TLSConfig:
-    if settings.temporal_tls_cert_path or settings.temporal_tls_ca_path:
-        return TLSConfig(
-            client_cert=_read(settings.temporal_tls_cert_path),
-            client_private_key=_read(settings.temporal_tls_key_path),
-            server_root_ca_cert=_read(settings.temporal_tls_ca_path),
-        )
-    return settings.temporal_tls or settings.temporal_api_key is not None
+async def connect(conn: TemporalConnection) -> Client:
+    return await Client.connect(conn.address, namespace=conn.namespace, api_key=conn.api_key, tls=tls_config(conn))
 
 
-async def connect(settings: Settings) -> Client:
-    api_key = settings.temporal_api_key.get_secret_value() if settings.temporal_api_key else None
-    return await Client.connect(
-        settings.temporal_address, namespace=settings.temporal_namespace, api_key=api_key, tls=tls_config(settings),
+async def check(conn: TemporalConnection, timeout: float = 10.0) -> dict[str, Any]:
+    """Connect, read the namespace and count the workers polling the task queue (for the instance console)."""
+    from temporalio.api.enums.v1 import TaskQueueType
+    from temporalio.api.taskqueue.v1 import TaskQueue
+    from temporalio.api.workflowservice.v1 import (
+        DescribeNamespaceRequest,
+        DescribeTaskQueueRequest,
+        GetClusterInfoRequest,
     )
+
+    async def run() -> dict[str, Any]:
+        client = await connect(conn)
+        service = client.workflow_service
+        await service.describe_namespace(DescribeNamespaceRequest(namespace=conn.namespace))
+        info = await service.get_cluster_info(GetClusterInfoRequest())
+        queue = await service.describe_task_queue(DescribeTaskQueueRequest(
+            namespace=conn.namespace, task_queue=TaskQueue(name=conn.task_queue),
+            task_queue_type=TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
+        ))
+        pollers = len(queue.pollers)
+        detail = f"Namespace '{conn.namespace}' answers. "
+        detail += f"{pollers} worker(s) poll '{conn.task_queue}'." if pollers else f"No workers poll '{conn.task_queue}' yet."
+        return {"ok": True, "detail": detail, "server_version": info.server_version or None, "pollers": pollers}
+
+    try:
+        return await asyncio.wait_for(run(), timeout)
+    except TimeoutError:
+        return {"ok": False, "detail": f"no answer from {conn.address} within {timeout:.0f}s"}
+    except Exception as exc:  # noqa: BLE001 - reported to the admin, not raised
+        return {"ok": False, "detail": (str(exc) or type(exc).__name__)[:500]}
 
 
 class Activities:
@@ -124,13 +144,21 @@ class Activities:
 class TemporalOrchestrator:
     name = "temporal"
 
-    def __init__(self) -> None:
+    def __init__(self, connection: TemporalConnection | None = None) -> None:
         self.client: Client | None = None
         self._poked: dict[str, datetime] = {}
+        self._connection = connection
 
     def setup(self, engine: Engine) -> None:
         self.engine = engine
         self.settings = engine.settings
+
+    @property
+    def connection(self) -> TemporalConnection:
+        """Where to reach Temporal: set in the instance console, or else from ``SHOAL_TEMPORAL_*`` (read on first use)."""
+        if self._connection is None:
+            self._connection = TemporalConnection.from_settings(self.settings)
+        return self._connection
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -138,9 +166,9 @@ class TemporalOrchestrator:
         """Connect; while Temporal is unreachable, runs are still created and are picked up once it is back."""
         if self.client is None:
             try:
-                self.client = await connect(self.settings)
+                self.client = await connect(self.connection)
             except Exception as exc:
-                log.warning("cannot reach Temporal at %s: %s", self.settings.temporal_address, exc)
+                log.warning("cannot reach Temporal at %s: %s", self.connection.address, exc)
 
     async def close(self) -> None:
         self.client = None
@@ -152,7 +180,7 @@ class TemporalOrchestrator:
         activities = Activities(self.engine)
         return Worker(
             self.client,
-            task_queue=self.settings.temporal_task_queue,
+            task_queue=self.connection.task_queue,
             workflows=[RunWorkflow],
             activities=[activities.advance, activities.cancel],
             max_concurrent_activities=self.settings.worker_concurrency,
@@ -165,9 +193,9 @@ class TemporalOrchestrator:
             try:
                 await self.start()
                 if self.client is None:
-                    raise ConnectionError(f"Temporal at {self.settings.temporal_address} is unreachable")
-                log.info("temporal worker polling task queue %s on %s", self.settings.temporal_task_queue,
-                         self.settings.temporal_address)
+                    raise ConnectionError(f"Temporal at {self.connection.address} is unreachable")
+                log.info("temporal worker polling task queue %s on %s", self.connection.task_queue,
+                         self.connection.address)
                 await self.worker().run()
                 return
             except asyncio.CancelledError:
@@ -185,7 +213,7 @@ class TemporalOrchestrator:
         behavior = {"auto-upgrade": VersioningBehavior.AUTO_UPGRADE, "pinned": VersioningBehavior.PINNED}
         return WorkerDeploymentConfig(
             version=WorkerDeploymentVersion(
-                deployment_name=self.settings.temporal_deployment_name or self.settings.temporal_task_queue,
+                deployment_name=self.settings.temporal_deployment_name or self.connection.task_queue,
                 build_id=self.settings.temporal_build_id,
             ),
             use_worker_versioning=True,
@@ -216,7 +244,7 @@ class TemporalOrchestrator:
                 args=[run.id, {"pass_timeout": self.settings.temporal_pass_timeout_seconds,
                                "heartbeat_timeout": self.settings.lease_seconds}],
                 id=workflow_id(run.id),
-                task_queue=self.settings.temporal_task_queue,
+                task_queue=self.connection.task_queue,
                 start_signal=WAKE,
                 static_summary=f"{run.workflow_name} v{run.workflow_version}",
                 memo={"tenant": run.tenant_id, "namespace": run.namespace, "workflow": run.workflow_name,
