@@ -122,6 +122,8 @@ function Builder() {
     }
   }, [view]);
 
+  useEffect(() => store().setReadOnly(!canWrite), [store, canWrite]);
+
   // ------------------------------------------------------------------ load
   const loadResource = useCallback(
     (r: Resource) => {
@@ -288,6 +290,12 @@ function Builder() {
       st.select(null);
       return;
     }
+    if (st.meta.name === "new") {
+      // /workflows/new is the address of a blank builder, so a workflow called "new" could never be opened.
+      toast.error("“new” can't be used as a workflow name", { description: "Pick another name in workflow settings." });
+      st.select(null);
+      return;
+    }
     if (!st.spec.steps.length) {
       toast.error("Add at least one step before saving");
       return;
@@ -432,6 +440,7 @@ function Builder() {
           <span className="max-w-64 truncate font-mono text-[13px] font-semibold">{meta.name || "untitled"}</span>
           {version != null && !isNew && <Badge>v{version}</Badge>}
           {isNew && <Badge tone="accent">new</Badge>}
+          {!canWrite && <Badge>read-only</Badge>}
           {dirty && (
             <Tooltip content="Unsaved changes">
               <span className="size-2 rounded-full bg-warn" />
@@ -608,7 +617,11 @@ function Builder() {
           )}
           {view !== "yaml" && (
             <aside className="w-[380px] shrink-0 border-l border-border bg-panel">
-              {selected ? <Inspector key={selected} stepId={selected} issues={issues} /> : <WorkflowSettings isNew={isNew} issues={issues} />}
+              {selected ? (
+                <Inspector key={selected} stepId={selected} issues={issues} readOnly={!canWrite} />
+              ) : (
+                <WorkflowSettings isNew={isNew} issues={issues} readOnly={!canWrite} />
+              )}
             </aside>
           )}
         </div>
