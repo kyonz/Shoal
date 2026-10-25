@@ -893,7 +893,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   data or secrets. Only an empty tenant can be federated; a revoked link can be
   replaced by linking the tenant again. Until then the hub refuses the tenant's
   calls with `503 federation_revoked` instead of serving it as an empty hosted
-  tenant, and the member's Federation page says the hub rejected its link. Operators can manage links as code with
+  tenant, and the member's Federation page says the hub rejected its link.
+  A member that leaves (`shoal federation leave`) tells the hub, which marks
+  the link `left` and refuses the same way, and removes the role bindings it
+  gave hub people and groups. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
