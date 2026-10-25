@@ -201,7 +201,9 @@ class Toolbox:
                     ctx = self.inv.ctx
                     connection = ctx.connection_for(full.split(".")[0])
                     await ctx.emit("agent.action", {"action": full, "params": args})
-                    result = await ctx.engine.integrations.call(ctx.tenant_id, full, args, connection=connection)
+                    result = await ctx.engine.integrations.call(
+                        ctx.tenant_id, full, args, connection=connection, initiator=ctx.run.initiator, run_id=ctx.run.id
+                    )
                     return json.dumps(result, default=str)
 
                 return run

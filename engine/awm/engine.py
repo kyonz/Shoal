@@ -22,6 +22,7 @@ import httpx
 from awm.campaigns.service import CampaignService
 from awm.config import Settings, get_settings
 from awm.decisions.service import DecisionService
+from awm.identity import IdentityService
 from awm.integrations.manager import IntegrationManager
 from awm.llm.router import ModelRouter
 from awm.plugins.registry import Registry
@@ -89,6 +90,7 @@ class Engine:
         self.secrets = SecretManager(self)
         self.sandboxes = SandboxManager(self)
         self.integrations = IntegrationManager(self)
+        self.identities = IdentityService(self)
         self.models = ModelRouter(self)
         self.decisions = DecisionService(self)
         self.executor = Executor(self)

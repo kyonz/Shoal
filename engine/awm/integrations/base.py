@@ -32,6 +32,10 @@ class IntegrationEvent(BaseModel):
     id: str | None = Field(None, description="Provider delivery/event id, used for dedupe.")
     data: dict[str, Any] = Field(default_factory=dict)
     wake_keys: list[str] = Field(default_factory=list, description="Wait-subscription keys this event satisfies.")
+    actor: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Who caused the event: identity hints such as github, jira_account_id, email, display_name.",
+    )
 
 
 class Page(BaseModel):
@@ -113,6 +117,8 @@ class ConnectionContext:
     name: str
     config: Any  # instance of Integration.connection_model
     integration: Integration
+    initiator: dict[str, Any] | None = None
+    run_id: str | None = None
 
     def http(self, **kwargs: Any) -> httpx.AsyncClient:
         transport = self.engine.http_transport

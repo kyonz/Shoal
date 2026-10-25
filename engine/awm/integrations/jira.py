@@ -378,8 +378,20 @@ class JiraIntegration(Integration):
         event_id = headers.get("x-atlassian-webhook-identifier") or (
             f"{key}:{payload.get('timestamp')}" if key and payload.get("timestamp") else None
         )
+        user = payload.get("user") or {}
+        actor = {
+            "jira_account_id": user.get("accountId") or user.get("key"),
+            "email": user.get("emailAddress"),
+            "display_name": user.get("displayName"),
+        }
         return [
-            IntegrationEvent(type=event_type, id=event_id, data=data, wake_keys=[f"jira:issue:{key}"] if key else [])
+            IntegrationEvent(
+                type=event_type,
+                id=event_id,
+                data=data,
+                wake_keys=[f"jira:issue:{key}"] if key else [],
+                actor={k: v for k, v in actor.items() if v},
+            )
         ]
 
     def webhook_setup_instructions(self, url: str) -> str:

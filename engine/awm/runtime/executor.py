@@ -74,6 +74,7 @@ class Executor:
         parent_run_id: str | None = None,
         parent_step_id: str | None = None,
         labels: dict[str, str] | None = None,
+        initiator: dict[str, Any] | None = None,
     ) -> t.Run:
         row = await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
         document = row.document
@@ -81,6 +82,10 @@ class Executor:
             document = await self.store.get_resource_version(tenant_id, "Workflow", workflow_name, version)
         spec = WorkflowSpec.model_validate(document["spec"])
         values = validate_params(spec.inputs, inputs)
+        if initiator is None and parent_run_id:
+            initiator = (await self.store.get_run(tenant_id, parent_run_id)).initiator
+        if initiator is None:
+            initiator = await self.engine.identities.resolve(tenant_id, actor=started_by, source="api")
         now = clock.now()
         run = t.Run(
             id=new_id("run"),
@@ -95,6 +100,7 @@ class Executor:
             usage={},
             labels=labels or {},
             started_by=started_by,
+            initiator=initiator,
             trigger_name=trigger_name,
             campaign_id=campaign_id,
             campaign_target_id=campaign_target_id,
@@ -109,7 +115,7 @@ class Executor:
         await self.engine.events.emit(
             run,
             "run.created",
-            {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by},
+            {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by, "initiator": initiator},
         )
         return run
 
@@ -259,6 +265,7 @@ class Executor:
                 "workflow": run.workflow_name,
                 "version": run.workflow_version,
                 "started_by": run.started_by,
+                "initiator": run.initiator or {},
                 "labels": run.labels,
                 "url": f"{self.engine.settings.public_url.rstrip('/')}/runs/{run.id}",
             },

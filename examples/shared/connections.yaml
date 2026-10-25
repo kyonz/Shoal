@@ -8,7 +8,15 @@ metadata:
   description: GitHub org "acme" (fine-grained token or GitHub App)
 spec:
   integration: github
-  config: {}
+  config:
+    # Attribution and governance (architecture §11.1). In "app" mode AWM acts with
+    # this connection's credentials but keeps the initiator's authority visible
+    # (labels, Requested-by trailer) and enforced (merge gating).
+    attribution:
+      mode: app                    # or "user": act with the initiator's linked GitHub token
+      elevation: qualified_approval  # initiator without write access -> need a write-access approval
+      request_initiator_review: true
+      require_merge_check: false   # true: require a passing awm/merge-check status
   secrets:
     token: github-token
     webhook_secret: github-webhook-secret

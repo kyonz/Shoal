@@ -38,6 +38,7 @@ class CampaignService:
         started_by: str | None = None,
         extra_inputs: dict[str, Any] | None = None,
         start: bool = True,
+        initiator: dict[str, Any] | None = None,
     ) -> t.CampaignRow:
         """Create a campaign instance from a Campaign resource (by name) or an inline spec."""
         if isinstance(campaign, str):
@@ -58,6 +59,7 @@ class CampaignService:
             status=CampaignStatus.draft,
             stats={},
             created_by=started_by,
+            initiator=initiator or await self.engine.identities.resolve(tenant_id, actor=started_by, source="campaign"),
         )
         await self.store.create_campaign(row)
         try:
@@ -222,6 +224,7 @@ class CampaignService:
                 campaign_id=row.id,
                 campaign_target_id=target.id,
                 labels={"campaign": row.name, "target": target.key[:60]},
+                initiator=row.initiator or None,
             )
         except Exception as exc:
             await self.store.update_target(

@@ -18,9 +18,16 @@ class FakeGitHub:
     comments: list[dict[str, Any]] = field(default_factory=list)
     merges: list[tuple[str, int, str]] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
+    collaborators: dict[tuple[str, str], str] = field(default_factory=dict)
+    labels: dict[tuple[str, int], list[str]] = field(default_factory=dict)
+    statuses: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
+    assignees: dict[tuple[str, int], list[str]] = field(default_factory=dict)
+    review_requests: dict[tuple[str, int], list[str]] = field(default_factory=dict)
+    issues: list[dict[str, Any]] = field(default_factory=list)
 
     def add_repo(self, full_name: str, *, admin: bool = True, archived: bool = False, fork: bool = False) -> None:
         owner, name = full_name.split("/")
+        self.collaborators.setdefault((full_name, "reviewer"), "write")
         self.repos[full_name] = {
             "full_name": full_name,
             "name": name,
@@ -91,14 +98,36 @@ class FakeGitHub:
             return httpx.Response(200, json={"merged": True, "sha": "merged-sha", "message": "Pull Request successfully merged"})
         if re.fullmatch(r"/repos/[^/]+/[^/]+/commits/[^/]+/check-runs", path):
             return httpx.Response(200, json={"total_count": 1, "check_runs": [{"status": "completed", "conclusion": "success"}]})
-        if re.fullmatch(r"/repos/[^/]+/[^/]+/commits/[^/]+/status", path):
-            return httpx.Response(200, json={"state": "pending", "total_count": 0})
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/commits/([^/]+)/status", path):
+            statuses = list(reversed(self.statuses.get((m.group(1), m.group(2)), [])))
+            return httpx.Response(200, json={"state": "pending", "total_count": 0, "statuses": statuses})
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/statuses/([^/]+)", path):
+            self.statuses.setdefault((m.group(1), m.group(2)), []).append(body)
+            return httpx.Response(201, json=body)
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/collaborators/([^/]+)/permission", path):
+            role = self.collaborators.get((m.group(1), m.group(2)))
+            if role is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json={"permission": "write" if role == "maintain" else role, "role_name": role})
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/issues/(\d+)/assignees", path):
+            self.assignees.setdefault((m.group(1), int(m.group(2))), []).extend(body["assignees"])
+            return httpx.Response(201, json={})
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/pulls/(\d+)/requested_reviewers", path):
+            self.review_requests.setdefault((m.group(1), int(m.group(2))), []).extend(body["reviewers"])
+            return httpx.Response(201, json={})
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/issues", path):
+            issue = {"number": 100 + len(self.issues), **body}
+            self.issues.append(issue)
+            return httpx.Response(201, json={**issue, "html_url": f"https://github.com/{m.group(1)}/issues/{issue['number']}"})
         if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/issues/(\d+)/comments", path):
             comment = {"id": len(self.comments) + 1, "repo": m.group(1), "number": int(m.group(2)), "body": body["body"]}
             self.comments.append(comment)
             return httpx.Response(201, json={**comment, "html_url": f"https://github.com/{m.group(1)}/pull/{m.group(2)}#c{comment['id']}"})
-        if re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+/labels", path):
-            return httpx.Response(200, json=[])
+        if m := re.fullmatch(r"/repos/([^/]+/[^/]+)/issues/(\d+)/labels", path):
+            key = (m.group(1), int(m.group(2)))
+            if method == "POST":
+                self.labels.setdefault(key, []).extend(body["labels"])
+            return httpx.Response(200, json=[{"name": n} for n in self.labels.get(key, [])])
         if path == "/user":
             return httpx.Response(200, json={"login": "awm-bot"})
         return httpx.Response(404, json={"message": f"fake github: no route {method} {path}"})

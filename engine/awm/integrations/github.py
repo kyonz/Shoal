@@ -34,6 +34,32 @@ from awm.integrations.base import (
 API = "https://api.github.com"
 
 
+class AttributionPolicy(BaseModel):
+    """How work is attributed to the person who drove it (architecture §11.1)."""
+
+    mode: Literal["app", "user"] = Field(
+        "app", description="'user' acts with the initiator's linked GitHub token; 'app' uses the connection credential."
+    )
+    fallback: Literal["fail", "app"] = Field("fail", description="user mode: what to do when the initiator has no linked token.")
+    labels: bool = Field(True, description="Add provenance labels to PRs and issues.")
+    label_prefix: str = "awm:"
+    requested_by_trailer: bool = Field(True, description="Append 'Requested-by: @login' to PR and issue bodies.")
+    assign_initiator: bool = False
+    request_initiator_review: bool = False
+    elevation: Literal["deny", "qualified_approval", "allow"] = Field(
+        "qualified_approval",
+        description="When the initiator lacks write access: never merge (deny), merge only after approval from "
+        "someone with write access (qualified_approval), or merge on the app's rights (allow).",
+    )
+    require_merge_check: bool = Field(
+        False, description="Require a passing 'awm/merge-check' commit status (agent-assisted review) before merging."
+    )
+    required_labels: list[str] = Field(default_factory=list, description="Labels that must be on a PR before merge.")
+
+
+MERGE_CHECK_CONTEXT = "awm/merge-check"
+
+
 class GitHubConnection(BaseModel):
     base_url: str = Field(API, description="API base URL (GitHub Enterprise: https://ghe.example.com/api/v3).")
     token: SecretStr | None = Field(None, description="Personal access or fine-grained token.")
@@ -43,6 +69,7 @@ class GitHubConnection(BaseModel):
     webhook_secret: SecretStr | None = Field(None, description="Secret used to sign webhook deliveries.")
     git_author_name: str = "AI Workflow Manager"
     git_author_email: str = "awm-bot@users.noreply.github.com"
+    attribution: AttributionPolicy = Field(default_factory=AttributionPolicy)
 
     @model_validator(mode="after")
     def _auth(self) -> GitHubConnection:
@@ -71,6 +98,14 @@ class CreatePullRequest(RepoRef):
     labels: list[str] = Field(default_factory=list)
 
 
+class Provenance(BaseModel):
+    mode: str
+    initiator: str | None = Field(None, description="GitHub login (or display name) of the person who drove the work.")
+    initiator_permission: str = Field("unknown", description="admin, maintain, write, triage, read, none or unknown.")
+    initiator_can_merge: bool = False
+    labels: list[str] = Field(default_factory=list)
+
+
 class PullRequest(BaseModel):
     number: int
     url: str
@@ -80,6 +115,7 @@ class PullRequest(BaseModel):
     base: str
     draft: bool = False
     created: bool = True
+    provenance: Provenance | None = None
 
 
 class PullRequestStatus(BaseModel):
@@ -108,12 +144,25 @@ class MergeResult(BaseModel):
     merged: bool
     sha: str | None = None
     reason: str | None = None
+    governance: dict[str, Any] | None = None
 
 
 class CanMerge(BaseModel):
     can_merge: bool
     reasons: list[str]
     permission: str
+    governance: dict[str, Any] = Field(default_factory=dict)
+
+
+class MergeCheck(PullRef):
+    verdict: Literal["pass", "fail"]
+    summary: str = Field(max_length=140, description="Short reason shown on the commit status.")
+    details_url: str | None = None
+
+
+class MergeCheckResult(BaseModel):
+    state: str
+    sha: str
 
 
 class AddComment(PullRef):
@@ -138,6 +187,7 @@ class CreateIssue(RepoRef):
 class Issue(BaseModel):
     number: int
     url: str
+    provenance: Provenance | None = None
 
 
 class GetFile(RepoRef):
@@ -189,6 +239,7 @@ class PullFilter(RepoRef):
 
 
 _PERMISSION_ORDER = ["pull", "triage", "push", "maintain", "admin"]
+WRITE_ROLES = {"admin", "maintain", "write"}
 
 
 def _permission(perms: dict[str, bool] | None) -> str:
@@ -237,7 +288,25 @@ class GitHubIntegration(Integration):
 
     # ------------------------------------------------------------------ http
 
+    async def _user_token(self, ctx: ConnectionContext) -> str | None:
+        """In user mode, the initiator's own linked token (None means: act as the app)."""
+        policy: AttributionPolicy = ctx.config.attribution
+        if policy.mode != "user" or not ctx.initiator:
+            return None
+        token = await ctx.engine.identities.github_token(ctx.tenant_id, ctx.initiator)
+        if token is None and policy.fallback == "fail":
+            who = ctx.initiator.get("display_name") or ctx.initiator.get("actor") or "the initiator"
+            raise IntegrationError(
+                f"{who} has not linked a GitHub account, and this connection acts with the initiator's own "
+                "credentials (attribution.mode=user)",
+                status=403,
+            )
+        return token
+
     async def _token(self, ctx: ConnectionContext) -> str:
+        return await self._user_token(ctx) or await self._app_token(ctx)
+
+    async def _app_token(self, ctx: ConnectionContext) -> str:
         cfg: GitHubConnection = ctx.config
         if cfg.token:
             return cfg.token.get_secret_value()
@@ -294,6 +363,100 @@ class GitHubIntegration(Integration):
             "GIT_CONFIG_VALUE_0": f"https://{host}/",
         }
 
+    # ------------------------------------------------------------------ attribution and governance
+
+    async def _user_permission(self, ctx: ConnectionContext, repo: str, login: str | None) -> str:
+        if not login:
+            return "unknown"
+        try:
+            data = await self._request(ctx, "GET", f"/repos/{repo}/collaborators/{login}/permission")
+        except IntegrationError as exc:
+            if exc.status in (403, 404):
+                return "none"
+            raise
+        return data.get("role_name") or data.get("permission") or "none"
+
+    async def provenance(self, ctx: ConnectionContext, repo: str) -> Provenance:
+        policy: AttributionPolicy = ctx.config.attribution
+        initiator = ctx.initiator or {}
+        login = initiator.get("github")
+        user_mode = await self._user_token(ctx) is not None
+        permission = await self._user_permission(ctx, repo, login)
+        can_merge = permission in WRITE_ROLES
+        labels: list[str] = []
+        if policy.labels:
+            prefix = policy.label_prefix
+            labels = [f"{prefix}automated", f"{prefix}initiator-{'can' if can_merge else 'cannot'}-merge"]
+            if user_mode:
+                labels.append(f"{prefix}user-credentials")
+        return Provenance(
+            mode="user" if user_mode else "app",
+            initiator=login or initiator.get("display_name"),
+            initiator_permission=permission,
+            initiator_can_merge=can_merge,
+            labels=labels,
+        )
+
+    def _requested_by(self, ctx: ConnectionContext, body: str) -> str:
+        initiator = ctx.initiator or {}
+        if not ctx.config.attribution.requested_by_trailer or not initiator:
+            return body
+        who = f"@{initiator['github']}" if initiator.get("github") else (
+            f"{initiator.get('display_name') or initiator.get('actor')} (no linked GitHub account)"
+        )
+        return f"{body.rstrip()}\n\nRequested-by: {who}"
+
+    async def _audit(self, ctx: ConnectionContext, action_name: str, target: str, **data: Any) -> None:
+        actor = (ctx.initiator or {}).get("actor")
+        await ctx.engine.store.audit(ctx.tenant_id, actor, f"github.{action_name}", target, run_id=ctx.run_id, initiator=ctx.initiator, **data)
+
+    async def governance(self, ctx: ConnectionContext, repo: str, number: int, head_sha: str) -> dict[str, Any]:
+        """Merge-gating decision for the current initiator (enforced in merge_pull_request)."""
+        policy: AttributionPolicy = ctx.config.attribution
+        prov = await self.provenance(ctx, repo)
+        result: dict[str, Any] = {
+            "mode": prov.mode,
+            "initiator": prov.initiator,
+            "initiator_permission": prov.initiator_permission,
+            "elevation": "not_needed",
+            "reasons": [],
+        }
+        if prov.mode == "app" and not prov.initiator_can_merge:
+            who = prov.initiator or "the initiator"
+            if policy.elevation == "deny":
+                result["elevation"] = "denied"
+                result["reasons"].append(f"{who} lacks write access to {repo} and policy forbids merging on the app's rights")
+            elif policy.elevation == "qualified_approval":
+                reviews = await self._request(ctx, "GET", f"/repos/{repo}/pulls/{number}/reviews", params={"per_page": 100})
+                latest: dict[str, str] = {}
+                for review in reviews:
+                    if review.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+                        latest[review["user"]["login"]] = review["state"]
+                approvers = [login for login, state in latest.items() if state == "APPROVED"]
+                qualified = [a for a in approvers if await self._user_permission(ctx, repo, a) in WRITE_ROLES]
+                result["qualified_approvers"] = qualified
+                if qualified:
+                    result["elevation"] = "qualified_approval"
+                else:
+                    result["elevation"] = "awaiting_qualified_approval"
+                    result["reasons"].append(
+                        f"{who} lacks write access to {repo}; an approval from someone with write access is required"
+                    )
+            else:
+                result["elevation"] = "allowed"
+        if policy.require_merge_check:
+            status = await self._request(ctx, "GET", f"/repos/{repo}/commits/{head_sha}/status")
+            check = next((st for st in status.get("statuses", []) if st.get("context") == MERGE_CHECK_CONTEXT), None)
+            result["merge_check"] = check.get("state") if check else "missing"
+            if result["merge_check"] != "success":
+                result["reasons"].append(f"merge check ({MERGE_CHECK_CONTEXT}) is {result['merge_check']}")
+        if policy.required_labels:
+            present = {label["name"] for label in await self._request(ctx, "GET", f"/repos/{repo}/issues/{number}/labels")}
+            missing = [label for label in policy.required_labels if label not in present]
+            if missing:
+                result["reasons"].append(f"missing required labels: {', '.join(missing)}")
+        return result
+
     # ------------------------------------------------------------------ actions
 
     @action(description="Get repository details and the connection's permission.", input=RepoRef, output=Repository, mutating=False)
@@ -307,18 +470,38 @@ class GitHubIntegration(Integration):
         existing = await self._request(
             ctx, "GET", f"/repos/{p.repo}/pulls", params={"head": f"{owner}:{p.head}", "state": "open"}
         )
+        prov = await self.provenance(ctx, p.repo)
         if existing:
             pr = existing[0]
-            return PullRequest(number=pr["number"], url=pr["html_url"], state=pr["state"], title=pr["title"], head=p.head, base=pr["base"]["ref"], draft=pr.get("draft", False), created=False)
+            return PullRequest(number=pr["number"], url=pr["html_url"], state=pr["state"], title=pr["title"], head=p.head, base=pr["base"]["ref"], draft=pr.get("draft", False), created=False, provenance=prov)
         pr = await self._request(
             ctx,
             "POST",
             f"/repos/{p.repo}/pulls",
-            json={"title": p.title, "head": p.head, "base": base, "body": p.body, "draft": p.draft},
+            json={"title": p.title, "head": p.head, "base": base, "body": self._requested_by(ctx, p.body), "draft": p.draft},
         )
-        if p.labels:
-            await self._request(ctx, "POST", f"/repos/{p.repo}/issues/{pr['number']}/labels", json={"labels": p.labels})
-        return PullRequest(number=pr["number"], url=pr["html_url"], state=pr["state"], title=pr["title"], head=p.head, base=base, draft=p.draft)
+        labels = list(dict.fromkeys([*p.labels, *prov.labels]))
+        if labels:
+            await self._request(ctx, "POST", f"/repos/{p.repo}/issues/{pr['number']}/labels", json={"labels": labels})
+        await self._assign(ctx, p.repo, pr["number"], pull=True)
+        await self._audit(ctx, "pull_request.created", pr["html_url"], provenance=prov.model_dump())
+        return PullRequest(number=pr["number"], url=pr["html_url"], state=pr["state"], title=pr["title"], head=p.head, base=base, draft=p.draft, provenance=prov)
+
+    async def _assign(self, ctx: ConnectionContext, repo: str, number: int, *, pull: bool) -> None:
+        """Forced ownership: assign the initiator and/or request their review (best effort)."""
+        policy: AttributionPolicy = ctx.config.attribution
+        login = (ctx.initiator or {}).get("github")
+        if not login:
+            return
+        try:
+            if policy.assign_initiator:
+                await self._request(ctx, "POST", f"/repos/{repo}/issues/{number}/assignees", json={"assignees": [login]})
+            if pull and policy.request_initiator_review:
+                await self._request(ctx, "POST", f"/repos/{repo}/pulls/{number}/requested_reviewers", json={"reviewers": [login]})
+        except IntegrationError as exc:
+            if exc.retryable:
+                raise
+            await self._audit(ctx, "assignment.failed", f"{repo}#{number}", error=str(exc))
 
     @action(description="Pull request state, mergeability, review decision and CI status.", input=PullRef, output=PullRequestStatus, mutating=False)
     async def get_pull_request(self, ctx: ConnectionContext, p: PullRef) -> PullRequestStatus:
@@ -381,14 +564,16 @@ class GitHubIntegration(Integration):
             reasons.append(f"not mergeable (state: {status.mergeable_state})")
         if status.checks == "failure":
             reasons.append("checks are failing")
-        return CanMerge(can_merge=not reasons, reasons=reasons, permission=permission)
+        governance = await self.governance(ctx, p.repo, p.number, status.head_sha)
+        reasons += governance["reasons"]
+        return CanMerge(can_merge=not reasons, reasons=reasons, permission=permission, governance=governance)
 
     @action(description="Merge a pull request if permitted. Returns merged=false with a reason instead of failing.", input=MergePullRequest, output=MergeResult)
     async def merge_pull_request(self, ctx: ConnectionContext, p: MergePullRequest) -> MergeResult:
         check = await self.can_merge(ctx, PullRef(repo=p.repo, number=p.number))
         blocking = [r for r in check.reasons if p.require_approval or not r.startswith("review decision")]
         if blocking:
-            return MergeResult(merged=False, reason="; ".join(blocking))
+            return MergeResult(merged=False, reason="; ".join(blocking), governance=check.governance)
         body: dict[str, Any] = {"merge_method": p.method}
         if p.commit_title:
             body["commit_title"] = p.commit_title
@@ -398,7 +583,28 @@ class GitHubIntegration(Integration):
             if exc.status in (405, 409, 422):
                 return MergeResult(merged=False, reason=str(exc))
             raise
-        return MergeResult(merged=bool(result.get("merged")), sha=result.get("sha"), reason=result.get("message"))
+        merged = bool(result.get("merged"))
+        policy: AttributionPolicy = ctx.config.attribution
+        if merged and check.governance.get("elevation") in ("qualified_approval", "allowed") and policy.labels:
+            label = f"{policy.label_prefix}merged-via-{check.governance['elevation'].replace('_', '-')}"
+            await self._request(ctx, "POST", f"/repos/{p.repo}/issues/{p.number}/labels", json={"labels": [label]})
+        await self._audit(ctx, "pull_request.merged" if merged else "pull_request.merge_failed", f"{p.repo}#{p.number}", governance=check.governance)
+        return MergeResult(merged=merged, sha=result.get("sha"), reason=result.get("message"), governance=check.governance)
+
+    @action(description="Record an agent-assisted merge check verdict as the 'awm/merge-check' commit status on the PR head.", input=MergeCheck, output=MergeCheckResult)
+    async def set_merge_check(self, ctx: ConnectionContext, p: MergeCheck) -> MergeCheckResult:
+        pr = await self._request(ctx, "GET", f"/repos/{p.repo}/pulls/{p.number}")
+        sha = pr["head"]["sha"]
+        body: dict[str, Any] = {
+            "state": "success" if p.verdict == "pass" else "failure",
+            "context": MERGE_CHECK_CONTEXT,
+            "description": p.summary[:140],
+        }
+        if p.details_url:
+            body["target_url"] = p.details_url
+        await self._request(ctx, "POST", f"/repos/{p.repo}/statuses/{sha}", json=body)
+        await self._audit(ctx, "merge_check", f"{p.repo}#{p.number}", verdict=p.verdict, summary=p.summary, sha=sha)
+        return MergeCheckResult(state=body["state"], sha=sha)
 
     @action(description="Comment on a pull request or issue.", input=AddComment, output=Comment)
     async def add_comment(self, ctx: ConnectionContext, p: AddComment) -> Comment:
@@ -414,8 +620,11 @@ class GitHubIntegration(Integration):
 
     @action(description="Open an issue.", input=CreateIssue, output=Issue)
     async def create_issue(self, ctx: ConnectionContext, p: CreateIssue) -> Issue:
-        data = await self._request(ctx, "POST", f"/repos/{p.repo}/issues", json={"title": p.title, "body": p.body, "labels": p.labels})
-        return Issue(number=data["number"], url=data["html_url"])
+        prov = await self.provenance(ctx, p.repo)
+        labels = list(dict.fromkeys([*p.labels, *prov.labels]))
+        data = await self._request(ctx, "POST", f"/repos/{p.repo}/issues", json={"title": p.title, "body": self._requested_by(ctx, p.body), "labels": labels})
+        await self._assign(ctx, p.repo, data["number"], pull=False)
+        return Issue(number=data["number"], url=data["html_url"], provenance=prov)
 
     @action(description="Read a file from a repository.", input=GetFile, output=FileContent, mutating=False)
     async def get_file(self, ctx: ConnectionContext, p: GetFile) -> FileContent:
@@ -528,6 +737,7 @@ class GitHubIntegration(Integration):
                 id=headers.get("x-github-delivery"),
                 data=data,
                 wake_keys=[f"github:pr:{repo}#{n}" for n in numbers] + ([f"github:repo:{repo}"] if repo else []),
+                actor={"github": data["sender"]} if data["sender"] else {},
             )
         ]
 

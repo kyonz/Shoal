@@ -25,7 +25,9 @@ class IntegrationManager:
     def catalog(self) -> list[dict[str, Any]]:
         return [type(i).catalog() for i in self.engine.registry.available("integrations").values()]
 
-    async def connection(self, tenant_id: str, name: str) -> ConnectionContext:
+    async def connection(
+        self, tenant_id: str, name: str, *, initiator: dict[str, Any] | None = None, run_id: str | None = None
+    ) -> ConnectionContext:
         resource = await self.engine.store.find_resource(tenant_id, "Connection", name)
         if resource is None:
             raise NotFound(f"connection '{name}' not found")
@@ -38,7 +40,15 @@ class IntegrationManager:
                 raise InvalidRequest(f"connection '{name}': secret '{secret_name}' for field '{field}' is not set")
             values[field] = value
         config = integration.connection_model.model_validate(values)
-        return ConnectionContext(engine=self.engine, tenant_id=tenant_id, name=name, config=config, integration=integration)
+        return ConnectionContext(
+            engine=self.engine,
+            tenant_id=tenant_id,
+            name=name,
+            config=config,
+            integration=integration,
+            initiator=initiator,
+            run_id=run_id,
+        )
 
     async def resolve_name(self, tenant_id: str, integration: str, preferred: str | None) -> str:
         """Pick a connection: explicit/default name, else the only one for that integration."""
@@ -56,11 +66,18 @@ class IntegrationManager:
         )
 
     async def call(
-        self, tenant_id: str, action: str, params: dict[str, Any], *, connection: str | None = None
+        self,
+        tenant_id: str,
+        action: str,
+        params: dict[str, Any],
+        *,
+        connection: str | None = None,
+        initiator: dict[str, Any] | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         integration_key, _, action_name = action.partition(".")
         name = await self.resolve_name(tenant_id, integration_key, connection)
-        ctx = await self.connection(tenant_id, name)
+        ctx = await self.connection(tenant_id, name, initiator=initiator, run_id=run_id)
         if ctx.integration.key != integration_key:
             raise InvalidRequest(f"connection '{name}' is a {ctx.integration.key} connection, not {integration_key}")
         return await ctx.integration.call_action(ctx, action_name, params)

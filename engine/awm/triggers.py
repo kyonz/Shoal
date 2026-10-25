@@ -60,6 +60,19 @@ class TriggerService:
             return {"matched": False, "reason": f"expression error: {exc}", "error": True}
         return {"matched": True, "inputs": inputs, "dedupe_key": None if dedupe is None else str(dedupe)}
 
+    async def _initiator(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
+        """The person behind an event; for schedules and manual fires, whoever last changed the trigger."""
+        if event.actor:
+            hints = dict(event.actor)
+            display = hints.pop("display_name", None)
+            return await self.engine.identities.resolve(
+                tenant_id, actor=f"trigger:{trigger.metadata.name}", source="trigger", display_name=display, **hints
+            )
+        row = await self.engine.store.get_resource_row(tenant_id, "Trigger", trigger.metadata.name)
+        return await self.engine.identities.resolve(
+            tenant_id, actor=row.updated_by or f"trigger:{trigger.metadata.name}", source="schedule" if trigger.spec.event == "schedule" else "trigger"
+        )
+
     async def triage(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
         """Ask a decision model about the event; ``passed`` is the trigger's ``when`` expression."""
         spec = trigger.spec.triage
@@ -133,6 +146,7 @@ class TriggerService:
             context: dict[str, Any] = {"trigger": {"name": name, "event_type": event.type}, "event": event.data}
             if triage is not None:
                 context["trigger"]["triage"] = triage["answers"]
+            initiator = await self._initiator(tenant_id, trigger, event)
             if spec.workflow:
                 run = await self.engine.executor.start_run(
                     tenant_id,
@@ -141,11 +155,12 @@ class TriggerService:
                     started_by=f"trigger:{name}",
                     trigger_name=name,
                     context=context,
+                    initiator=initiator,
                 )
                 await store.update_delivery(delivery.id, status="fired", run_id=run.id)
                 return {"trigger": name, "status": "fired", "run_id": run.id}
             campaign = await self.engine.campaigns.launch(
-                tenant_id, spec.campaign, started_by=f"trigger:{name}", extra_inputs=outcome["inputs"]
+                tenant_id, spec.campaign, started_by=f"trigger:{name}", extra_inputs=outcome["inputs"], initiator=initiator
             )
             await store.update_delivery(delivery.id, status="fired", detail={**delivery.detail, "campaign_id": campaign.id})
             return {"trigger": name, "status": "fired", "campaign_id": campaign.id}

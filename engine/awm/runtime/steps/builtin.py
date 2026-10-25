@@ -34,7 +34,12 @@ class ActionHandler:
         integration = step.action.split(".", 1)[0]
         await ctx.emit("action.called", {"action": step.action, "params": params})
         output = await ctx.engine.integrations.call(
-            ctx.tenant_id, step.action, params, connection=ctx.connection_for(integration, step.connection)
+            ctx.tenant_id,
+            step.action,
+            params,
+            connection=ctx.connection_for(integration, step.connection),
+            initiator=ctx.run.initiator,
+            run_id=ctx.run.id,
         )
         return Completed(output)
 
@@ -100,6 +105,8 @@ class WaitHandler:
                 cond.action,
                 ctx.render(cond.with_),
                 connection=ctx.connection_for(integration, cond.connection),
+                initiator=ctx.run.initiator,
+                run_id=ctx.run.id,
             )
         except IntegrationError as exc:
             if not exc.retryable:

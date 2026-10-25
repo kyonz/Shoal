@@ -46,7 +46,7 @@ async def resolve_env(ctx: StepContext, agent: AgentSpec) -> dict[str, str]:
         name = await ctx.engine.integrations.resolve_name(
             ctx.tenant_id, integration_key, connection or ctx.connection_for(integration_key)
         )
-        conn = await ctx.engine.integrations.connection(ctx.tenant_id, name)
+        conn = await ctx.engine.integrations.connection(ctx.tenant_id, name, initiator=ctx.run.initiator, run_id=ctx.run.id)
         provider = getattr(conn.integration, "sandbox_credentials", None)
         if provider is None:
             raise StepError(f"integration '{integration_key}' does not provide sandbox credentials")
