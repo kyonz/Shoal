@@ -849,6 +849,27 @@ def integrations_new(
     console.print(f"Created integration project in {escape(str(target))}")
 
 
+@integrations_app.command("check")
+def integrations_check(
+    url: Annotated[str, typer.Argument(help="Base URL of a running remote integration service.")],
+    token: Annotated[
+        str | None, typer.Option("--token", envvar="SHOAL_INTEGRATION_TOKEN", help="The service's bearer token.")
+    ] = None,
+) -> None:
+    """Run the integration contract checks against a remote integration service (any language)."""
+    import asyncio
+
+    from shoal.sdk.testing.contract import check_remote_service
+
+    problems = asyncio.run(check_remote_service(url, token))
+    for problem in problems:
+        err.print(f"[red]FAIL[/red] {escape(problem)}")
+    if problems:
+        err.print(f"{len(problems)} problem(s)")
+        raise typer.Exit(1)
+    console.print(f"{escape(url)} passes the integration contract")
+
+
 # --------------------------------------------------------------------------- tenants
 
 

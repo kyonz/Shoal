@@ -47,6 +47,7 @@ class ActionHandler:
             connection=ctx.connection_for(integration, step.connection),
             initiator=ctx.run.initiator,
             run_id=ctx.run.id,
+            step_id=ctx.step.id,
         )
         return Completed(output)
 

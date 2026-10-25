@@ -54,6 +54,11 @@ class AttributionPolicy(BaseModel):
     require_merge_check: bool = Field(
         False, description="Require a passing 'shoal/merge-check' commit status (agent-assisted review) before merging."
     )
+    independent_merge_check: bool = Field(
+        True,
+        description="Refuse a merge check recorded by the workflow step (e.g. the agent) that opened the pull request, "
+        "so the author cannot certify its own change; use a separate reviewer step.",
+    )
     required_labels: list[str] = Field(default_factory=list, description="Labels that must be on a PR before merge.")
 
 
@@ -489,7 +494,8 @@ class GitHubIntegration(Integration):
         if labels:
             await self._request(ctx, "POST", f"/repos/{p.repo}/issues/{pr['number']}/labels", json={"labels": labels})
         await self._assign(ctx, p.repo, pr["number"], pull=True)
-        await self._audit(ctx, "pull_request.created", pr["html_url"], provenance=prov.model_dump())
+        await self._audit(ctx, "pull_request.created", f"{p.repo}#{pr['number']}", url=pr["html_url"], step_id=ctx.step_id,
+                          provenance=prov.model_dump())
         return PullRequest(number=pr["number"], url=pr["html_url"], state=pr["state"], title=pr["title"], head=p.head, base=base, draft=p.draft, provenance=prov)
 
     async def _assign(self, ctx: ConnectionContext, repo: str, number: int, *, pull: bool) -> None:
@@ -607,6 +613,12 @@ class GitHubIntegration(Integration):
     async def set_merge_check(self, ctx: ConnectionContext, p: MergeCheck) -> MergeCheckResult:
         pr = await self._request(ctx, "GET", f"/repos/{p.repo}/pulls/{p.number}")
         sha = pr["head"]["sha"]
+        if ctx.config.attribution.independent_merge_check and await self._opened_by_this_step(ctx, p.repo, p.number):
+            raise IntegrationError(
+                f"{p.repo}#{p.number} was opened by this step ({ctx.step_id}), which cannot record its own merge check; "
+                "run the review in a separate step (attribution.independent_merge_check)",
+                status=403,
+            )
         body: dict[str, Any] = {
             "state": "success" if p.verdict == "pass" else "failure",
             "context": MERGE_CHECK_CONTEXT,
@@ -617,6 +629,15 @@ class GitHubIntegration(Integration):
         await self._request(ctx, "POST", f"/repos/{p.repo}/statuses/{sha}", json=body)
         await self._audit(ctx, "merge_check", f"{p.repo}#{p.number}", verdict=p.verdict, summary=p.summary, sha=sha)
         return MergeCheckResult(state=body["state"], sha=sha)
+
+    async def _opened_by_this_step(self, ctx: ConnectionContext, repo: str, number: int) -> bool:
+        if not (ctx.run_id and ctx.step_id):
+            return False
+        opened = await ctx.engine.store.list_audit(ctx.tenant_id, action="github.pull_request.created", target=f"{repo}#{number}")
+        return any(
+            e.target == f"{repo}#{number}" and e.data.get("run_id") == ctx.run_id and e.data.get("step_id") == ctx.step_id
+            for e in opened
+        )
 
     @action(description="Comment on a pull request or issue.", input=AddComment, output=Comment)
     async def add_comment(self, ctx: ConnectionContext, p: AddComment) -> Comment:
