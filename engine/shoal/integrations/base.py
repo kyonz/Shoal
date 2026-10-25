@@ -86,6 +86,24 @@ def describe_resources(resources: dict[str, ResourceDef]) -> list[dict[str, Any]
 
 
 @dataclass
+class WebhookRegistration:
+    """One webhook Shoal registers with the provider on behalf of a trigger.
+
+    The integration turns it into provider API calls in ``register_webhook``; ``state`` is whatever
+    the integration returned last time (provider webhook ids, expiry, resolved filters) and comes
+    back on every later call for the same trigger.
+    """
+
+    id: str
+    url: str  # the callback URL deliveries must be sent to
+    name: str  # a readable name for the provider's UI, e.g. "Shoal default/jira-ready-for-ai"
+    event: str  # the trigger's event pattern, e.g. "issue_updated"
+    config: Any  # instance of Integration.webhook_model
+    secret: str  # signing secret Shoal generated for this registration
+    state: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class EventDef:
     name: str
     description: str
@@ -160,6 +178,7 @@ class Integration:
     description: ClassVar[str] = ""
     connection_model: ClassVar[type[BaseModel]]
     events: ClassVar[list[EventDef]] = []
+    webhook_model: ClassVar[type[BaseModel] | None] = None  # set to support `Trigger.spec.webhook` registration
 
     actions: ClassVar[dict[str, ActionDef]]
     resources: ClassVar[dict[str, ResourceDef]]
@@ -201,6 +220,37 @@ class Integration:
     def webhook_setup_instructions(self, url: str) -> str:
         return f"Send webhooks to {url}"
 
+    # --- webhook registration (optional; needs ``webhook_model``) ---------------
+
+    async def register_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:
+        """Create the provider webhook, or update the one in ``registration.state``; return the new state.
+
+        A state may carry ``expires_at`` (ISO 8601) for providers whose webhooks expire; Shoal then calls
+        ``refresh_webhook`` before that time.
+        """
+        raise IntegrationError(f"{self.key} cannot register webhooks")
+
+    async def unregister_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> None:
+        """Delete the provider webhook in ``registration.state``. A webhook that is already gone is not an error."""
+
+    async def refresh_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:
+        """Extend an expiring webhook; returns the new state. Defaults to registering it again."""
+        return await self.register_webhook(ctx, registration)
+
+    async def verify_registered_webhook(
+        self, ctx: ConnectionContext, registration: WebhookRegistration, headers: dict[str, str], body: bytes
+    ) -> bool:
+        """Check a delivery to a registration's own URL (signed with ``registration.secret``, typically)."""
+        return await self.verify_webhook(ctx, headers, body)
+
+    def registered_event_matches(self, registration: WebhookRegistration, event: IntegrationEvent) -> bool:
+        """Conditions the provider cannot filter on itself (checked before the trigger's own filter)."""
+        return True
+
+    def describe_webhook(self, registration: WebhookRegistration) -> dict[str, Any]:
+        """What ``register_webhook`` would ask the provider for (shown in the UI before saving)."""
+        return {}
+
     async def actions_for(self, ctx: ConnectionContext) -> dict[str, ActionDef]:
         """Actions available on one connection; dynamic integrations (remote) override this."""
         return self.actions
@@ -241,6 +291,7 @@ class Integration:
             "actions": describe_actions(cls.actions),
             "resources": describe_resources(cls.resources),
             "events": [{"name": e.name, "description": e.description, "example": e.example} for e in cls.events],
+            "webhook_schema": cls.webhook_model.model_json_schema() if cls.webhook_model else None,
         }
 
 

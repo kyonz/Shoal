@@ -41,6 +41,8 @@ integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_
 db_app = typer.Typer(help="Database schema migrations (runs where the server runs; uses SHOAL_DATABASE_URL).", no_args_is_help=True)
 federation_app = typer.Typer(help="Federated tenants: link them on the hub, join from the member.", no_args_is_help=True)
 skills_app = typer.Typer(help="Browse skill sources (marketplaces) and import, upgrade or roll back skills.", no_args_is_help=True)
+triggers_app = typer.Typer(help="Trigger operations: the provider webhooks Shoal registers for them.", no_args_is_help=True)
+connections_app = typer.Typer(help="Connection operations: webhook URL and registered webhooks.", no_args_is_help=True)
 app.add_typer(secrets_app, name="secrets")
 credentials_app = typer.Typer(help="Your own credentials for connections that act as each person.", no_args_is_help=True)
 app.add_typer(credentials_app, name="credentials")
@@ -49,6 +51,8 @@ app.add_typer(eval_app, name="eval")
 app.add_typer(integrations_app, name="integrations")
 app.add_typer(federation_app, name="federation")
 app.add_typer(skills_app, name="skills")
+app.add_typer(triggers_app, name="triggers")
+app.add_typer(connections_app, name="connections")
 app.add_typer(db_app, name="db")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -500,6 +504,82 @@ def signal(
     with api(ctx) as client:
         result = client.request("POST", f"/v1/runs/{quote(run_id)}/signals/{quote(name)}", json={"payload": payload})
     console.print(f"signal {result['id']} sent to run {run_id}")
+
+
+# --------------------------------------------------------------------------- triggers & connections
+
+WEBHOOK_COLUMNS = [
+    ("TRIGGER", lambda w: f"{w['namespace']}/{w['trigger']}"), ("STATUS", lambda w: styled(w["status"])),
+    ("MODE", lambda w: w["state"].get("mode")), ("FILTER", lambda w: w["state"].get("jql")),
+    ("EXPIRES", lambda w: w.get("expires_at") or "-"), ("ERROR", lambda w: w.get("error")),
+]
+
+
+def _print_webhook(webhook: dict[str, Any] | None, output: Format) -> None:
+    if output is not Format.table:
+        emit(webhook, output)
+        return
+    if webhook is None:
+        console.print("no webhook registered (the trigger has no 'webhook', or it is disabled)")
+        return
+    state = webhook.get("state") or {}
+    console.print(f"[bold]{escape(webhook['namespace'])}/{escape(webhook['trigger'])}[/bold]  {styled(webhook['status'])}"
+                  f"  via {escape(webhook['connection'])} ({escape(webhook['integration'])})")
+    for label, value in [
+        ("callback", webhook.get("url")), ("mode", state.get("mode")), ("events", ", ".join(state.get("events") or [])),
+        ("filter", state.get("jql")), ("provider id", state.get("webhook_id") or ", ".join(map(str, state.get("webhook_ids") or []))),
+        ("expires", webhook.get("expires_at")), ("registered by", webhook.get("registered_by")),
+        ("last synced", webhook.get("last_synced_at")), ("last delivery", webhook.get("last_received_at")),
+        ("next attempt", webhook.get("next_attempt_at")),
+    ]:
+        if value:
+            console.print(f"  {label:<14} {escape(str(value))}")
+    if webhook.get("error"):
+        console.print(f"  [red]error[/red]          {escape(webhook['error'])}")
+    desired = webhook.get("desired") or {}
+    if desired and (desired.get("jql") != state.get("jql") or desired.get("events") != state.get("events")):
+        console.print(f"  [yellow]pending change[/yellow] {escape(json.dumps(desired))}")
+
+
+@triggers_app.command("webhook")
+def triggers_webhook(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Trigger name.")],
+                     namespace: Namespace = None, output: Output = Format.table) -> None:
+    """Show the provider webhook Shoal registered for a trigger (`spec.webhook`)."""
+    with api(ctx, namespace) as client:
+        _print_webhook(client.get(f"/v1/namespaces/{quote(client.target.namespace)}/triggers/{quote(name)}/webhook"), output)
+
+
+@triggers_app.command("sync")
+def triggers_sync(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Trigger name.")],
+                  namespace: Namespace = None, output: Output = Format.table) -> None:
+    """Register the trigger's webhook again now (after it was deleted in the provider, or to retry a failure)."""
+    with api(ctx, namespace) as client:
+        webhook = client.request("POST", f"/v1/namespaces/{quote(client.target.namespace)}/triggers/{quote(name)}/webhook/sync")
+    _print_webhook(webhook, output)
+    if webhook is not None and webhook["status"] == "error":
+        raise typer.Exit(1)
+
+
+@connections_app.command("webhook-url")
+def connections_webhook_url(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Connection name.")],
+                            namespace: Namespace = None, output: Output = Format.table) -> None:
+    """The connection's webhook URL and how to point the provider at it by hand."""
+    with api(ctx, namespace) as client:
+        data = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/connections/{quote(name)}/webhook")
+    if output is not Format.table:
+        emit(data, output)
+        return
+    console.print(data["url"])
+    err.print(escape(data["instructions"]))
+
+
+@connections_app.command("webhooks")
+def connections_webhooks(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Connection name.")],
+                         namespace: Namespace = None, output: Output = Format.table) -> None:
+    """Webhooks Shoal registered with the provider through this connection (one per trigger)."""
+    with api(ctx, namespace) as client:
+        data = client.get(f"/v1/namespaces/{quote(client.target.namespace)}/connections/{quote(name)}/webhooks")
+    emit(data, output, WEBHOOK_COLUMNS, name=lambda w: f"triggers/{w['trigger']}")
 
 
 # --------------------------------------------------------------------------- secrets

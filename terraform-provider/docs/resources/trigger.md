@@ -29,6 +29,25 @@ resource "shoal_trigger" "ready_for_ai" {
   }
 }
 
+# Shoal registers (and keeps registered) the webhook in Jira itself: no Jira admin screens.
+# jsondecode(shoal_trigger.ready_for_ai_registered.status.webhook) has its status and callback URL.
+resource "shoal_trigger" "ready_for_ai_registered" {
+  name = "jira-ready-for-ai-registered"
+  spec = {
+    connection = "jira-acme"
+    event      = "issue_updated"
+    workflow   = shoal_workflow.jira_bugfix.name
+    webhook = {
+      jql    = "project = BUG"
+      board  = 42
+      column = "Ready for AI"
+    }
+    inputs = {
+      issue_key = "{{ event.issue_key }}"
+    }
+  }
+}
+
 resource "shoal_trigger" "nightly" {
   name = "nightly-uplift"
   spec = {
@@ -80,6 +99,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `inputs` | map | optional | Workflow inputs (expressions). |
 | `dedupe_key` | string | optional | Expression; events with a seen key are ignored. |
 | `triage` | object | optional |  |
+| `webhook` | object | optional | Register the webhook with the provider (integration-specific settings, e.g. Jira `jql`). |
 | `enabled` | bool | optional |  Default: `true`. |
 
 ## Import

@@ -100,6 +100,8 @@ class TriggerService:
             spec = trigger.spec
             if not spec.enabled or spec.event == "schedule" or spec.connection != connection:
                 continue
+            if spec.webhook is not None:
+                continue  # registered triggers fire only from deliveries to their own URL (dispatch_registered)
             with use_namespace(row.namespace):
                 if connection_namespace is not None:
                     try:
@@ -113,6 +115,23 @@ class TriggerService:
                     continue
                 fired.append({**await self._fire(tenant_id, trigger, event, outcome), "namespace": row.namespace})
         return fired
+
+    async def dispatch_registered(
+        self, tenant_id: str, namespace: str, trigger_name: str, event: IntegrationEvent, matches: bool = True
+    ) -> list[dict[str, Any]]:
+        """Fire the one trigger a registered webhook belongs to; ``matches`` is the integration's own check."""
+        with use_namespace(namespace):
+            try:
+                row = await self.engine.store.get_resource_row(tenant_id, "Trigger", trigger_name, namespace=namespace, fallback=False)
+            except NotFound:
+                return []
+            trigger = Trigger.model_validate(row.document)
+            if not trigger.spec.enabled or not matches:
+                return []
+            outcome = self.evaluate(trigger, event)
+            if not outcome["matched"] and not outcome.get("error"):
+                return []
+            return [{**await self._fire(tenant_id, trigger, event, outcome), "namespace": namespace}]
 
     async def _fire(
         self, tenant_id: str, trigger: Trigger, event: IntegrationEvent, outcome: dict[str, Any]

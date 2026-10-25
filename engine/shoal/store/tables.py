@@ -360,6 +360,33 @@ class WebhookEndpoint(Base):
     last_received_at: Mapped[datetime | None] = mapped_column()
 
 
+class WebhookRegistration(Base):
+    """A webhook Shoal registered with a provider for one trigger, and what the provider said about it."""
+
+    __tablename__ = "webhook_registrations"
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "trigger_name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # also the last segment of its callback URL
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
+    trigger_name: Mapped[str] = mapped_column(String(63))
+    connection_name: Mapped[str] = mapped_column(String(63))
+    integration: Mapped[str] = mapped_column(String(63))
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | active | error | removing
+    fingerprint: Mapped[str | None] = mapped_column(String(64))  # of what was last registered
+    secret: Mapped[str] = mapped_column(Text)  # encrypted signing secret for deliveries
+    state: Mapped[dict[str, Any]] = mapped_column(default=dict)  # the integration's remote state (webhook ids, ...)
+    registered_by: Mapped[str | None] = mapped_column(String(200))  # actor whose credential registered it
+    error: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column()
+    next_attempt_at: Mapped[datetime | None] = mapped_column()
+    lease_expires_at: Mapped[datetime | None] = mapped_column()
+    last_synced_at: Mapped[datetime | None] = mapped_column()
+    last_received_at: Mapped[datetime | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class TriggerState(Base):
     __tablename__ = "trigger_state"
     __table_args__ = (UniqueConstraint("tenant_id", "namespace", "trigger_name"),)

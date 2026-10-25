@@ -94,6 +94,27 @@ Rules worth knowing:
 - Helpers: `verify_hmac_sha256`, `hmac_sha256`, `verify_token`,
   `encode_cursor`/`decode_cursor` for opaque pagination, `json_body`, `actor`.
 
+### Registering webhooks with the provider
+
+Set `webhook_model` to the settings people may put in a trigger's `webhook` block, and
+Shoal registers the provider webhook for each such trigger and keeps it in sync
+(architecture: `engine/shoal/integrations/webhooks.py`; Jira is the reference,
+[jira-webhooks.md](jira-webhooks.md)):
+
+| Hook | Called |
+| --- | --- |
+| `register_webhook(ctx, registration)` | to create the webhook, or update the one in `registration.state`; returns the new state (with `expires_at` for webhooks that expire) |
+| `refresh_webhook(ctx, registration)` | before `expires_at` (default: register again) |
+| `unregister_webhook(ctx, registration)` | when the trigger is deleted, disabled or loses `webhook`; a webhook that is already gone is not an error |
+| `verify_registered_webhook(ctx, registration, headers, body)` | for each delivery to the registration's own URL; sign with `registration.secret` |
+| `registered_event_matches(registration, event)` | conditions the provider cannot filter on (default: none) |
+| `describe_webhook(registration)` | what would be registered, for previews |
+
+`registration` carries the callback URL, a readable name, the trigger's event, the parsed
+`webhook_model` settings, a signing secret Shoal generated, and the state returned last time.
+`ctx` acts as whoever last saved the trigger, so per-user connections register with that
+person's credential.
+
 Register the package:
 
 ```toml
@@ -120,6 +141,8 @@ assert api.requests("POST", "/graphql")[0].json["variables"]["title"] == "Bug"
 | `IntegrationHarness` | Call actions, queries (`query_all` follows cursors), `test_connection` and webhooks with no database. |
 | `engine_harness(...)` | A real throwaway engine with your integration registered: create connections (`connect`), apply YAML resources (`apply`), deliver webhooks to the connection URL (`webhook`) and check that triggers fire and runs start. |
 | `signed_webhook`, `github_webhook` | Build correctly signed deliveries. |
+| `MockJira` | A stateful Jira: issues, boards, transitions, and registered webhooks that deliver on changes (`move`, `comment`); `world.flush(jira)` delivers them. |
+| `world.deliver(url, headers, body)` | Deliver to any Shoal webhook URL, including a registered trigger webhook's. |
 | `IntegrationContract` | Subclass as `TestXContract` to run the contract checks under pytest. |
 | `check_remote_service(url, token)` | The contract checks for a running remote service, also `python -m shoal.sdk.testing.contract URL --token T`. |
 

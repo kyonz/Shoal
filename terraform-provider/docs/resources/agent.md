@@ -65,6 +65,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `tools` | list of string | optional | Built-in tools, integration actions ('github.create_pull_request', 'github.*'). |
 | `subagents` | list of string | optional | Agents this agent may delegate to. |
 | `credentials` | list of string | optional | Integrations whose short-lived credentials are injected into the sandbox env, e.g. 'github' or 'github:github-acme' (integration:connection). |
+| `cloud_identities` | list of string | optional | CloudIdentity resources (e.g. an AWS IAM role) whose short-lived credentials are injected into the sandbox env. Each identity must grant this agent and workflow. |
 | `sandbox` | string | optional |  |
 | `env` | map | optional | Sandbox env; values may use expressions. |
 | `limits` | object | optional |  |

@@ -37,6 +37,7 @@ from shoal.federation import FederationHub, FederationMember
 from shoal.identity import IdentityService
 from shoal.integrations.manager import IntegrationManager
 from shoal.integrations.remote import register_remote_integration
+from shoal.integrations.webhooks import WebhookRegistrations
 from shoal.llm.router import ModelRouter
 from shoal.plugins.registry import Registry, factory
 from shoal.runtime.events import EventBus
@@ -143,6 +144,7 @@ class Engine:
         self.decisions = DecisionService(self)
         self.executor = Executor(self)
         self.triggers = TriggerService(self)
+        self.webhooks = WebhookRegistrations(self)
         self.campaigns = CampaignService(self)
         self.blueprints = BlueprintService(self)
         self.skill_sources = SkillSourceService(self)
@@ -208,6 +210,7 @@ class Engine:
 
     async def scheduler_tick(self) -> None:
         await self.triggers.tick_schedules()
+        await self.webhooks.reconcile()
         await self.campaigns.tick_due()
         await self.evals.tick_due()
         await self.orchestrator.tick()

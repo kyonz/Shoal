@@ -7,7 +7,7 @@ from shoal.store import migrate
 
 async def test_migrations_match_the_models(engine):
     async with engine.store.engine.connect() as conn:
-        assert await conn.run_sync(migrate.current) == "0005"
+        assert await conn.run_sync(migrate.current) == "0006"
         diff = await conn.run_sync(migrate.pending_changes)
     assert diff == [], f"models changed without a migration: run `shoal db revision -m ...` ({diff})"
 
@@ -19,4 +19,5 @@ async def test_existing_database_without_migrations_is_adopted(engine):
         await conn.exec_driver_sql("DROP TABLE run_signals")  # added by 0002
         await conn.exec_driver_sql("DROP TABLE user_credentials")  # added by 0004
         await conn.exec_driver_sql("ALTER TABLE runs DROP COLUMN orchestrator")  # added by 0005
-    assert await engine.store.migrate() == "0005"
+        await conn.exec_driver_sql("DROP TABLE webhook_registrations")  # added by 0006
+    assert await engine.store.migrate() == "0006"

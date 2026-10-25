@@ -291,3 +291,41 @@ def test_skills_import_and_upgrade(cli, tenant_key, server, tmp_path):
     assert "(was 1.0.0)" in upgraded.stdout and "/spec/instructions" in upgraded.stdout
     rolled = cli(*auth, "skills", "rollback", "pdf", "1")
     assert rolled.exit_code == 0 and "(1.0.0)" in rolled.stdout
+
+
+def test_trigger_webhooks(cli, tenant_key, server, tmp_path):
+    from shoal.sdk.testing import MockJira
+
+    jira = MockJira()
+    server.app.state.engine.http_transport = jira.transport
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "secrets", "set", "jira-token", "--value", "t").exit_code == 0
+    (tmp_path / "jira.yaml").write_text("""
+apiVersion: shoal.dev/v1
+kind: Connection
+metadata: {name: jira}
+spec: {integration: jira, config: {base_url: "https://acme.atlassian.net", email: bot@acme.example}, secrets: {api_token: jira-token}}
+---
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata: {name: noop}
+spec: {steps: [{id: s, type: set, values: {a: 1}}]}
+---
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata: {name: ready}
+spec: {workflow: noop, connection: jira, event: issue_updated, webhook: {statuses: [Ready for AI], jql: project = BUG}}
+""")
+    applied = cli(*auth, "apply", "-f", str(tmp_path / "jira.yaml"))
+    assert applied.exit_code == 0, applied.output
+    shown = cli(*auth, "triggers", "webhook", "ready")
+    assert shown.exit_code == 0, shown.output
+    assert "active" in shown.stdout and "admin" in shown.stdout and "(project = BUG)" in shown.stdout
+    listed = cli(*auth, "connections", "webhooks", "jira", "-o", "name")
+    assert listed.stdout.split() == ["triggers/ready"]
+    jira.webhooks.clear()
+    synced = cli(*auth, "triggers", "sync", "ready", "-o", "json")
+    assert synced.exit_code == 0 and json.loads(synced.stdout)["status"] == "active"
+    assert len(jira.webhooks) == 1
+    url = cli(*auth, "connections", "webhook-url", "jira")
+    assert url.stdout.strip().startswith(f"{SERVER}/v1/hooks/wh_")

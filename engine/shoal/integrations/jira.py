@@ -1,21 +1,39 @@
 """Jira integration (Cloud REST v3, and Server/Data Center v2 with a PAT).
 
-Webhooks: Jira admin webhooks (signed with ``X-Hub-Signature`` when a secret is
-set) and Automation "Send web request" actions (send the secret in an
-``X-Shoal-Token`` header or ``?token=`` query parameter).
+Webhooks, sent to the connection's URL: Jira admin webhooks (signed with
+``X-Hub-Signature`` when a secret is set) and Automation "Send web request"
+actions (send the secret in an ``X-Shoal-Token`` header or ``?token=`` query
+parameter).
+
+Registered webhooks (``Trigger.spec.webhook``): Shoal creates, updates, refreshes
+and deletes the webhook in Jira itself, from the trigger's settings, with its own
+callback URL and signing secret:
+
+* **admin** webhooks (``/rest/webhooks/1.0/webhook``; Cloud and Data Center, needs
+  a Jira administrator's credential), signed with ``X-Hub-Signature``;
+* **dynamic** webhooks (``/rest/api/{v}/webhook``; Cloud only, for OAuth 2.0 and
+  Connect apps), which expire after 30 days and are refreshed before then, and are
+  signed with a JWT in the ``Authorization`` header.
 """
 
 from __future__ import annotations
 
 import base64
+import dataclasses
+import fnmatch
 import hashlib
 import hmac
 import json
 import re
-from typing import Any
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+from urllib.parse import quote
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+import jwt
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from shoal.core import clock
 from shoal.integrations.base import (
     ConnectionContext,
     EventDef,
@@ -23,10 +41,12 @@ from shoal.integrations.base import (
     IntegrationError,
     IntegrationEvent,
     Page,
+    WebhookRegistration,
     action,
     raise_for_status,
     resource,
 )
+from shoal.sdk.helpers import verify_hmac_sha256
 
 
 class JiraConnection(BaseModel):
@@ -34,15 +54,117 @@ class JiraConnection(BaseModel):
     email: str | None = Field(None, description="Atlassian account email (Cloud, with api_token).")
     api_token: SecretStr | None = Field(None, description="Atlassian API token (Cloud).")
     personal_access_token: SecretStr | None = Field(None, description="PAT (Server / Data Center).")
+    oauth_token: SecretStr | None = Field(
+        None, title="OAuth token", description="OAuth 2.0 (3LO) access token (Cloud, with cloud_id); usually each person's, via `oauth:`."
+    )
+    cloud_id: str | None = Field(None, title="Cloud ID", description="Atlassian cloud id of the site, for OAuth 2.0 calls.")
+    oauth_client_secret: SecretStr | None = Field(
+        None, title="OAuth client secret", description="The OAuth 2.0 app's client secret: verifies dynamic webhook deliveries."
+    )
+    connect_app_key: str | None = Field(None, description="Atlassian Connect app key (Cloud, with connect_shared_secret).")
+    connect_shared_secret: SecretStr | None = Field(
+        None, description="The Connect installation's shared secret: signs API calls, verifies webhook deliveries."
+    )
+    connect_client_key: str | None = Field(None, description="The Connect installation's client key (checked on deliveries).")
     api_version: str = Field("3", description="'3' for Cloud, '2' for Server/Data Center.")
-    webhook_secret: SecretStr | None = None
+    webhook_secret: SecretStr | None = Field(
+        None, description="Secret for webhooks sent to the connection's URL (registered trigger webhooks have their own)."
+    )
 
     @model_validator(mode="after")
     def _auth(self) -> JiraConnection:
-        if not ((self.email and self.api_token) or self.personal_access_token):
-            raise ValueError("configure 'email' + 'api_token' (Cloud) or 'personal_access_token' (Server/DC)")
+        if not (
+            (self.email and self.api_token)
+            or self.personal_access_token
+            or self.oauth_token
+            or (self.connect_app_key and self.connect_shared_secret)
+        ):
+            raise ValueError(
+                "configure 'email' + 'api_token' (Cloud), 'personal_access_token' (Server/DC), "
+                "'oauth_token' + 'cloud_id' (OAuth 2.0 app) or 'connect_app_key' + 'connect_shared_secret' (Connect app)"
+            )
+        if self.oauth_token and not self.cloud_id:
+            raise ValueError("'oauth_token' needs 'cloud_id' (OAuth 2.0 calls go through api.atlassian.com)")
         self.base_url = self.base_url.rstrip("/")
         return self
+
+    @property
+    def app_auth(self) -> bool:
+        """OAuth 2.0 or Connect: the credentials that can register dynamic webhooks."""
+        return bool(self.oauth_token or (self.connect_app_key and self.connect_shared_secret))
+
+    @property
+    def api_base(self) -> str:
+        if self.oauth_token:
+            return f"https://api.atlassian.com/ex/jira/{self.cloud_id}"
+        return self.base_url
+
+
+# ----------------------------------------------------------------------------- registered webhooks
+
+# Trigger event (as parse_webhook names it) -> Jira webhook event
+JIRA_WEBHOOK_EVENTS = {
+    "issue_created": "jira:issue_created",
+    "issue_updated": "jira:issue_updated",
+    "issue_deleted": "jira:issue_deleted",
+    "comment_created": "comment_created",
+    "comment_updated": "comment_updated",
+    "comment_deleted": "comment_deleted",
+}
+DYNAMIC_WEBHOOK_TTL = timedelta(days=30)
+
+
+class JiraWebhook(BaseModel):
+    """`Trigger.spec.webhook` for Jira: what Shoal registers in Jira for the trigger."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    jql: str | None = Field(None, title="JQL", description="Only issues matching this JQL, e.g. project = BUG AND issuetype = Bug.")
+    statuses: list[str] = Field(
+        default_factory=list, description="Fire only when an issue moves into one of these statuses (names or ids)."
+    )
+    board: int | None = Field(None, description="Board id, with `column` (Jira Software).")
+    column: str | None = Field(None, description="Board column: fire when an issue moves into any status mapped to it.")
+    events: list[str] = Field(
+        default_factory=list, description="Jira webhook events, e.g. jira:issue_updated (default: from the trigger's event)."
+    )
+    fields: list[str] = Field(
+        default_factory=list, description="Dynamic webhooks: send issue updates only when these field ids change."
+    )
+    mode: Literal["auto", "admin", "dynamic"] = Field(
+        "auto",
+        description="'admin' webhooks (Cloud and Data Center, need an administrator) or 'dynamic' ones (Cloud OAuth 2.0 "
+        "and Connect apps); 'auto' picks dynamic for app credentials, otherwise admin.",
+    )
+    require_signature: bool = Field(
+        True,
+        description="Reject unsigned deliveries. Turn off only for Data Center versions that cannot sign webhooks; "
+        "the unguessable callback URL is then the only check.",
+    )
+
+    @model_validator(mode="after")
+    def _column(self) -> JiraWebhook:
+        if (self.board is None) != (self.column is None):
+            raise ValueError("'board' and 'column' go together")
+        if self.column and self.statuses:
+            raise ValueError("set 'column' or 'statuses', not both")
+        return self
+
+
+def _jql_value(value: str) -> str:
+    return value if value.isdigit() else '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def connect_jwt(app_key: str, secret: str, method: str, path: str, params: dict[str, Any] | None = None) -> str:
+    """A Connect app's JWT for one API request (with its query string hash)."""
+    query = "&".join(
+        f"{quote(str(k), safe='')}={','.join(sorted(quote(str(v), safe='') for v in (vals if isinstance(vals, list) else [vals])))}"
+        for k, vals in sorted((params or {}).items())
+        if k != "jwt"
+    )
+    qsh = hashlib.sha256(f"{method.upper()}&{path or '/'}&{query}".encode()).hexdigest()
+    now = int(time.time())
+    return jwt.encode({"iss": app_key, "iat": now, "exp": now + 180, "qsh": qsh}, secret, algorithm="HS256")
 
 
 # ----------------------------------------------------------------------------- ADF
@@ -216,20 +338,30 @@ class JiraIntegration(Integration):
         EventDef("comment_created", "A comment was added."),
         EventDef("automation", "A Jira Automation 'Send web request' payload."),
     ]
+    webhook_model = JiraWebhook
 
-    def _headers(self, cfg: JiraConnection) -> dict[str, str]:
-        if cfg.personal_access_token:
+    def _headers(self, cfg: JiraConnection, method: str = "GET", path: str = "/", params: dict[str, Any] | None = None) -> dict[str, str]:
+        if cfg.oauth_token:
+            auth = f"Bearer {cfg.oauth_token.get_secret_value()}"
+        elif cfg.personal_access_token:
             auth = f"Bearer {cfg.personal_access_token.get_secret_value()}"
-        else:
-            raw = f"{cfg.email}:{cfg.api_token.get_secret_value() if cfg.api_token else ''}"
+        elif cfg.email and cfg.api_token:
+            raw = f"{cfg.email}:{cfg.api_token.get_secret_value()}"
             auth = "Basic " + base64.b64encode(raw.encode()).decode()
+        else:
+            assert cfg.connect_app_key and cfg.connect_shared_secret
+            auth = "JWT " + connect_jwt(cfg.connect_app_key, cfg.connect_shared_secret.get_secret_value(), method, path, params)
         return {"Authorization": auth, "Accept": "application/json"}
 
-    async def _request(self, ctx: ConnectionContext, method: str, path: str, **kwargs: Any) -> Any:
+    async def _send(self, ctx: ConnectionContext, method: str, path: str, **kwargs: Any) -> Any:
         cfg: JiraConnection = ctx.config
         path = path.replace("{v}", cfg.api_version)
-        async with ctx.http(base_url=cfg.base_url, headers=self._headers(cfg)) as client:
-            response = await client.request(method, path, **kwargs)
+        headers = self._headers(cfg, method, path, kwargs.get("params"))
+        async with ctx.http(base_url=cfg.api_base, headers=headers) as client:
+            return await client.request(method, path, **kwargs)
+
+    async def _request(self, ctx: ConnectionContext, method: str, path: str, **kwargs: Any) -> Any:
+        response = await self._send(ctx, method, path, **kwargs)
         raise_for_status(response, "Jira")
         return response.json() if response.content else {}
 
@@ -345,7 +477,7 @@ class JiraIntegration(Integration):
     async def verify_webhook(self, ctx: ConnectionContext, headers: dict[str, str], body: bytes) -> bool:
         secret = ctx.config.webhook_secret
         if secret is None:
-            return True
+            return False  # an unsigned URL would let anyone who finds it fire triggers
         value = secret.get_secret_value()
         token = headers.get("x-shoal-token")
         if token:
@@ -364,7 +496,9 @@ class JiraIntegration(Integration):
         status_change = None
         for item in (payload.get("changelog") or {}).get("items", []):
             if item.get("field") == "status":
-                status_change = {"from": item.get("fromString"), "to": item.get("toString")}
+                status_change = {
+                    "from": item.get("fromString"), "to": item.get("toString"), "from_id": item.get("from"), "to_id": item.get("to"),
+                }
         data = {
             **payload,
             "issue_key": key,
@@ -398,5 +532,171 @@ class JiraIntegration(Integration):
         return (
             f"Jira settings > System > WebHooks: create a webhook to {url} with the connection's secret and "
             "'Issue updated' events (optionally a JQL filter). For Jira Automation, add a 'Send web request' action "
-            f"to {url} with header X-Shoal-Token set to the webhook secret and the issue data as the body."
+            f"to {url} with header X-Shoal-Token set to the webhook secret and the issue data as the body. "
+            "Or give a trigger a 'webhook' block (jql, board and column, or statuses) and Shoal registers the webhook itself."
         )
+
+    # ------------------------------------------------------------------ registered webhooks
+
+    def _mode(self, ctx: ConnectionContext, config: JiraWebhook) -> str:
+        cfg: JiraConnection = ctx.config
+        if config.mode == "dynamic":
+            if cfg.api_version != "3" and not cfg.app_auth:
+                raise IntegrationError("dynamic webhooks are a Jira Cloud feature for OAuth 2.0 and Connect apps; use mode: admin")
+            if not cfg.app_auth:
+                raise IntegrationError("dynamic webhooks need an OAuth 2.0 ('oauth_token') or Connect app credential")
+            return "dynamic"
+        if config.mode == "admin":
+            return "admin"
+        return "dynamic" if cfg.app_auth else "admin"
+
+    def _events(self, event: str, config: JiraWebhook) -> list[str]:
+        if config.events:
+            return list(config.events)
+        events = [jira for ours, jira in JIRA_WEBHOOK_EVENTS.items() if fnmatch.fnmatch(ours, event)]
+        if not events:
+            raise IntegrationError(
+                f"no Jira webhook event matches the trigger's event '{event}'; set webhook.events "
+                f"(one of {', '.join(JIRA_WEBHOOK_EVENTS.values())})"
+            )
+        return events
+
+    async def _statuses(self, ctx: ConnectionContext, config: JiraWebhook) -> list[str]:
+        if config.column is None:
+            return list(config.statuses)
+        board = await self._request(ctx, "GET", f"/rest/agile/1.0/board/{config.board}/configuration")
+        columns = (board.get("columnConfig") or {}).get("columns") or []
+        wanted = config.column.lower()
+        match = next((c for c in columns if (c.get("name") or "").lower() == wanted), None)
+        if match is None:
+            names = ", ".join(c.get("name", "?") for c in columns) or "none"
+            raise IntegrationError(f"board {config.board} has no column '{config.column}' (columns: {names})")
+        statuses = [str(s["id"]) for s in match.get("statuses") or [] if s.get("id") is not None]
+        if not statuses:
+            raise IntegrationError(f"column '{config.column}' on board {config.board} has no statuses mapped to it")
+        return statuses
+
+    @staticmethod
+    def _jql(config: JiraWebhook, statuses: list[str]) -> str | None:
+        parts = [f"({config.jql})"] if config.jql else []
+        if statuses:
+            parts.append(f"status in ({', '.join(_jql_value(s) for s in statuses)})")
+        return " AND ".join(parts) or None
+
+    def describe_webhook(self, registration: WebhookRegistration) -> dict[str, Any]:
+        config: JiraWebhook = registration.config
+        statuses = registration.state.get("statuses") or config.statuses
+        out: dict[str, Any] = {"events": self._events(registration.event, config), "jql": self._jql(config, statuses)}
+        if config.column and "statuses" not in registration.state:
+            out["column"] = f"{config.column} (board {config.board}; resolved to statuses when registered)"
+        return out
+
+    async def register_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:
+        config: JiraWebhook = registration.config
+        mode = self._mode(ctx, config)
+        events = self._events(registration.event, config)
+        statuses = await self._statuses(ctx, config)
+        jql = self._jql(config, statuses)
+        previous = registration.state
+        base = {"mode": mode, "events": events, "jql": jql, "statuses": statuses}
+        if mode == "admin":
+            body = {
+                "name": registration.name,
+                "url": registration.url,
+                "events": events,
+                "filters": {"issue-related-events-section": jql or ""},
+                "excludeBody": False,
+                "secret": registration.secret,
+            }
+            webhook_id = previous.get("webhook_id") if previous.get("mode") == "admin" else None
+            if webhook_id:
+                response = await self._send(ctx, "PUT", f"/rest/webhooks/1.0/webhook/{webhook_id}", json=body)
+                if response.status_code != 404:
+                    raise_for_status(response, "Jira")
+                    return {**base, "webhook_id": webhook_id}
+            created = await self._request(ctx, "POST", "/rest/webhooks/1.0/webhook", json=body)
+            if previous.get("mode") == "dynamic":
+                await self.unregister_webhook(ctx, registration)
+            return {**base, "webhook_id": str(created.get("self", "")).rstrip("/").rsplit("/", 1)[-1] or str(created.get("id"))}
+
+        if not jql:
+            raise IntegrationError("dynamic webhooks need a JQL filter: set webhook.jql (e.g. project = BUG) or statuses/column")
+        hook: dict[str, Any] = {"events": events, "jqlFilter": jql}
+        fields = config.fields or (["status"] if statuses else [])
+        if fields and "jira:issue_updated" in events:
+            hook["fieldIdsFilter"] = fields
+        data = await self._request(ctx, "POST", "/rest/api/{v}/webhook", json={"url": registration.url, "webhooks": [hook]})
+        results = data.get("webhookRegistrationResult") or []
+        errors = [e for r in results for e in r.get("errors") or []]
+        ids = [r["createdWebhookId"] for r in results if r.get("createdWebhookId") is not None]
+        if errors or not ids:
+            raise IntegrationError(f"Jira refused the webhook: {'; '.join(map(str, errors)) or data}")
+        await self.unregister_webhook(ctx, registration)  # the old one, now that the new one exists (there is no update)
+        expires = clock.now() + DYNAMIC_WEBHOOK_TTL
+        return {**base, "webhook_ids": ids, "expires_at": expires.isoformat()}
+
+    async def refresh_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:
+        state = registration.state
+        if state.get("mode") != "dynamic" or not state.get("webhook_ids"):
+            return await self.register_webhook(ctx, registration)
+        response = await self._send(ctx, "PUT", "/rest/api/{v}/webhook/refresh", json={"webhookIds": state["webhook_ids"]})
+        if response.status_code == 404:
+            return await self.register_webhook(ctx, dataclasses.replace(registration, state={}))  # expired and gone
+        raise_for_status(response, "Jira")
+        data = response.json() if response.content else {}
+        expires = data.get("expirationDate")
+        if isinstance(expires, int | float):  # epoch millis on some versions of the API
+            expires = datetime.fromtimestamp(expires / 1000, UTC).isoformat()
+        return {**state, "expires_at": expires or (clock.now() + DYNAMIC_WEBHOOK_TTL).isoformat()}
+
+    async def unregister_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> None:
+        state = registration.state
+        if state.get("mode") == "admin" and state.get("webhook_id"):
+            response = await self._send(ctx, "DELETE", f"/rest/webhooks/1.0/webhook/{state['webhook_id']}")
+        elif state.get("mode") == "dynamic" and state.get("webhook_ids"):
+            response = await self._send(ctx, "DELETE", "/rest/api/{v}/webhook", json={"webhookIds": state["webhook_ids"]})
+        else:
+            return
+        if response.status_code != 404:
+            raise_for_status(response, "Jira")
+
+    async def verify_registered_webhook(
+        self, ctx: ConnectionContext, registration: WebhookRegistration, headers: dict[str, str], body: bytes
+    ) -> bool:
+        cfg: JiraConnection = ctx.config
+        state = registration.state
+        if state.get("mode") == "dynamic":
+            scheme, _, token = headers.get("authorization", "").partition(" ")
+            secret = cfg.connect_shared_secret if cfg.connect_app_key else cfg.oauth_client_secret
+            if scheme.lower() not in ("jwt", "bearer") or not token or secret is None:
+                return False
+            try:
+                claims = jwt.decode(token, secret.get_secret_value(), algorithms=["HS256"], options={"verify_aud": False})
+            except jwt.PyJWTError:
+                return False
+            if cfg.connect_app_key and cfg.connect_client_key and claims.get("iss") != cfg.connect_client_key:
+                return False
+            try:
+                matched = json.loads(body or b"{}").get("matchedWebhookIds")
+            except (ValueError, AttributeError):
+                return False
+            if matched is not None and not {str(i) for i in matched} & {str(i) for i in state.get("webhook_ids") or []}:
+                return False
+            return True
+        signature = headers.get("x-hub-signature")
+        if signature:
+            return verify_hmac_sha256(registration.secret, body, signature, prefix="sha256=")
+        return not registration.config.require_signature
+
+    def registered_event_matches(self, registration: WebhookRegistration, event: IntegrationEvent) -> bool:
+        statuses = registration.state.get("statuses") or registration.config.statuses
+        if not statuses:
+            return True
+        wanted = {str(s).lower() for s in statuses}
+        change = event.data.get("status_change")
+        if change:
+            return str(change.get("to") or "").lower() in wanted or str(change.get("to_id") or "") in wanted
+        if event.type == "issue_created":
+            status = ((event.data.get("issue") or {}).get("fields") or {}).get("status") or {}
+            return str(status.get("name") or "").lower() in wanted or str(status.get("id") or "") in wanted
+        return False

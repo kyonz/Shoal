@@ -557,6 +557,17 @@ class TriageSpec(Model):
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
 
 
+class TriggerWebhookSpec(Model):
+    """Have Shoal register the provider-side webhook that delivers this trigger's events, and keep it registered.
+
+    The integration derives what to register (provider event types, a provider-side filter such as JQL)
+    from this block and the trigger's ``event``. Each registered trigger gets its own callback URL and
+    signing secret, and only fires from deliveries to that URL.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class TriggerSpec(Model):
     description: str | None = None
     workflow: str | None = Field(None, description="Workflow to start.")
@@ -575,6 +586,9 @@ class TriggerSpec(Model):
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
     triage: TriageSpec | None = None
+    webhook: TriggerWebhookSpec | None = Field(
+        None, description="Register the webhook with the provider (integration-specific settings, e.g. Jira `jql`)."
+    )
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -588,6 +602,8 @@ class TriggerSpec(Model):
                 raise ValueError("schedule triggers need a cron 'schedule'")
         elif not self.connection:
             raise ValueError("event triggers need a 'connection'")
+        if self.webhook is not None and self.event == "schedule":
+            raise ValueError("'webhook' registration only applies to event triggers")
         return self
 
 

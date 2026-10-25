@@ -91,6 +91,8 @@ export interface IntegrationCatalog {
   actions: IntegrationAction[];
   resources: { name: string; description: string; filter_schema: JsonSchema }[];
   events: { name: string; description: string; example: unknown }[];
+  /** Settings for `Trigger.spec.webhook` when the integration can register its own webhooks. */
+  webhook_schema?: JsonSchema | null;
 }
 
 export interface JsonSchema {

@@ -511,6 +511,33 @@ class TriggerTestIn(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class TriggerWebhookOut(BaseModel):
+    """A webhook Shoal registered with the provider for a trigger (`spec.webhook`)."""
+
+    id: str
+    trigger: str
+    namespace: str
+    connection: str
+    integration: str
+    status: str = Field(description="pending, active, error (retried with backoff) or removing.")
+    url: str | None = Field(None, description="The callback URL the provider delivers to.")
+    state: dict[str, Any] = Field(default_factory=dict, description="What the provider holds: webhook ids, events, filter...")
+    desired: dict[str, Any] | None = Field(None, description="What the trigger asks to register now.")
+    error: str | None = None
+    attempts: int = 0
+    registered_by: str | None = None
+    expires_at: str | None = None
+    next_attempt_at: str | None = None
+    last_synced_at: str | None = None
+    last_received_at: str | None = None
+
+
+class WebhookPreviewIn(BaseModel):
+    connection: str
+    event: str
+    webhook: dict[str, Any] = Field(default_factory=dict)
+
+
 class DeliveryOut(Out):
     id: str
     dedupe_key: str | None
