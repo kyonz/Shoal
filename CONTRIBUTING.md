@@ -90,6 +90,19 @@ The HTTP API, the workflow schema (`apiVersion`) and the plugin entry points are
 Changes to them must be backwards compatible, or be called out as breaking in the PR description so
 they can go into a major release.
 
+## Releasing
+
+Releases are cut by hand; nothing publishes on push.
+
+1. Bump the version in `engine/pyproject.toml`, `engine/shoal/__init__.py` and
+   `deploy/helm/shoal/Chart.yaml` (`version` and `appVersion`), run `scripts/check.sh` and merge.
+2. Tag the merge commit `vX.Y.Z` and push the tag.
+3. Run the **Release** workflow (Actions › Release › Run workflow) on that tag. It publishes
+   `ghcr.io/kyonz/shoal:X.Y.Z` (the chart's default image is its `appVersion`),
+   `ghcr.io/kyonz/shoal-sandbox` and the chart to `oci://ghcr.io/kyonz/charts`. Run on a branch
+   instead of a tag, it only produces `sha-…` image tags, which the chart doesn't use.
+4. Make the new packages public in the repository's package settings the first time.
+
 ## Developer Certificate of Origin
 
 By contributing you agree that your contribution is licensed under the

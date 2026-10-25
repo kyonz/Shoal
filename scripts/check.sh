@@ -95,7 +95,7 @@ helm_chart() {
 image() {
   cd "$root"
   docker build -f deploy/Dockerfile -t shoal:check .
-  docker compose -f deploy/docker-compose.yaml config -q
+  docker compose -f deploy/docker-compose.yaml --env-file deploy/.env.example config -q
   local name="shoal-check-$$" port="${SHOAL_CHECK_PORT:-18080}"
   docker run -d --name "$name" -p "$port:8080" -e SHOAL_ADMIN_TOKEN=check shoal:check >/dev/null
   trap 'docker rm -f '"$name"' >/dev/null 2>&1 || true' RETURN

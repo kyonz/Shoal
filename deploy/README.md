@@ -14,7 +14,20 @@ The image builds the UI from `frontend/` when it exists and serves it from `/`. 
 UID 10001 with SQLite under `/var/lib/shoal` by default; set `SHOAL_DATABASE_URL` for Postgres.
 No image is published yet: build it yourself as above, and push it to a registry when your cluster
 needs to pull it. Once releases are tagged, the manual release workflow publishes
-`ghcr.io/kyonz/ai-workflow-manager` (amd64 and arm64), which is the chart's default image.
+`ghcr.io/kyonz/shoal` (amd64 and arm64), which is the chart's default image.
+
+## Sandbox image
+
+The `docker` and `kubernetes` sandbox backends start `ghcr.io/kyonz/shoal-sandbox:latest` unless a
+sandbox profile names another `image`. It has bash, Python, Node, git and curl, and runs as a
+non-root user in `/workspace`. Until a release publishes it, build it where your workers can use it:
+
+```sh
+docker build -f deploy/sandbox.Dockerfile -t ghcr.io/kyonz/shoal-sandbox:latest deploy/
+```
+
+For Kubernetes, push it to your registry and set `image` in your sandbox profiles to that name.
+Any image with `sh` and the tools your steps need works too.
 
 ## docker compose (Postgres, API, workers)
 
@@ -25,8 +38,12 @@ shoal --server http://localhost:8080 --token "$SHOAL_ADMIN_TOKEN" tenants create
 docker compose -f deploy/docker-compose.yaml up -d --scale worker=3
 ```
 
+Compose refuses to start until `SHOAL_SECRET_KEY`, `SHOAL_ADMIN_TOKEN` and `POSTGRES_PASSWORD`
+are set, so it never runs with well-known defaults.
+
 To let the `docker` sandbox backend start containers, uncomment the Docker socket mount on the
-worker (this gives the worker root-equivalent access to the host).
+worker (this gives the worker root-equivalent access to the host) and build the
+[sandbox image](#sandbox-image) on the host.
 
 To drive runs with a Temporal cluster you already run, set `SHOAL_ORCHESTRATOR=temporal` and
 `SHOAL_TEMPORAL_ADDRESS` in `deploy/.env`. Adding `-f deploy/docker-compose.temporal.yaml` starts a
