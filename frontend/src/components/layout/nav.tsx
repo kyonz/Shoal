@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   Gauge,
   Library,
+  ListChecks,
   Lock,
   Network,
   Plug,
@@ -66,6 +67,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: "Runs", to: "runs", icon: Activity, namespaced: true, permission: "runs:read", keywords: "executions history approvals" },
       { label: "Campaigns", to: "campaigns", icon: Rocket, namespaced: true, permission: "campaigns:read", keywords: "fan out targets" },
+      { label: "Target lists", to: "target-lists", icon: ListChecks, namespaced: true, permission: "target-lists:read", keywords: "repos repositories targets list group" },
       { label: "Triggers", to: "triggers", icon: Zap, namespaced: true, permission: "triggers:read", keywords: "webhook schedule cron" },
     ],
   },

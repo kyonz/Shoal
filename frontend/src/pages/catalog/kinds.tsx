@@ -1,5 +1,5 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, Cloud, FlaskConical, Gauge, Library, Puzzle, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Cloud, FlaskConical, Gauge, Library, ListChecks, Puzzle, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
 import { nsPath } from "@/lib/ns";
 
@@ -81,6 +81,22 @@ export const KINDS: Record<string, KindConfig> = {
     summary: (s) => {
       const aws = s.aws as { role_arn?: string } | undefined;
       return [s.provider, aws?.role_arn, s.trust].filter(Boolean).join(" · ") || undefined;
+    },
+  },
+  "target-lists": {
+    plural: "target-lists",
+    kind: "TargetList",
+    label: "Target lists",
+    singular: "target list",
+    icon: ListChecks,
+    blurb: "A named set of targets, such as the repositories a team owns, that campaigns run over and trigger filters check against.",
+    order: ["description", "key"],
+    hidden: ["items", "connection", "resource", "filter"],
+    template: { key: "{{ target.full_name }}", items: [{ full_name: "acme/api" }, { full_name: "acme/web" }] },
+    summary: (s) => {
+      const items = Array.isArray(s.items) ? `${s.items.length} listed` : null;
+      const lookup = s.connection ? `${items ? "looked up in" : "all"} ${s.resource} from ${s.connection}` : null;
+      return [items, lookup].filter(Boolean).join(" · ") || undefined;
     },
   },
   gateways: {

@@ -29,8 +29,7 @@ class TestSlackContract(IntegrationContract):
     sample_config = {"bot_token": "xoxb-sample", "signing_secret": SECRET}
 
     @property
-    def sample_webhook(self) -> tuple[dict[str, str], bytes]:  # type: ignore[override]
-        # signed when the test runs: Slack refuses timestamps older than five minutes, and a full suite takes longer
+    def sample_webhook(self):  # signed when the test runs: Slack rejects requests over five minutes old
         return MockSlack(signing_secret=SECRET).event({"type": "app_mention", "user": "U1", "channel": "C1",
                                                        "text": "<@U0BOT> hi", "ts": "1.1"})
 

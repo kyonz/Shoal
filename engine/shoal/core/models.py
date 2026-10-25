@@ -643,7 +643,11 @@ class TriggerSpec(Model):
     overlap: Literal["allow", "skip"] = Field(
         "allow", description="'skip' does not fire while a run started by this trigger is still active."
     )
-    filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
+    filter: str | None = Field(
+        None,
+        description="Expression over `event`; fire only when true. `lists['<name>']` holds the keys of a TargetList, "
+        "e.g. \"{{ event.repository.full_name in lists['core-repos'] }}\".",
+    )
     match: dict[str, Any] = Field(
         default_factory=dict,
         description="Structured filters the connection's integration understands (Slack: channels, mentioned, "
@@ -669,18 +673,47 @@ class TriggerSpec(Model):
         return self
 
 
+class TargetListSpec(Model):
+    """A reusable, named set of targets (e.g. repositories) for campaigns and trigger filters.
+
+    - ``items`` alone: exactly these targets, as written.
+    - ``connection`` + ``resource`` alone: a saved query, resolved each time it is used.
+    - both: exactly the listed targets, each looked up through the query so it carries the
+      integration's details (a listed target the query does not return is reported missing).
+    """
+
+    description: str | None = None
+    connection: str | None = Field(None, description="Connection to query or look targets up through.")
+    resource: str | None = Field(None, description="Integration resource, e.g. 'repository'.")
+    filter: dict[str, Any] = Field(default_factory=dict, description="Query filter, e.g. {org: acme}.")
+    items: list[dict[str, Any]] | None = Field(
+        None, description="The targets, e.g. [{full_name: acme/api}]; with a connection, looked up by key."
+    )
+    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target, e.g. '{{ target.full_name }}'.")
+
+    @model_validator(mode="after")
+    def _check(self) -> TargetListSpec:
+        if self.items is None and not (self.connection and self.resource):
+            raise ValueError("a target list needs 'items', or 'connection' + 'resource' (or both)")
+        if bool(self.connection) != bool(self.resource):
+            raise ValueError("'connection' and 'resource' go together")
+        return self
+
+
 class TargetSelector(Model):
     connection: str | None = None
     resource: str | None = Field(None, description="Integration resource, e.g. 'repository'.")
     filter: dict[str, Any] = Field(default_factory=dict)
     items: list[dict[str, Any]] | None = Field(None, description="Static targets instead of a query.")
-    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target.")
+    list_: str | None = Field(None, alias="list", description="Name of a TargetList to use instead of items or a query.")
+    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target (a list brings its own).")
     limit: int | None = Field(None, ge=1)
 
     @model_validator(mode="after")
     def _check(self) -> TargetSelector:
-        if self.items is None and not (self.connection and self.resource):
-            raise ValueError("targets need either 'items' or 'connection' + 'resource'")
+        sources = sum((self.items is not None, bool(self.connection and self.resource), bool(self.list_)))
+        if sources != 1:
+            raise ValueError("targets need exactly one of 'list', 'items', or 'connection' + 'resource'")
         return self
 
 
@@ -1186,6 +1219,12 @@ class Campaign(ResourceBase):
     plural: ClassVar[str] = "campaigns"
 
 
+class TargetList(ResourceBase):
+    kind: Literal["TargetList"] = "TargetList"
+    spec: TargetListSpec
+    plural: ClassVar[str] = "target-lists"
+
+
 class Identity(ResourceBase):
     kind: Literal["Identity"] = "Identity"
     spec: IdentitySpec
@@ -1248,6 +1287,7 @@ AnyResource = Annotated[
     | Connection
     | Trigger
     | Campaign
+    | TargetList
     | Identity
     | CloudIdentity
     | Gateway
@@ -1263,7 +1303,7 @@ AnyResource = Annotated[
 RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
-        Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
+        Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign, TargetList,
         Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform, CustomIntegration,
     )
 }

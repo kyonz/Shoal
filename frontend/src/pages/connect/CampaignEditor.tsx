@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Database, Eye, List, Rocket, Save, Trash2 } from "lucide-react";
+import { Database, Eye, List, ListChecks, Rocket, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui";
 import { relTime } from "@/lib/format";
 import { useCampaignRuns, useLaunchCampaign } from "./Campaigns";
+import { TargetListResult, resolveTargetList } from "./TargetListPreview";
 import { ChoiceCard, Crumb, ErrorList, ExprInput, NAME_RE, VersionsPanel, YamlPanel, useConnectionCapabilities, useYamlSync } from "./shared";
 
 interface Targets {
@@ -37,6 +38,8 @@ interface Targets {
   resource?: string;
   filter?: Record<string, unknown>;
   items?: Record<string, unknown>[];
+  /** A TargetList by name; it brings its own targets and key. */
+  list?: string;
   key?: string;
   limit?: number;
 }
@@ -56,7 +59,13 @@ interface Spec {
 
 function clean(spec: Spec): Record<string, unknown> {
   const t: Targets = { ...spec.targets };
-  if (t.items) {
+  if (t.list !== undefined) {
+    delete t.connection;
+    delete t.resource;
+    delete t.filter;
+    delete t.items;
+    delete t.key;
+  } else if (t.items) {
     delete t.connection;
     delete t.resource;
     delete t.filter;
@@ -83,6 +92,7 @@ export default function CampaignEditor() {
   const existing = useResource("campaigns", ns, routeName);
   const workflows = useResources("workflows", ns, { enabled: can("workflows:read", ns) });
   const connections = useResources("connections", ns, { enabled: can("connections:read", ns) });
+  const targetLists = useResources("target-lists", ns, { enabled: can("target-lists:read", ns) });
   const integrations = useIntegrations();
   const put = usePutResource("campaigns", ns);
   const del = useDeleteResource("campaigns", ns);
@@ -110,7 +120,7 @@ export default function CampaignEditor() {
 
   const setTargets = (patch: Partial<Targets>) => setSpec((s) => ({ ...s, targets: { ...s.targets, ...patch } }));
   const setPolicy = (patch: Partial<Policy>) => setSpec((s) => ({ ...s, policy: { ...s.policy, ...patch } }));
-  const mode: "query" | "items" = spec.targets.items ? "items" : "query";
+  const mode: "query" | "items" | "list" = spec.targets.list !== undefined ? "list" : spec.targets.items ? "items" : "query";
 
   const conn = connections.data?.find((c) => c.metadata.name === spec.targets.connection);
   const catalog = integrations.data?.find((i) => i.key === conn?.spec.integration);
@@ -240,15 +250,22 @@ export default function CampaignEditor() {
                 <Card>
                   <CardHeader title="Targets" description="What the workflow fans out over. Targets are snapshotted at launch, so the set is reproducible." />
                   <div className="space-y-3.5 p-4">
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <ChoiceCard selected={mode === "query"} onClick={() => setTargets({ items: undefined })} icon={<Database />} title="Query an integration" description="e.g. every GitHub repository matching a filter." />
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <ChoiceCard
+                        selected={mode === "list"}
+                        onClick={() => setTargets({ list: spec.targets.list ?? targetLists.data?.[0]?.metadata.name ?? "", items: undefined })}
+                        icon={<ListChecks />}
+                        title="A target list"
+                        description="A saved list (e.g. your team's repos) shared with other campaigns and triggers."
+                      />
+                      <ChoiceCard selected={mode === "query"} onClick={() => setTargets({ items: undefined, list: undefined })} icon={<Database />} title="Query an integration" description="e.g. every GitHub repository matching a filter." />
                       <ChoiceCard
                         selected={mode === "items"}
                         onClick={() => {
                           try {
-                            setTargets({ items: JSON.parse(itemsText) });
+                            setTargets({ items: JSON.parse(itemsText), list: undefined });
                           } catch {
-                            setTargets({ items: [] });
+                            setTargets({ items: [], list: undefined });
                           }
                         }}
                         icon={<List />}
@@ -256,7 +273,33 @@ export default function CampaignEditor() {
                         description="Paste the targets as a JSON array of objects."
                       />
                     </div>
-                    {mode === "query" ? (
+                    {mode === "list" ? (
+                      <Field
+                        label="Target list"
+                        required
+                        description={
+                          <>
+                            Lists are kept under{" "}
+                            <Link to={nsPath(ns, "target-lists")} className="text-accent hover:underline">
+                              Target lists
+                            </Link>
+                            ; the campaign uses the list as it is at launch.
+                          </>
+                        }
+                      >
+                        <NativeSelect value={spec.targets.list ?? ""} onChange={(e) => setTargets({ list: e.target.value })}>
+                          <option value="">Choose a list…</option>
+                          {spec.targets.list && !targetLists.isLoading && !targetLists.data?.some((l) => l.metadata.name === spec.targets.list) && (
+                            <option value={spec.targets.list}>{spec.targets.list} (not found)</option>
+                          )}
+                          {(targetLists.data ?? []).map((l) => (
+                            <option key={l.metadata.name} value={l.metadata.name}>
+                              {l.metadata.name}
+                            </option>
+                          ))}
+                        </NativeSelect>
+                      </Field>
+                    ) : mode === "query" ? (
                       <>
                         <div className="grid gap-3.5 sm:grid-cols-2">
                           <Field label="Connection" required>
@@ -310,10 +353,12 @@ export default function CampaignEditor() {
                         </div>
                       </Field>
                     )}
-                    <div className="grid gap-3.5 sm:grid-cols-[1fr_160px]">
-                      <Field label="Target key" description="A stable id per target, used for dedupe and the dashboard.">
-                        <ExprInput value={spec.targets.key ?? ""} onChange={(v) => setTargets({ key: v || undefined })} placeholder="{{ target.id }}" />
-                      </Field>
+                    <div className={cn("grid gap-3.5", mode === "list" ? "sm:w-[160px]" : "sm:grid-cols-[1fr_160px]")}>
+                      {mode !== "list" && (
+                        <Field label="Target key" description="A stable id per target, used for dedupe and the dashboard.">
+                          <ExprInput value={spec.targets.key ?? ""} onChange={(v) => setTargets({ key: v || undefined })} placeholder="{{ target.id }}" />
+                        </Field>
+                      )}
                       <Field label="Limit" hint="optional">
                         <Input type="number" min={1} value={spec.targets.limit ?? ""} onChange={(e) => setTargets({ limit: e.target.value ? Number(e.target.value) : undefined })} placeholder="All" />
                       </Field>
@@ -383,6 +428,7 @@ export default function CampaignEditor() {
           </Tabs>
         </div>
         <aside className="space-y-4">
+          {mode === "list" && spec.targets.list && <TargetListPreview ns={ns} name={spec.targets.list} />}
           {mode === "query" && <TargetPreview ns={ns} connection={spec.targets.connection} resource={spec.targets.resource} filter={spec.targets.filter} />}
           {mode === "items" && (
             <Card className="p-4 text-[13px] text-muted">
@@ -447,6 +493,23 @@ function TargetPreview({ ns, connection, resource, filter }: { ns: string; conne
             </ul>
           </div>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/** What a saved target list resolves to now. */
+function TargetListPreview({ ns, name }: { ns: string; name: string }) {
+  const query = useMutation({ mutationFn: () => resolveTargetList(ns, name) });
+  return (
+    <Card className="sticky top-4">
+      <CardHeader title="Preview targets" description={<>Resolves <code className="font-mono">{name}</code> now.</>} />
+      <div className="space-y-3 p-4">
+        <Button className="w-full justify-center" icon={<Eye className="size-4" />} loading={query.isPending} onClick={() => query.mutate()}>
+          Preview
+        </Button>
+        <ErrorList error={query.error} />
+        {query.data && <TargetListResult result={query.data} limit={10} />}
       </div>
     </Card>
   );

@@ -62,6 +62,7 @@ first release must satisfy.
 | **Trigger** | A binding: event source (webhook / schedule / poll) + filter → workflow inputs. |
 | **Blueprint** | A versioned, parameterised package of resources others install and wire up. |
 | **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
+| **Target list** | A named, shared set of targets (e.g. the repos a team owns) that campaigns run over and trigger filters check. |
 | **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
 | **Cloud identity** | A cloud role a namespace brings (an AWS IAM role), granted to specific workflows and agents; steps get short-lived credentials for it. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
@@ -748,6 +749,40 @@ spec:
   adding targets later.
 - Progress: per-target status, aggregate counts, cost, and outcome summaries
   (`steps.*.output`) shown in a dashboard.
+
+### Target lists
+
+A **TargetList** names a set of targets once so several campaigns and triggers
+can share it, e.g. "the repos the platform team owns".
+
+```yaml
+apiVersion: shoal.dev/v1
+kind: TargetList
+metadata: {name: core-repos}
+spec:
+  connection: github-acme        # optional: look the items up through a query
+  resource: repository
+  filter: {org: acme, archived: false}
+  key: "{{ target.full_name }}"
+  items:                         # optional: exactly these targets
+    - {full_name: acme/api}
+    - {full_name: acme/web}
+```
+
+- `items` alone are the targets as written. `connection` + `resource` alone are
+  a saved query, run each time the list is used. With both, the listed targets
+  are looked up through the query, so each carries the integration's details
+  (default branch, language, …); a listed target the query does not return
+  (renamed, archived, no access) is reported as missing.
+- A campaign uses it with `targets: {list: core-repos}`. Missing targets become
+  `skipped` targets with a reason, so they show up on the dashboard.
+- Trigger `filter`, `inputs` and `dedupe_key` expressions see the keys of the
+  lists they name as `lists['core-repos']` (or `lists.core_repos`), e.g.
+  `{{ event.repository.full_name in lists['core-repos'] }}`. Trigger evaluation
+  caches a resolved list for 60 seconds; a list that does not exist is a
+  delivery error.
+- `GET /v1/namespaces/{ns}/target-lists/{name}/resolve` returns what a list
+  resolves to now; `POST …/target-lists/preview` resolves an unsaved spec.
 
 ## 10.1 Blueprints and the marketplace
 

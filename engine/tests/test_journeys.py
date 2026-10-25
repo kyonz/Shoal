@@ -19,9 +19,11 @@ import pytest
 
 from shoal.config import Settings
 from shoal.core import clock
+from shoal.core.ids import new_id
 from shoal.core.loader import load_path
-from shoal.core.models import Agent
+from shoal.core.models import Agent, parse_resource
 from shoal.engine import Engine
+from shoal.integrations.base import IntegrationEvent
 
 from .fakes import FakeGitHub, FakeJira, Router, comment_text
 
@@ -70,7 +72,7 @@ def sign(secret: str, body: bytes) -> str:
 async def test_examples_are_valid():
     resources = load_path(EXAMPLES)
     kinds = sorted({r.to_document()["kind"] for r in resources})
-    assert kinds == ["Agent", "Campaign", "Connection", "Gateway", "SandboxProfile", "Skill", "Trigger", "Workflow"]
+    assert kinds == ["Agent", "Campaign", "Connection", "Gateway", "SandboxProfile", "Skill", "TargetList", "Trigger", "Workflow"]
 
 
 async def test_journey_github_org_uplift_campaign(world):
@@ -310,3 +312,53 @@ async def test_journey_bundled_pr_review(world):
     github.push("acme/api", 1, "def")
     assert (await deliver(pull_request_event("synchronize", "def"), "d4"))["triggers"][0]["status"] == "fired"
     assert (await deliver(pull_request_event("synchronize", "def"), "d5"))["triggers"][0]["status"] == "duplicate"
+
+
+async def test_target_list_campaign_and_trigger_filter(world):
+    engine, tenant, github, _ = world
+    github.add_repo("acme/api")
+    github.add_repo("acme/web")
+    github.add_repo("acme/other")
+    await apply_examples(engine, tenant.id, "github-uplift", agent_outputs={"uplift": {"changed": False}})
+    # The list names a repo that has since gone: it is reported missing, and its target is skipped.
+    row = await engine.store.get_resource_row(tenant.id, "TargetList", "core-repos")
+    doc = dict(row.document)
+    doc["spec"] = {**doc["spec"], "items": [*doc["spec"]["items"], {"full_name": "acme/gone"}]}
+    await engine.store.apply_resource(tenant.id, parse_resource(doc))
+
+    resolved = await engine.target_lists.resolve(tenant.id, "core-repos")
+    assert list(resolved.targets) == ["acme/api", "acme/web"]
+    assert resolved.targets["acme/api"]["default_branch"] == "main"  # looked up: carries the repo's details
+    assert resolved.missing == ["acme/gone"]
+
+    campaign = await engine.campaigns.launch(tenant.id, "core-uplift")
+    targets = {t.key: t for t in await engine.store.list_targets(tenant.id, campaign.id)}
+    assert sorted(targets) == ["acme/api", "acme/gone", "acme/web"]
+    assert targets["acme/gone"].status == "skipped"
+    assert targets["acme/api"].data["default_branch"] == "main"
+    assert await engine.campaigns.add_targets(tenant.id, campaign.id, [{"full_name": "acme/api"}]) == 0  # keyed by the list
+
+    trigger = await engine.store.get_resource(tenant.id, "Trigger", "core-repo-push")
+    def push(repo: str) -> IntegrationEvent:
+        return IntegrationEvent(type="push", id=new_id("evt"), data={"ref": "refs/heads/main", "repository": {"full_name": repo}})
+    assert (await engine.triggers.check(tenant.id, trigger, push("acme/web")))["matched"] is True
+    assert (await engine.triggers.check(tenant.id, trigger, push("acme/other")))["matched"] is False
+
+    await engine.store.delete_resource(tenant.id, "TargetList", "core-repos")
+    outcome = await engine.triggers.check(tenant.id, trigger, push("acme/web"))
+    assert outcome["error"] and "target list 'core-repos' not found" in outcome["reason"]
+
+
+async def test_target_list_models():
+    from shoal.campaigns.target_lists import referenced_lists
+    from shoal.core.models import TargetListSpec, TargetSelector
+
+    with pytest.raises(ValueError, match="needs 'items'"):
+        TargetListSpec.model_validate({})
+    with pytest.raises(ValueError, match="go together"):
+        TargetListSpec.model_validate({"connection": "gh", "items": []})
+    with pytest.raises(ValueError, match="exactly one"):
+        TargetSelector.model_validate({"list": "core", "items": []})
+    selector = TargetSelector.model_validate({"list": "core"})
+    assert selector.list_ == "core" and selector.model_dump(by_alias=True, exclude_none=True)["list"] == "core"
+    assert referenced_lists("{{ a in lists.core and b in lists['team-a'] }}") == ["core", "team-a"]
