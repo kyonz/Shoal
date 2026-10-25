@@ -40,11 +40,13 @@ eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_he
 integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_args_is_help=True)
 db_app = typer.Typer(help="Database schema migrations (runs where the server runs; uses SHOAL_DATABASE_URL).", no_args_is_help=True)
 federation_app = typer.Typer(help="Federated tenants: link them on the hub, join from the member.", no_args_is_help=True)
+skills_app = typer.Typer(help="Browse skill sources (marketplaces) and import, upgrade or roll back skills.", no_args_is_help=True)
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(tenants_app, name="tenants")
 app.add_typer(eval_app, name="eval")
 app.add_typer(integrations_app, name="integrations")
 app.add_typer(federation_app, name="federation")
+app.add_typer(skills_app, name="skills")
 app.add_typer(db_app, name="db")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -814,6 +816,161 @@ def federation_leave(ctx: typer.Context) -> None:
     with api(ctx) as client:
         client.request("DELETE", "/v1/federation/membership")
     console.print("left the hub")
+
+
+# --------------------------------------------------------------------------- skills
+
+
+def _skill_ns(client: Client) -> str:
+    return f"/v1/namespaces/{quote(client.target.namespace)}"
+
+
+def _print_changes(changes: list[dict[str, Any]]) -> None:
+    for change in changes:
+        style = {"add": "green", "remove": "red"}.get(change["op"], "yellow")
+        line = f"{change['op']:<8} {change['path']}"
+        if change["op"] == "replace" and isinstance(change.get("to"), str | int | float) and len(str(change.get("to"))) < 60:
+            line += f": {change.get('from')!s} -> {change.get('to')!s}"
+        console.print(escape(line), style=style)
+
+
+def _print_import(result: dict[str, Any]) -> None:
+    previous = f" (was {result['previous_version']})" if result.get("previous_version") else ""
+    verb = "would be" if result.get("dry_run") else "is"
+    console.print(f"skill/{escape(result['name'])} {verb} {result['outcome']}: {escape(result['source'])}/"
+                  f"{escape(result['skill_id'])} {escape(result['version'])}{escape(previous)}")
+    _print_changes(result.get("changes") or [])
+    for path in result.get("skipped_files") or []:
+        err.print(f"[yellow]skipped[/yellow] {escape(path)} (binary or too large)")
+
+
+@skills_app.command("sources")
+def skills_sources(ctx: typer.Context, namespace: Namespace = None, output: Output = Format.table) -> None:
+    """List the skill sources this namespace can browse."""
+    with api(ctx, namespace) as client:
+        emit(client.get(f"{_skill_ns(client)}/skill-sources"), output, [
+            ("NAME", lambda s: s["name"]), ("TYPE", lambda s: s["source"]), ("TITLE", lambda s: s["title"]),
+        ])
+
+
+@skills_app.command("browse")
+def skills_browse(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="Skill source name.")],
+    query: Annotated[str | None, typer.Option("--query", "-q", help="Search text.")] = None,
+    limit: Annotated[int, typer.Option(help="Skills per page.")] = 50,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """List or search a source's skills."""
+    with api(ctx, namespace) as client:
+        page = client.get(f"{_skill_ns(client)}/skill-sources/{quote(source)}/skills", q=query, limit=limit)
+    emit(page["items"], output, [
+        ("ID", lambda s: s["id"]), ("VERSION", lambda s: s.get("version") or ""),
+        ("INSTALLED", lambda s: ", ".join(i["name"] for i in s["installed"])), ("DESCRIPTION", lambda s: s["description"][:80]),
+    ], name=lambda s: s["id"])
+    if page.get("next_cursor") and output is Format.table:
+        err.print("more skills: narrow the search with --query", style="dim")
+
+
+@skills_app.command("show")
+def skills_show(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="Skill source name.")],
+    skill: Annotated[str, typer.Argument(help="Skill id within the source.")],
+    version: Annotated[str | None, typer.Option(help="Version or ref (default: what the source is pinned to).")] = None,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Show a skill's SKILL.md, files and version."""
+    with api(ctx, namespace) as client:
+        detail = client.get(f"{_skill_ns(client)}/skill-sources/{quote(source)}/skills/{quote(skill, safe='/')}", version=version)
+    if output is not Format.table:
+        emit(detail, output)
+        return
+    console.print(f"[bold]{escape(detail['name'])}[/bold] {escape(detail['version'])}"
+                  + (f" ({detail['ref'][:12]})" if detail.get("ref") else ""))
+    console.print(escape(detail["description"]))
+    for name in sorted(detail["files"]):
+        console.print(f"  {escape(name)}", style="dim")
+    console.print()
+    console.print(escape(detail["instructions"]))
+
+
+@skills_app.command("import")
+def skills_import(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="Skill source name.")],
+    skill: Annotated[str, typer.Argument(help="Skill id within the source.")],
+    name: Annotated[str | None, typer.Option(help="Skill resource name (default: the skill's name).")] = None,
+    version: Annotated[str | None, typer.Option(help="Version or ref to import.")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would change without writing.")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """Import a skill from a source into the namespace."""
+    body = {"source": source, "skill": skill, "name": name, "version": version, "dry_run": dry_run}
+    with api(ctx, namespace) as client:
+        result = client.request("POST", f"{_skill_ns(client)}/skill-imports", json=body)
+    if output is not Format.table:
+        emit(result, output)
+        return
+    _print_import(result)
+
+
+@skills_app.command("imports")
+def skills_imports(
+    ctx: typer.Context,
+    check: Annotated[bool, typer.Option("--check", help="Ask each source whether there is a newer version.")] = False,
+    namespace: Namespace = None,
+    output: Output = Format.table,
+) -> None:
+    """List skills imported from skill sources."""
+    columns = [("NAME", lambda s: s["name"]), ("SOURCE", lambda s: s["source"]), ("SKILL", lambda s: s["skill_id"]),
+               ("VERSION", lambda s: s["version"])]
+    if check:
+        columns.append(("LATEST", lambda s: s.get("latest_version") or s.get("check_error") or ""))
+        columns.append(("UPDATE", lambda s: {True: "yes", False: "no"}.get(s.get("update_available"), "?")))
+    with api(ctx, namespace) as client:
+        emit(client.get(f"{_skill_ns(client)}/skill-imports", check=check or None), output, columns)
+
+
+@skills_app.command("upgrade")
+def skills_upgrade(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Imported skill resource name.")],
+    version: Annotated[str | None, typer.Option(help="Version or ref to move to (default: the source's current one).")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Only show the diff.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    namespace: Namespace = None,
+) -> None:
+    """Re-import a skill from its source, showing the diff first."""
+    with api(ctx, namespace) as client:
+        path = f"{_skill_ns(client)}/skill-imports/{quote(name)}/upgrade"
+        preview = client.request("POST", path, json={"version": version, "dry_run": True})
+        _print_import(preview)
+        if dry_run or preview["outcome"] == "unchanged":
+            return
+        if not yes and not typer.confirm("Apply this upgrade?"):
+            raise typer.Exit(1)
+        result = client.request("POST", path, json={"version": version})
+    console.print(f"skill/{escape(name)} is now {escape(result['version'])} (resource version {result['resource_version']}); "
+                  f"undo with: shoal skills rollback {escape(name)} {result['resource_version'] - 1}", style="dim")
+
+
+@skills_app.command("rollback")
+def skills_rollback(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Skill resource name.")],
+    version: Annotated[int, typer.Argument(help="Resource version to restore (see 'shoal get skill NAME -o yaml').")],
+    namespace: Namespace = None,
+) -> None:
+    """Restore an earlier version of a skill (as a new version)."""
+    with api(ctx, namespace) as client:
+        row = client.request("POST", f"{_skill_ns(client)}/skills/{quote(name)}/rollback", json={"version": version})
+    labels = row["metadata"].get("labels") or {}
+    origin = f" ({labels['shoal.dev/skill-version']})" if "shoal.dev/skill-version" in labels else ""
+    console.print(f"skill/{escape(name)} restored to version {version}{escape(origin)} as version {row['metadata']['version']}")
 
 
 # --------------------------------------------------------------------------- server processes

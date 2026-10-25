@@ -251,3 +251,43 @@ def test_integrations_new(tmp_path):
     assert again.exit_code == 1 and "not empty" in again.output
     bad = runner.invoke(app, ["integrations", "new", "9lives", "--dest", str(tmp_path / "x")])
     assert bad.exit_code == 1
+
+
+def test_skills_import_and_upgrade(cli, tenant_key, server, tmp_path):
+    import subprocess
+
+    repo = tmp_path / "skills"
+    (repo / "pdf").mkdir(parents=True)
+    (repo / "pdf" / "SKILL.md").write_text("---\nname: pdf\ndescription: PDFs.\nversion: 1.0.0\n---\nv1\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)}
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "v1"], check=True, env=env)
+    engine = server.app.state.engine
+    engine.settings.skill_source_allow_local = True
+    engine.settings.skill_source_cache_dir = str(tmp_path / "cache")
+
+    auth = ("--token", tenant_key)
+    (tmp_path / "source.yaml").write_text(
+        f"apiVersion: shoal.dev/v1\nkind: SkillSource\nmetadata: {{name: acme}}\n"
+        f"spec: {{source: git, config: {{url: '{repo}', refresh_seconds: 0}}}}\n"
+    )
+    assert cli(*auth, "apply", "-f", str(tmp_path / "source.yaml")).exit_code == 0
+    assert cli(*auth, "get", "skill-sources", "-o", "name").stdout.split() == ["skill-sources/acme"]
+    browsed = cli(*auth, "skills", "browse", "acme", "-o", "name")
+    assert browsed.exit_code == 0, browsed.output
+    assert browsed.stdout.split() == ["pdf"]
+    imported = cli(*auth, "skills", "import", "acme", "pdf")
+    assert imported.exit_code == 0, imported.output
+    assert "skill/pdf is created" in imported.stdout
+
+    (repo / "pdf" / "SKILL.md").write_text("---\nname: pdf\ndescription: PDFs.\nversion: 1.1.0\n---\nv2\n")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qam", "v2"], check=True, env=env)
+    checked = json.loads(cli(*auth, "skills", "imports", "--check", "-o", "json").stdout)
+    assert checked[0]["update_available"] is True
+    upgraded = cli(*auth, "skills", "upgrade", "pdf", input="y\n")
+    assert upgraded.exit_code == 0, upgraded.output
+    assert "(was 1.0.0)" in upgraded.stdout and "/spec/instructions" in upgraded.stdout
+    rolled = cli(*auth, "skills", "rollback", "pdf", "1")
+    assert rolled.exit_code == 0 and "(1.0.0)" in rolled.stdout
