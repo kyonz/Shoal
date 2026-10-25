@@ -35,6 +35,13 @@ uv run ruff check .              # lint
 SHOAL_ADMIN_TOKEN=dev uv run shoal serve   # API + worker on 127.0.0.1:8080 with SQLite
 ```
 
+The schema is managed with Alembic migrations in `engine/shoal/store/migrations/`;
+the server applies them at start-up (`shoal db upgrade` does it by hand). After
+changing `shoal/store/tables.py`, generate a migration with
+`SHOAL_DATABASE_URL=… uv run shoal db revision -m "what changed"` against an
+up-to-date database and review it; `tests/test_migrations.py` fails while the
+models and migrations disagree.
+
 Tests use SQLite by default. To run them against Postgres as well, point
 `SHOAL_TEST_DATABASE_URL` at a scratch database (its `public` schema is reset
 for every test), e.g.

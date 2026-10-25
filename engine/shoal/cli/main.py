@@ -38,12 +38,14 @@ secrets_app = typer.Typer(help="Manage namespace secrets (values are write-only)
 tenants_app = typer.Typer(help="Create and list tenants (needs the system admin token).", no_args_is_help=True)
 eval_app = typer.Typer(help="Run evals and gate on their scores.", no_args_is_help=True)
 integrations_app = typer.Typer(help="Build integrations with the open SDK.", no_args_is_help=True)
+db_app = typer.Typer(help="Database schema migrations (runs where the server runs; uses SHOAL_DATABASE_URL).", no_args_is_help=True)
 federation_app = typer.Typer(help="Federated tenants: link them on the hub, join from the member.", no_args_is_help=True)
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(tenants_app, name="tenants")
 app.add_typer(eval_app, name="eval")
 app.add_typer(integrations_app, name="integrations")
 app.add_typer(federation_app, name="federation")
+app.add_typer(db_app, name="db")
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -667,6 +669,59 @@ def tenants_list(ctx: typer.Context, output: Output = Format.table) -> None:
     with api(ctx) as client:
         emit(client.get("/v1/tenants"), output, [("SLUG", lambda t: t["slug"]), ("NAME", lambda t: t.get("name")),
                                                   ("AGE", lambda t: age(t.get("created_at")))], name=lambda t: t["slug"])
+
+
+# --------------------------------------------------------------------------- database
+
+
+async def _with_connection(fn: Any) -> Any:
+    from shoal.config import get_settings
+    from shoal.store.store import Store
+
+    store = Store(get_settings().database_url)
+    try:
+        async with store.engine.begin() as conn:
+            return await conn.run_sync(fn)
+    finally:
+        await store.close()
+
+
+@db_app.command("upgrade")
+def db_upgrade(revision: Annotated[str, typer.Argument(help="Target revision.")] = "head") -> None:
+    """Apply migrations. The server also does this at start-up."""
+    import asyncio
+
+    from shoal.config import get_settings
+    from shoal.store.store import Store
+
+    async def run() -> str | None:
+        store = Store(get_settings().database_url)
+        try:
+            return await store.migrate(revision)
+        finally:
+            await store.close()
+
+    console.print(f"database at revision {asyncio.run(run())}")
+
+
+@db_app.command("current")
+def db_current() -> None:
+    """Show the database's migration revision."""
+    import asyncio
+
+    from shoal.store import migrate
+
+    console.print(asyncio.run(_with_connection(migrate.current)) or "not migrated")
+
+
+@db_app.command("revision")
+def db_revision(message: Annotated[str, typer.Option("-m", "--message", help="What changed.")]) -> None:
+    """Developers: autogenerate a migration from model changes (run against an up-to-date database)."""
+    import asyncio
+
+    from shoal.store import migrate
+
+    asyncio.run(_with_connection(lambda conn: migrate.revision(conn, message)))
 
 
 # --------------------------------------------------------------------------- federation

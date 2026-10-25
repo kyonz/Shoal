@@ -51,10 +51,26 @@ class Store:
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def create_all(self) -> None:
+        """Bring the schema up to date (Alembic migrations)."""
+        await self.migrate()
+
+    async def migrate(self, revision: str = "head") -> str | None:
+        from sqlalchemy import inspect
+
+        from shoal.store import migrate
+
         async with self.engine.begin() as conn:
             if self.is_sqlite:
                 await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-            await conn.run_sync(t.Base.metadata.create_all)
+
+            def run(sync_conn: Any) -> str | None:
+                if migrate.current(sync_conn) is None and inspect(sync_conn).has_table("tenants"):
+                    # created before migrations existed (pre-release create_all): adopt it as the baseline
+                    migrate.stamp(sync_conn, "0001")
+                migrate.upgrade(sync_conn, revision)
+                return migrate.current(sync_conn)
+
+            return await conn.run_sync(run)
 
     async def close(self) -> None:
         await self.engine.dispose()
