@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -19,6 +20,7 @@ from shoal.integrations.slack import SlackIntegration
 from shoal.sdk.testing import IntegrationContract, IntegrationHarness, MockSlack, slack_request
 
 SECRET = "slack-signing-secret"
+EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "slack-approval"
 
 
 class TestSlackContract(IntegrationContract):
@@ -337,12 +339,10 @@ async def test_webhook_endpoint_answers_slack(world, slack):
 
 async def test_example_ship_workflow(world, slack):
     """examples/slack-approval end to end: /shoal ship, a form answer, an approval with a comment, the announcement."""
-    from pathlib import Path
-
     from shoal.core.loader import load_path
 
     engine, tenant = world
-    for resource in load_path(Path(__file__).resolve().parents[2] / "examples" / "slack-approval"):
+    for resource in load_path(EXAMPLE):
         if resource.to_document()["kind"] != "Connection":  # keep the test connection
             await engine.store.apply_resource(tenant.id, resource)
     group = await engine.directory.create_group(tenant.id, "release-managers")
