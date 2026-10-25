@@ -95,6 +95,7 @@ class Executor:
             initiator = initiator if initiator is not None else parent.initiator
         if initiator is None:
             initiator = await self.engine.identities.resolve(tenant_id, actor=started_by, source="api")
+        await self.engine.orchestrators.refresh()  # an orchestrator switched in the instance console
         now = clock.now()
         run = t.Run(
             id=new_id("run"),

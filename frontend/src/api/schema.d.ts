@@ -383,6 +383,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/instance/orchestrator": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What drives runs: the built-in orchestrator or Temporal, and where that is set */
+        get: operations["get_orchestrator_v1_instance_orchestrator_get"];
+        /** Save a Temporal connection and choose what new runs start on (overrides SHOAL_ORCHESTRATOR) */
+        put: operations["put_orchestrator_v1_instance_orchestrator_put"];
+        post?: never;
+        /** Forget the console setting and go back to SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* */
+        delete: operations["reset_orchestrator_v1_instance_orchestrator_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/orchestrator/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Try a Temporal connection without saving it */
+        post: operations["test_orchestrator_v1_instance_orchestrator_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/providers": {
         parameters: {
             query?: never;
@@ -5089,6 +5125,81 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * OrchestratorEnvironment
+         * @description What SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* say (used while nothing is saved in the console).
+         */
+        OrchestratorEnvironment: {
+            /** Orchestrator */
+            orchestrator: string;
+            /** Temporal Address */
+            temporal_address: string;
+            /** Temporal Namespace */
+            temporal_namespace: string;
+            /** Temporal Task Queue */
+            temporal_task_queue: string;
+            /**
+             * Temporal Tls
+             * @description TLS, an API key or client certificates are configured.
+             */
+            temporal_tls: boolean;
+        };
+        /** OrchestratorSetting */
+        OrchestratorSetting: {
+            /**
+             * Orchestrator
+             * @default builtin
+             * @enum {string}
+             */
+            orchestrator: "builtin" | "temporal";
+            /** @description Saved Temporal connection. Kept when switching back, so Temporal finishes its runs. */
+            temporal?: components["schemas"]["TemporalSettings"] | null;
+        };
+        /** OrchestratorStatus */
+        OrchestratorStatus: {
+            /**
+             * Source
+             * @description Where the orchestrator for new runs comes from.
+             * @enum {string}
+             */
+            source: "environment" | "console";
+            /**
+             * Orchestrator
+             * @description What new runs start on.
+             */
+            orchestrator: string;
+            /**
+             * Driving
+             * @description Every orchestrator this server drives runs with.
+             */
+            driving: string[];
+            /** @description What the instance console saved. */
+            setting?: components["schemas"]["OrchestratorSetting"] | null;
+            environment: components["schemas"]["OrchestratorEnvironment"];
+            /**
+             * Runs
+             * @description Unfinished runs per orchestrator, across every tenant.
+             */
+            runs: {
+                [key: string]: number;
+            };
+            /**
+             * Temporal Installed
+             * @description The temporal extra is installed on this server.
+             */
+            temporal_installed: boolean;
+            /**
+             * Error
+             * @description Why the saved setting could not be applied (e.g. a deleted secret).
+             */
+            error?: string | null;
+            /** Revision */
+            revision?: number | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** Page[AuditOut] */
         Page_AuditOut_: {
             /** Items */
@@ -5807,6 +5918,73 @@ export interface components {
             started_at: string | null;
             /** Finished At */
             finished_at: string | null;
+        };
+        /** TemporalCheck */
+        TemporalCheck: {
+            /** Ok */
+            ok: boolean;
+            /** Detail */
+            detail: string;
+            /** Server Version */
+            server_version?: string | null;
+            /**
+             * Pollers
+             * @description Workers polling the task queue right now.
+             */
+            pollers?: number | null;
+        };
+        /**
+         * TemporalSettings
+         * @description A Temporal connection as the instance console saves it: secrets by name, never their values.
+         */
+        TemporalSettings: {
+            /**
+             * Address
+             * @description Frontend host:port.
+             */
+            address: string;
+            /**
+             * Namespace
+             * @default default
+             */
+            namespace: string;
+            /**
+             * Task Queue
+             * @description One per Shoal installation sharing a namespace.
+             * @default shoal
+             */
+            task_queue: string;
+            /**
+             * Tls
+             * @description TLS without client certificates (implied by an API key or certificates).
+             * @default false
+             */
+            tls: boolean;
+            /**
+             * Secrets Tenant
+             * @description Tenant whose shared namespace holds the secrets below.
+             */
+            secrets_tenant?: string | null;
+            /**
+             * Api Key Secret
+             * @description Secret holding a Temporal Cloud API key.
+             */
+            api_key_secret?: string | null;
+            /**
+             * Tls Cert Secret
+             * @description Secret holding the mTLS client certificate (PEM).
+             */
+            tls_cert_secret?: string | null;
+            /**
+             * Tls Key Secret
+             * @description Secret holding the mTLS client key (PEM).
+             */
+            tls_key_secret?: string | null;
+            /**
+             * Tls Ca Secret
+             * @description Secret holding the CA for the server certificate (PEM).
+             */
+            tls_ca_secret?: string | null;
         };
         /** TenantCreated */
         TenantCreated: {
@@ -6779,6 +6957,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_orchestrator_v1_instance_orchestrator_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+        };
+    };
+    put_orchestrator_v1_instance_orchestrator_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrchestratorSetting"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_orchestrator_v1_instance_orchestrator_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+        };
+    };
+    test_orchestrator_v1_instance_orchestrator_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemporalSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemporalCheck"];
                 };
             };
             /** @description Validation Error */

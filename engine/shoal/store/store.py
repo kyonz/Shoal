@@ -573,6 +573,14 @@ class Store:
         async with self.session() as s:
             return (await s.execute(q)).scalars().all()
 
+    async def unfinished_runs_by_orchestrator(self) -> dict[str, int]:
+        """How many unfinished runs each orchestrator drives (every tenant)."""
+        q = (select(t.Run.orchestrator, func.count())
+             .where(t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]))
+             .group_by(t.Run.orchestrator))
+        async with self.session() as s:
+            return {name: count for name, count in (await s.execute(q)).all()}
+
     async def lease_run(self, run_id: str, worker_id: str, lease: timedelta) -> bool:
         """Take the lease on one run (free, expired or already ours); for orchestrators that schedule runs themselves."""
         now = utcnow()
@@ -950,6 +958,27 @@ class Store:
                 raise NotFound(f"secret '{name}' not found")
 
     # ------------------------------------------------------------------ audit
+
+    # ------------------------------------------------------------------ instance settings
+
+    async def get_instance_setting(self, key: str) -> t.InstanceSetting | None:
+        async with self.session() as s:
+            return await s.get(t.InstanceSetting, key)
+
+    async def put_instance_setting(self, key: str, value: dict[str, Any], *, actor: str | None) -> t.InstanceSetting:
+        async with self.session() as s:
+            row = await s.get(t.InstanceSetting, key)
+            if row is None:
+                row = t.InstanceSetting(key=key, value=value, revision=1, updated_by=actor, updated_at=utcnow())
+                s.add(row)
+            else:
+                row.value, row.revision, row.updated_by, row.updated_at = value, row.revision + 1, actor, utcnow()
+            await s.flush()
+            return row
+
+    async def delete_instance_setting(self, key: str) -> None:
+        async with self.session() as s:
+            await s.execute(delete(t.InstanceSetting).where(t.InstanceSetting.key == key))
 
     async def audit(
         self,
