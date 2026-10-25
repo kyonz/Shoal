@@ -74,6 +74,7 @@ class Accounts:
             async with self.store.session() as s:
                 await s.execute(update(t.User).where(t.User.id == user.id, t.User.account_id.is_(None))
                                 .values(account_id=account.id))
+            self.store.auth_changed()
 
     async def link_matching_users(self, account: t.Account, *, verified_email: str | None) -> None:
         """Link unlinked tenant users that are this person: same identity, or (instance sign-in) same verified email."""
@@ -87,6 +88,7 @@ class Accounts:
                 if user.tenant_id not in linked:  # one user per tenant
                     user.account_id = account.id
                     linked.add(user.tenant_id)
+        self.store.auth_changed()
 
     async def get(self, account_id: str) -> t.Account:
         async with self.store.session() as s:
@@ -117,6 +119,7 @@ class Accounts:
                 raise NotFound(f"account '{account_id}' not found")
             for key, value in values.items():
                 setattr(account, key, value)
+        self.store.auth_changed()  # sign-outs, deactivation and instance roles apply to cached principals at once
         return account
 
     async def memberships(self, account_id: str) -> list[Membership]:

@@ -11,6 +11,7 @@ says which of the two it allows (``connection_scopes``).
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from datetime import timedelta
@@ -229,18 +230,54 @@ class IntegrationManager:
         endpoint = await self.engine.store.webhook_for_connection(tenant_id, connection_name, namespace=row.namespace)
         return f"{self.engine.settings.public_url.rstrip('/')}/v1/hooks/{endpoint.id}"
 
-    async def handle_webhook(self, webhook_id: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
-        """Verify, parse, act on interactions, wake waiting runs and fire matching triggers.
-
-        When the integration answers the delivery itself, its ``WebhookReply`` is under ``reply``.
-        """
+    async def accept_webhook(self, webhook_id: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
+        """Verify a delivery and queue it for a worker; the sender gets its answer without waiting for runs to start."""
         endpoint = await self.engine.store.resolve_webhook(webhook_id)
+        if endpoint is None:
+            raise NotFound("unknown webhook")
+        await self.engine.quotas.check_webhook(endpoint.id)
+        headers = {k.lower(): v for k, v in headers.items()}
+        with use_namespace(endpoint.namespace):
+            ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
+            if not await ctx.integration.verify_webhook(ctx, headers, body):
+                raise InvalidRequest("webhook signature verification failed")
+        if type(ctx.integration).webhook_reply is not Integration.webhook_reply:
+            # the integration answers the delivery itself (a URL check, an interactive message): it cannot wait
+            return await self.handle_webhook(webhook_id, headers, body, verified=True)
+        delivery = await self.engine.store.enqueue_webhook(endpoint, headers, body)
+        return {"queued": True, "delivery": delivery}
+
+    async def process_queued_webhooks(self, limit: int = 50) -> int:
+        """Worker side: parse queued deliveries, wake waiting runs and fire triggers. Returns how many were handled."""
+        store = self.engine.store
+        rows = await store.claim_webhooks(limit=limit, lease=timedelta(minutes=5))
+        for row in rows:
+            body = base64.b64decode(row.body)
+            try:
+                result = await self.handle_webhook(row.webhook_id, row.headers, body, verified=True)
+            except Exception as exc:
+                log.warning("webhook delivery %s failed (attempt %d): %s", row.id, row.attempts, exc)
+                retry = row.attempts < 5 and not isinstance(exc, (NotFound, InvalidRequest))
+                await store.finish_webhook(
+                    row.id, result={"error": str(exc)[:1000]}, failed=not retry,
+                    retry_at=clock.now() + timedelta(seconds=10 * 2**row.attempts) if retry else None,
+                )
+                continue
+            await store.finish_webhook(row.id, result=result)
+        return len(rows)
+
+    async def handle_webhook(
+        self, webhook_id: str, headers: dict[str, str], body: bytes, *, verified: bool = False
+    ) -> dict[str, Any]:
+        """Verify, parse, wake waiting runs and fire matching triggers."""
+        store = self.engine.store
+        endpoint = await (store.get_webhook_endpoint(webhook_id) if verified else store.resolve_webhook(webhook_id))
         if endpoint is None:
             raise NotFound("unknown webhook")
         with use_namespace(endpoint.namespace):
             ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
             headers = {k.lower(): v for k, v in headers.items()}
-            if not await ctx.integration.verify_webhook(ctx, headers, body):
+            if not verified and not await ctx.integration.verify_webhook(ctx, headers, body):
                 raise InvalidRequest("webhook signature verification failed")
             events = await ctx.integration.parse_webhook(ctx, headers, body)
         for event in events:

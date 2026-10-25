@@ -399,6 +399,20 @@ class WorkflowDefaults(Model):
     sandbox: str | None = None
 
 
+MODEL_STEP_TYPES = frozenset({"agent", "decide", "grade"})
+
+
+def calls_models(node: Any) -> bool:
+    """Whether a workflow document (or any part of one) has a step that calls a model."""
+    if isinstance(node, dict):
+        if node.get("type") in MODEL_STEP_TYPES and "id" in node:
+            return True
+        return any(calls_models(v) for v in node.values())
+    if isinstance(node, list):
+        return any(calls_models(v) for v in node)
+    return False
+
+
 class WorkflowSpec(Model):
     description: str | None = None
     inputs: dict[str, ParamSpec] = Field(default_factory=dict)
@@ -806,6 +820,15 @@ def credential_fields(values: dict[str, Any]) -> list[str]:
     return sorted(k for k in values if CREDENTIAL_NAME.search(k))
 
 
+class GatewayLimits(Model):
+    """Pacing for one gateway, shared by every worker. Calls over a limit wait (or use the next candidate)."""
+
+    max_concurrency: int | None = Field(None, ge=1, description="Model calls in flight at once.")
+    requests_per_minute: int | None = Field(None, ge=1)
+    tokens_per_minute: int | None = Field(None, ge=1, description="Input plus output tokens.")
+    max_wait: Duration = Field(timedelta(minutes=5), description="Longest a call waits for capacity before failing.")
+
+
 def endpoint_fields(values: dict[str, Any]) -> list[str]:
     """Settings that choose where a request (and its credentials) goes: ``host``, ``url``, ``api_url``, ..."""
     return sorted(k for k in values if k in ("host", "url") or k.endswith(("_url", "_host")))
@@ -827,6 +850,7 @@ class GatewaySpec(Model):
         default_factory=dict, description="Header name to secret name (in `shared`), e.g. {x-portkey-api-key: portkey-key}."
     )
     config: dict[str, Any] = Field(default_factory=dict)
+    limits: GatewayLimits | None = Field(None, description="Rate and concurrency limits, e.g. your provider tier's.")
 
     @model_validator(mode="after")
     def _no_clear_text_credentials(self) -> GatewaySpec:

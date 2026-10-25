@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,7 @@ class Principal:
     key_namespaces: tuple[str, ...] = ()
     hub_subjects: tuple[tuple[str, str], ...] = ()  # (hub_user|hub_group, id) for calls forwarded by a federation hub
     _grants: Grants | None = None
+    _grants_pending: asyncio.Future[Grants] | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def system(cls, tenant_id: str | None = None) -> Principal:
@@ -50,6 +52,20 @@ class Authorizer:
     async def grants(self, principal: Principal) -> Grants:
         if principal._grants is not None:
             return principal._grants
+        # A cached principal is shared by concurrent requests: load its grants once, not once per request.
+        pending = principal._grants_pending
+        if pending is None:
+            pending = principal._grants_pending = asyncio.ensure_future(self._load_grants(principal))
+        try:
+            grants = await asyncio.shield(pending)
+        except Exception:
+            if principal._grants_pending is pending:
+                principal._grants_pending = None  # let the next request try again
+            raise
+        principal._grants = grants
+        return grants
+
+    async def _load_grants(self, principal: Principal) -> Grants:
         grants = Grants()
         if (principal.user_id or principal.hub_subjects) and principal.tenant_id:
             directory = self.engine.directory
@@ -65,7 +81,6 @@ class Authorizer:
                     continue
                 target = grants.tenant if binding.namespace is None else grants.namespaces.setdefault(binding.namespace, set())
                 target.update(role.permissions)
-        principal._grants = grants
         return grants
 
     def _allowed(self, principal: Principal, grants: Grants, permission: str, namespace: str | None) -> bool:

@@ -25,7 +25,11 @@ async def receive(webhook_id: str, request: Request, engine: EngineDep, token: s
     headers = dict(request.headers)
     if token and "x-shoal-token" not in headers:
         headers["x-shoal-token"] = token  # for senders that cannot set headers
-    result = await engine.integrations.handle_webhook(webhook_id, headers, body)
+    if engine.settings.webhook_processing == "queue":
+        result = await engine.integrations.accept_webhook(webhook_id, headers, body)
+    else:
+        await engine.quotas.check_webhook(webhook_id)
+        result = await engine.integrations.handle_webhook(webhook_id, headers, body)
     reply = result.pop("reply", None)
     if reply is None:
         return result

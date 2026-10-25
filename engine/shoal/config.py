@@ -35,6 +35,23 @@ class Settings(BaseSettings):
         "sqlite+aiosqlite:///./shoal.db",
         description="SQLAlchemy async URL, e.g. postgresql+asyncpg://user:pass@host/shoal",
     )
+    database_direct_url: str | None = Field(
+        None,
+        description="Direct database URL (bypassing a pooler such as PgBouncer) for migrations and LISTEN/NOTIFY; "
+        "defaults to database_url.",
+    )
+    database_read_url: str | None = Field(
+        None, description="Read replica for run lists, dashboards and audit queries (they may lag the primary slightly)."
+    )
+    db_pool_size: int = Field(
+        20, ge=1, description="Connections each process keeps open. Size it to worker_concurrency plus a few on workers."
+    )
+    db_max_overflow: int = Field(10, ge=0, description="Extra connections a process may open briefly under load.")
+    db_pool_timeout_seconds: float = Field(10.0, gt=0, description="How long a request waits for a free connection.")
+    db_pool_recycle_seconds: int = Field(1800, ge=0, description="Replace connections older than this (0 keeps them).")
+    db_pgbouncer: bool = Field(
+        False, description="The database URL points at PgBouncer in transaction mode: turn off prepared statement caches."
+    )
     secret_providers: list[str] = Field(
         default_factory=lambda: ["db", "env"],
         description="Secret backends (shoal.secrets plugins) in lookup order; the first writable one stores new secrets.",
@@ -114,7 +131,15 @@ class Settings(BaseSettings):
     aws_audience: str = Field("sts.amazonaws.com", description="Audience of web identity tokens presented to AWS STS.")
 
     worker_id: str | None = None
-    worker_concurrency: int = Field(16, ge=1)
+    worker_concurrency: int = Field(
+        16, ge=1, description="Runs a worker advances at once. Agent steps mostly wait on models, so agent-lane "
+        "workers can run far more (e.g. 200) than CPU-bound ones."
+    )
+    worker_lanes: list[str] = Field(
+        default_factory=lambda: ["standard", "agent"],
+        description="Which runs this worker takes: 'agent' (workflows that call models) and/or 'standard' (the rest). "
+        "Separate pools keep short workflows from queueing behind long agent runs.",
+    )
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
     orchestrator: str = Field(
@@ -137,6 +162,41 @@ class Settings(BaseSettings):
     temporal_build_id: str | None = Field(None, description="Turns on Temporal worker versioning with this build id.")
     temporal_deployment_name: str | None = Field(None, description="Worker deployment name (default: the task queue).")
     temporal_versioning_behavior: Literal["auto-upgrade", "pinned"] = "auto-upgrade"
+    rate_limit_requests_per_second: float = Field(
+        100.0, ge=0, description="API requests per second per tenant, per API process (0: unlimited). Over it: 429."
+    )
+    rate_limit_burst: int = Field(200, ge=0, description="Requests a tenant may burst above the rate.")
+    api_max_concurrent_requests: int = Field(
+        64, ge=0, description="Requests one API process handles at once (0: unlimited). Others wait for a slot."
+    )
+    api_queue_timeout_seconds: float = Field(
+        1.0, ge=0, description="How long a request waits for a slot before the API answers 503 with Retry-After."
+    )
+    max_pending_runs_per_tenant: int = Field(
+        10_000, ge=0, description="Runs waiting for a worker before the API refuses new ones with 429 (0: unlimited)."
+    )
+    max_concurrent_runs_per_tenant: int = Field(
+        0, ge=0, description="Runs of one tenant that workers advance at once (0: unlimited); keeps tenants fair."
+    )
+    auth_cache_seconds: float = Field(
+        5.0, ge=0, description="How long a process reuses an authenticated API key or session (0: check every request)."
+    )
+    webhook_processing: Literal["queue", "inline"] = Field(
+        "queue",
+        description="queue: verify, store and answer 202 at once, and workers process the delivery; "
+        "inline: process it inside the request (the response then lists woken runs and fired triggers).",
+    )
+    webhook_rate_limit_per_second: float = Field(100.0, ge=0, description="Deliveries per second per webhook URL, per API process.")
+    webhook_rate_limit_burst: int = Field(500, ge=0)
+    quota_cache_seconds: float = Field(10.0, ge=0, description="How long processes cache a tenant's quotas.")
+    model_call_lease_seconds: int = Field(
+        900, ge=10, description="A gateway concurrency slot is reclaimed after this long if its worker died."
+    )
+    model_retries: int = Field(
+        4, ge=0, le=20, description="Rounds over a model's candidates when all are rate limited or down, before the step fails."
+    )
+    model_retry_backoff_seconds: float = Field(2.0, ge=0, description="First wait between rounds; doubles each round.")
+    model_retry_max_backoff_seconds: float = Field(60.0, ge=0, description="Longest wait between rounds (Retry-After is capped here).")
     default_sandbox_backend: str = "local"
     default_decision_provider: str = Field("llm", description="Decision provider for decide/grade steps: llm or jev.")
 
@@ -166,6 +226,9 @@ class Settings(BaseSettings):
         return value
 
     audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
+    run_event_retention_days: int = Field(
+        400, ge=0, description="Delete run events older than this once their run has finished (0 keeps them forever)."
+    )
 
     log_level: str = "INFO"
     log_json: bool = False

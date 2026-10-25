@@ -127,6 +127,8 @@ async def patch_tenant(slug: str, body: TenantPatch, ctx: SystemCtxDep) -> Any:
         for key, value in values.items():
             if value is not None or key == "description":
                 setattr(row, key, value)
+    if "status" in values:
+        ctx.engine.store.auth_changed()  # cached principals of a suspended tenant stop working at once
     action = {"suspended": "tenant.suspended", "active": "tenant.resumed"}.get(values.get("status") or "", "tenant.updated")
     await ctx.engine.store.audit(None, ctx.actor, action, slug, **{k: v for k, v in values.items() if k != "description"})
     return await ctx.engine.store.get_tenant(tenant.id)

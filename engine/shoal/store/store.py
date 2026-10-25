@@ -7,14 +7,16 @@ ids and tenant ids together.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import secrets as pysecrets
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -33,6 +35,7 @@ from shoal.store import tables as t
 from shoal.store.tables import utcnow
 
 API_KEY_PREFIX = "shoal"
+EVENTS_CHANNEL = "shoal_run_events"
 
 
 def hash_token(token: str) -> str:
@@ -40,28 +43,70 @@ def hash_token(token: str) -> str:
 
 
 class Store:
-    def __init__(self, url: str, *, echo: bool = False):
+    def __init__(
+        self,
+        url: str,
+        *,
+        echo: bool = False,
+        pool_size: int = 20,
+        max_overflow: int = 10,
+        pool_timeout: float = 10.0,
+        pool_recycle: int = 1800,
+        pgbouncer: bool = False,
+        direct_url: str | None = None,
+        read_url: str | None = None,
+    ):
         kwargs: dict[str, Any] = {"echo": echo}
         if url.startswith("sqlite"):
             kwargs["connect_args"] = {"timeout": 30}
         else:
-            kwargs.update(pool_size=10, max_overflow=20, pool_pre_ping=True)
+            # A pool at least as large as the work a process runs at once, so steady load never churns
+            # overflow connections (each one a new backend and TLS handshake).
+            kwargs.update(
+                pool_size=pool_size, max_overflow=max_overflow, pool_timeout=pool_timeout,
+                pool_recycle=pool_recycle or -1, pool_pre_ping=True,
+            )
+            if pgbouncer:  # transaction pooling hands each transaction a different server connection
+                kwargs["connect_args"] = {
+                    "statement_cache_size": 0,
+                    "prepared_statement_cache_size": 0,
+                    "prepared_statement_name_func": lambda: f"__shoal_{uuid.uuid4().hex}__",
+                }
+        self.url = url
+        self.direct_url = direct_url or url
         self.engine: AsyncEngine = create_async_engine(url, **kwargs)
+        # Dashboards, lists and audit reads can go to a replica; anything that decides what to do next reads the primary.
+        self.read_engine: AsyncEngine = create_async_engine(read_url, **kwargs) if read_url else self.engine
         self.is_sqlite = url.startswith("sqlite")
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        self._read_sessions = async_sessionmaker(self.read_engine, expire_on_commit=False)
         # Called with the run id after every wake_run (the engine wires in its orchestrator).
         self.wake_hooks: list[Callable[[str], Awaitable[None]]] = []
+        # Bumped whenever keys, users, groups, roles or bindings change, so request caches can drop old answers.
+        self.auth_generation = 0
+        self.resource_generation = 0  # bumped by every resource apply or delete in this process
+
+    def auth_changed(self) -> None:
+        self.auth_generation += 1
 
     async def create_all(self) -> None:
         """Bring the schema up to date (Alembic migrations)."""
         await self.migrate()
 
     async def migrate(self, revision: str = "head") -> str | None:
-        from sqlalchemy import inspect
-
         from shoal.store import migrate
 
-        async with self.engine.begin() as conn:
+        engine = self.engine if self.direct_url == self.url else create_async_engine(self.direct_url)
+        try:
+            return await self._migrate(engine, revision, migrate)
+        finally:
+            if engine is not self.engine:
+                await engine.dispose()
+
+    async def _migrate(self, engine: AsyncEngine, revision: str, migrate: Any) -> str | None:
+        from sqlalchemy import inspect
+
+        async with engine.begin() as conn:
             if self.is_sqlite:
                 await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
 
@@ -76,10 +121,18 @@ class Store:
 
     async def close(self) -> None:
         await self.engine.dispose()
+        if self.read_engine is not self.engine:
+            await self.read_engine.dispose()
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self._sessions() as session, session.begin():
+            yield session
+
+    @asynccontextmanager
+    async def read_session(self) -> AsyncIterator[AsyncSession]:
+        """A read-only session on the replica when one is configured (may lag the primary slightly)."""
+        async with self._read_sessions() as session, session.begin():
             yield session
 
     # ------------------------------------------------------------------ tenants
@@ -104,6 +157,16 @@ class Store:
             raise NotFound(f"tenant '{tenant_id}' not found")
         return tenant
 
+    async def update_tenant_settings(self, tenant_id: str, **values: Any) -> t.Tenant:
+        """Merge ``values`` into the tenant's settings (``None`` removes a key)."""
+        async with self.session() as s:
+            tenant = await s.get(t.Tenant, tenant_id)
+            if tenant is None:
+                raise NotFound(f"tenant '{tenant_id}' not found")
+            merged = {**(tenant.settings or {}), **values}
+            tenant.settings = {k: v for k, v in merged.items() if v is not None}
+        return tenant
+
     async def get_tenant_by_slug(self, slug: str) -> t.Tenant | None:
         async with self.session() as s:
             return (await s.execute(select(t.Tenant).where(t.Tenant.slug == slug))).scalar_one_or_none()
@@ -117,6 +180,7 @@ class Store:
                 if "tenant_id" in table.c and table.name != "tenants":
                     await s.execute(table.delete().where(table.c.tenant_id == tenant.id))
             await s.execute(delete(t.Tenant).where(t.Tenant.id == tenant.id))
+        self.auth_changed()
 
     async def list_tenants(self) -> Sequence[t.Tenant]:
         async with self.session() as s:
@@ -181,6 +245,7 @@ class Store:
             if key is None or key.tenant_id != tenant_id:
                 raise NotFound(f"api key '{key_id}' not found")
             key.revoked_at = utcnow()
+        self.auth_changed()
 
     # ------------------------------------------------------------------ namespaces
 
@@ -238,6 +303,7 @@ class Store:
             for table in (t.RoleBinding, t.Secret, t.UserCredential, t.WebhookEndpoint):
                 await s.execute(delete(table).where(table.tenant_id == tenant_id, table.namespace == name))
             await s.execute(delete(t.Namespace).where(t.Namespace.tenant_id == tenant_id, t.Namespace.name == name))
+        self.auth_changed()
 
     # ------------------------------------------------------------------ resources
 
@@ -319,6 +385,7 @@ class Store:
                     created_by=actor,
                 )
             )
+        self.resource_generation += 1
         return row, outcome
 
     async def _resource_row(self, tenant_id: str, namespace: str, kind: str, name: str) -> t.Resource | None:
@@ -415,16 +482,35 @@ class Store:
         row = await self.get_resource_row(tenant_id, kind, name, namespace=namespace, fallback=False)
         async with self.session() as s:
             await s.execute(delete(t.Resource).where(t.Resource.id == row.id))
+        self.resource_generation += 1
 
     # ------------------------------------------------------------------ runs
 
-    async def create_run(self, run: t.Run, steps: list[t.StepRun]) -> t.Run:
-        async with self.session() as s:
-            s.add(run)
-            await s.flush()
-            for step in steps:
-                s.add(step)
+    async def create_run(self, run: t.Run, steps: list[t.StepRun], extra: Sequence[Any] = ()) -> t.Run:
+        """Insert a run, its steps and ``extra`` rows (its first event, the audit entry) in one transaction.
+
+        With an idempotency key already used in the tenant, returns that run instead.
+        """
+        try:
+            async with self.session() as s:
+                s.add(run)
+                await s.flush()
+                s.add_all([*steps, *extra])
+                if any(isinstance(row, t.RunEvent) for row in extra):
+                    await self.notify_events(s, run.id)
+        except IntegrityError:
+            existing = await self.run_by_idempotency_key(run.tenant_id, run.idempotency_key)
+            if existing is None:
+                raise
+            return existing
         return run
+
+    async def run_by_idempotency_key(self, tenant_id: str, key: str | None) -> t.Run | None:
+        if not key:
+            return None
+        async with self.session() as s:
+            q = select(t.Run).where(t.Run.tenant_id == tenant_id, t.Run.idempotency_key == key)
+            return (await s.execute(q)).scalar_one_or_none()
 
     async def get_run(self, tenant_id: str | None, run_id: str) -> t.Run:
         async with self.session() as s:
@@ -445,6 +531,7 @@ class Store:
         namespace: str | None = None,
         limit: int = 50,
         before: str | None = None,
+        replica: bool = False,
     ) -> Sequence[t.Run]:
         q = select(t.Run).where(t.Run.tenant_id == tenant_id)
         if namespace:
@@ -462,7 +549,7 @@ class Store:
         if before:
             q = q.where(t.Run.id < before)
         q = q.order_by(t.Run.id.desc()).limit(limit)
-        async with self.session() as s:
+        async with (self.read_session() if replica else self.session()) as s:
             return (await s.execute(q)).scalars().all()
 
     async def count_runs(self, tenant_id: str, *, statuses: list[str] | None = None, **filters: Any) -> int:
@@ -478,12 +565,12 @@ class Store:
         q = select(t.Run.status, func.count()).where(t.Run.tenant_id == tenant_id, t.Run.created_at >= since)
         if namespace:
             q = q.where(t.Run.namespace == namespace)
-        async with self.session() as s:
+        async with self.read_session() as s:
             return {status: int(n) for status, n in (await s.execute(q.group_by(t.Run.status))).all()}
 
     async def run_status_counts(self, tenant_id: str) -> dict[str, int]:
         q = select(t.Run.status, func.count()).where(t.Run.tenant_id == tenant_id).group_by(t.Run.status)
-        async with self.session() as s:
+        async with self.read_session() as s:
             return {status: int(n) for status, n in (await s.execute(q)).all()}
 
     async def run_usage(self, tenant_id: str, since: datetime, *, namespace: str | None = None) -> list[dict[str, Any]]:
@@ -494,7 +581,7 @@ class Store:
         if namespace:
             q = q.where(t.Run.namespace == namespace)
         out: dict[tuple[str, str], dict[str, Any]] = {}
-        async with self.session() as s:
+        async with self.read_session() as s:
             for workflow, ns, status, usage in (await s.execute(q)).all():
                 row = out.setdefault((ns, workflow), {"namespace": ns, "workflow": workflow, "runs": 0, "succeeded": 0, "failed": 0, "cost_usd": 0.0})
                 row["runs"] += 1
@@ -524,27 +611,64 @@ class Store:
         for hook in self.wake_hooks:
             await hook(run_id)
 
-    async def claim_runs(self, worker_id: str, *, limit: int, lease: timedelta) -> list[str]:
-        """Claim built-in runs that are due. Optimistic per-row claim works on SQLite and Postgres."""
+    async def claim_runs(
+        self,
+        worker_id: str,
+        *,
+        limit: int,
+        lease: timedelta,
+        tenant_limits: Callable[[set[str]], Awaitable[dict[str, int]]] | None = None,
+        lanes: Sequence[str] | None = None,
+    ) -> list[str]:
+        """Claim built-in runs that are due, taking turns across tenants.
+
+        ``tenant_limits`` returns the most runs each tenant may have leased at once; tenants at their limit
+        are skipped. Optimistic per-row claim works on SQLite and Postgres.
+        """
         now = utcnow()
-        q = (
-            select(t.Run.id)
-            .where(
-                t.Run.orchestrator == "builtin",
-                t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
-                t.Run.next_wake_at.is_not(None),
-                t.Run.next_wake_at <= now,
-                or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
-            )
-            .order_by(t.Run.next_wake_at)
-            .limit(limit * 2)
+        due = and_(
+            t.Run.orchestrator == "builtin",
+            t.Run.status.in_([RunStatus.pending, RunStatus.running, RunStatus.waiting]),
+            t.Run.next_wake_at.is_not(None),
+            t.Run.next_wake_at <= now,
+            or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
+            *([t.Run.lane.in_(list(lanes))] if lanes else []),
         )
+
+        def candidates(*where: Any) -> Any:
+            q = select(t.Run.id, t.Run.tenant_id).where(due, *where).order_by(t.Run.next_wake_at).limit(limit * 2)
+            return q if self.is_sqlite else q.with_for_update(skip_locked=True)
+
         claimed: list[str] = []
         async with self.session() as s:
-            if not self.is_sqlite:
-                q = q.with_for_update(skip_locked=True)
-            candidates = (await s.execute(q)).scalars().all()
-            for run_id in candidates:
+            by_tenant: dict[str, list[str]] = {}
+            for run_id, tenant_id in (await s.execute(candidates())).all():
+                by_tenant.setdefault(tenant_id, []).append(run_id)
+            if by_tenant:  # then the oldest due runs of other tenants, so one tenant's backlog cannot starve them
+                for run_id, tenant_id in (await s.execute(candidates(t.Run.tenant_id.not_in(list(by_tenant))))).all():
+                    by_tenant.setdefault(tenant_id, []).append(run_id)
+            room: dict[str, int] = {}
+            if tenant_limits is not None and by_tenant:
+                limits = await tenant_limits(set(by_tenant))
+                if limits:
+                    leased = select(t.Run.tenant_id, func.count()).where(
+                        t.Run.tenant_id.in_(list(limits)), t.Run.lease_expires_at > now
+                    ).group_by(t.Run.tenant_id)
+                    active = {tid: int(n) for tid, n in (await s.execute(leased)).all()}
+                    room = {tid: max(0, cap - active.get(tid, 0)) for tid, cap in limits.items()}
+            # one run per tenant per turn, oldest due first within a tenant
+            order: list[str] = []
+            queues = [list(ids) for ids in by_tenant.values()]
+            tenants = list(by_tenant)
+            while any(queues):
+                for tenant_id, queue in zip(tenants, queues, strict=True):
+                    if queue and room.get(tenant_id, 1) > 0:
+                        order.append(queue.pop(0))
+                        if tenant_id in room:
+                            room[tenant_id] -= 1
+                    elif queue:
+                        queue.clear()  # at its limit
+            for run_id in order:
                 if len(claimed) >= limit:
                     break
                 result = await s.execute(
@@ -647,6 +771,56 @@ class Store:
         async with self.session() as s:
             await s.merge(step)
 
+    async def checkpoint(
+        self,
+        run_id: str,
+        tenant_id: str,
+        *,
+        steps: Sequence[t.StepRun] = (),
+        run_values: dict[str, Any] | None = None,
+        events: Sequence[tuple[str, dict[str, Any], str | None]] = (),
+        clear_waits: str | bool | None = None,
+        set_waits: tuple[str, list[str]] | None = None,
+        release_lease: str | None = None,
+    ) -> None:
+        """Persist one step of progress in a single transaction.
+
+        Saves ``steps``, updates the run with ``run_values``, appends ``events`` (type, data, step id), clears
+        wait keys (a step id, or ``True`` for the whole run), replaces one step's wait keys (``set_waits``) and
+        releases ``release_lease``'s lease on the run.
+        """
+        now = utcnow()
+        async with self.session() as s:
+            for step in steps:
+                step.updated_at = now
+                await s.merge(step)
+            values = dict(run_values or {})
+            if release_lease is not None:
+                await s.execute(
+                    update(t.Run).where(t.Run.id == run_id, t.Run.lease_owner == release_lease)
+                    .values(lease_owner=None, lease_expires_at=None)
+                )
+            if values:
+                await s.execute(update(t.Run).where(t.Run.id == run_id).values(**values, updated_at=now))
+            if clear_waits:
+                q = delete(t.WaitSubscription).where(t.WaitSubscription.run_id == run_id)
+                if isinstance(clear_waits, str):
+                    q = q.where(t.WaitSubscription.step_id == clear_waits)
+                await s.execute(q)
+            if set_waits is not None:
+                step_id, keys = set_waits
+                await s.execute(
+                    delete(t.WaitSubscription).where(t.WaitSubscription.run_id == run_id, t.WaitSubscription.step_id == step_id)
+                )
+                s.add_all(
+                    [t.WaitSubscription(tenant_id=tenant_id, key=k, run_id=run_id, step_id=step_id) for k in sorted(set(keys))]
+                )
+            if events:
+                s.add_all(
+                    [t.RunEvent(tenant_id=tenant_id, run_id=run_id, step_id=sid, type=kind, data=data) for kind, data, sid in events]
+                )
+                await self.notify_events(s, run_id)
+
     # ------------------------------------------------------------------ events
 
     async def add_event(
@@ -655,7 +829,13 @@ class Store:
         event = t.RunEvent(tenant_id=tenant_id, run_id=run_id, step_id=step_id, type=type, data=data or {})
         async with self.session() as s:
             s.add(event)
+            await self.notify_events(s, run_id)
         return event
+
+    async def notify_events(self, session: AsyncSession, run_id: str) -> None:
+        """Tell API processes listening on Postgres that a run has new events (sent when the transaction commits)."""
+        if not self.is_sqlite:
+            await session.execute(text("SELECT pg_notify(:channel, :run_id)"), {"channel": EVENTS_CHANNEL, "run_id": run_id})
 
     async def list_events(
         self, tenant_id: str, run_id: str, *, after: int = 0, limit: int = 500, step_id: str | None = None
@@ -727,12 +907,68 @@ class Store:
                 s.add(endpoint)
             return endpoint
 
+    async def get_webhook_endpoint(self, webhook_id: str) -> t.WebhookEndpoint | None:
+        async with self.session() as s:
+            return await s.get(t.WebhookEndpoint, webhook_id)
+
     async def resolve_webhook(self, webhook_id: str) -> t.WebhookEndpoint | None:
         async with self.session() as s:
             endpoint = await s.get(t.WebhookEndpoint, webhook_id)
             if endpoint is not None:
                 endpoint.last_received_at = utcnow()
             return endpoint
+
+    async def enqueue_webhook(self, endpoint: t.WebhookEndpoint, headers: dict[str, str], body: bytes) -> str:
+        row = t.WebhookInbox(
+            id=new_id("whk"), tenant_id=endpoint.tenant_id, webhook_id=endpoint.id, headers=headers,
+            body=base64.b64encode(body).decode(), status="queued", attempts=0, next_attempt_at=utcnow(),
+        )
+        async with self.session() as s:
+            s.add(row)
+        return row.id
+
+    async def claim_webhooks(self, *, limit: int, lease: timedelta) -> list[t.WebhookInbox]:
+        """Take queued deliveries that are due (and ones whose worker died mid-way)."""
+        now = utcnow()
+        q = (
+            select(t.WebhookInbox)
+            .where(
+                t.WebhookInbox.status == "queued",
+                t.WebhookInbox.next_attempt_at <= now,
+                or_(t.WebhookInbox.lease_expires_at.is_(None), t.WebhookInbox.lease_expires_at < now),
+            )
+            .order_by(t.WebhookInbox.next_attempt_at)
+            .limit(limit)
+        )
+        async with self.session() as s:
+            if not self.is_sqlite:
+                q = q.with_for_update(skip_locked=True)
+            rows = list((await s.execute(q)).scalars().all())
+            for row in rows:
+                row.lease_expires_at = now + lease
+                row.attempts += 1
+        return rows
+
+    async def finish_webhook(self, row_id: str, *, result: dict[str, Any] | None = None, retry_at: datetime | None = None,
+                             failed: bool = False) -> None:
+        values: dict[str, Any] = {"lease_expires_at": None, "result": result}
+        if retry_at is not None:
+            values["next_attempt_at"] = retry_at
+        else:
+            values["status"] = "error" if failed else "done"
+        async with self.session() as s:
+            await s.execute(update(t.WebhookInbox).where(t.WebhookInbox.id == row_id).values(**values))
+
+    async def get_webhook_delivery(self, row_id: str) -> t.WebhookInbox | None:
+        async with self.session() as s:
+            return await s.get(t.WebhookInbox, row_id)
+
+    async def prune_webhooks(self, older_than: datetime) -> int:
+        async with self.session() as s:
+            result = await s.execute(
+                delete(t.WebhookInbox).where(t.WebhookInbox.status != "queued", t.WebhookInbox.created_at < older_than)
+            )
+            return result.rowcount or 0
 
     async def record_delivery(self, delivery: t.TriggerDelivery) -> bool:
         """Insert a delivery; returns False when the dedupe key was already seen."""
@@ -1008,18 +1244,32 @@ class Store:
         **data: Any,
     ) -> None:
         """Append an audit entry; request id, client and source come from the request context."""
+        entry = self.audit_entry(tenant_id, actor, action, target, outcome=outcome, namespace=namespace, **data)
+        async with self.session() as s:
+            s.add(entry)
+
+    def audit_entry(
+        self,
+        tenant_id: str | None,
+        actor: str | None,
+        action: str,
+        target: str | None = None,
+        *,
+        outcome: str = "success",
+        namespace: str | None = None,
+        **data: Any,
+    ) -> t.AuditEntry:
+        """An audit row to add in the caller's own transaction (marks the request as audited)."""
         req = current_request()
         if req is not None:
             req.audited = True
             if req.via:
                 data.setdefault("via", req.via)
-        entry = t.AuditEntry(
+        return t.AuditEntry(
             tenant_id=tenant_id, actor=actor, action=action, target=target, data=data, outcome=outcome,
             namespace=namespace, source=req.source if req else "engine", request_id=req.request_id if req else None,
             ip=req.ip if req else None, user_agent=(req.user_agent or "")[:300] if req else None,
         )
-        async with self.session() as s:
-            s.add(entry)
 
     def _audit_query(
         self,
@@ -1059,8 +1309,20 @@ class Store:
         return q.order_by(t.AuditEntry.id.desc())
 
     async def list_audit(self, tenant_id: str, limit: int = 100, **filters: Any) -> Sequence[t.AuditEntry]:
-        async with self.session() as s:
+        async with self.read_session() as s:
             return (await s.execute(self._audit_query(tenant_id, **filters).limit(limit))).scalars().all()
+
+    async def prune_run_events(self, older_than: datetime, *, batch: int = 10_000) -> int:
+        """Delete events older than ``older_than`` of finished runs, one batch at a time (short locks)."""
+        finished = select(t.Run.id).where(t.Run.status.in_([s.value for s in RunStatus if s.terminal]))
+        ids = (
+            select(t.RunEvent.id)
+            .where(t.RunEvent.created_at < older_than, t.RunEvent.run_id.in_(finished))
+            .limit(batch)
+        )
+        async with self.session() as s:
+            result = await s.execute(delete(t.RunEvent).where(t.RunEvent.id.in_(ids)))
+            return result.rowcount or 0
 
     async def prune_audit(self, older_than: datetime) -> int:
         async with self.session() as s:
@@ -1079,4 +1341,17 @@ def new_step_row(tenant_id: str, run_id: str, step_id: str, step_type: str) -> t
         attempt=0,
         state={},
         usage={},
+    )
+
+
+def store_from_settings(settings: Any) -> Store:
+    return Store(
+        settings.database_url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_seconds,
+        pool_recycle=settings.db_pool_recycle_seconds,
+        pgbouncer=settings.db_pgbouncer,
+        direct_url=settings.database_direct_url,
+        read_url=settings.database_read_url,
     )

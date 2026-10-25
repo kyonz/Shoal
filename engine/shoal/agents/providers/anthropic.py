@@ -7,7 +7,13 @@ from typing import Any
 
 import anthropic
 
-from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
+from shoal.agents.providers.base import (
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ProviderUnavailable,
+    retry_after_seconds,
+)
 
 # USD per million tokens (input, output). Used for budgets and cost reporting.
 PRICING: dict[str, tuple[float, float]] = {
@@ -79,11 +85,11 @@ class AnthropicProvider(ModelProvider):
         try:
             async with client.messages.stream(**params, extra_headers=extra_headers, extra_body=extra_body) as stream:
                 message = await stream.get_final_message()
-        except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.InternalServerError) as exc:
+        except anthropic.APIConnectionError as exc:
             raise ProviderUnavailable(str(exc)) from exc
         except anthropic.APIStatusError as exc:
-            if exc.status_code in (408, 409, 529) or exc.status_code >= 500:
-                raise ProviderUnavailable(str(exc)) from exc
+            if exc.status_code in (408, 409, 429, 529) or exc.status_code >= 500:
+                raise ProviderUnavailable(str(exc), retry_after=retry_after_seconds(exc.response.headers)) from exc
             raise
 
         content = [block.model_dump(mode="json", exclude_none=True) for block in message.content]
