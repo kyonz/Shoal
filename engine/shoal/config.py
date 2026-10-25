@@ -120,6 +120,12 @@ class Settings(BaseSettings):
         100.0, ge=0, description="API requests per second per tenant, per API process (0: unlimited). Over it: 429."
     )
     rate_limit_burst: int = Field(200, ge=0, description="Requests a tenant may burst above the rate.")
+    api_max_concurrent_requests: int = Field(
+        64, ge=0, description="Requests one API process handles at once (0: unlimited). Others wait for a slot."
+    )
+    api_queue_timeout_seconds: float = Field(
+        1.0, ge=0, description="How long a request waits for a slot before the API answers 503 with Retry-After."
+    )
     max_pending_runs_per_tenant: int = Field(
         10_000, ge=0, description="Runs waiting for a worker before the API refuses new ones with 429 (0: unlimited)."
     )

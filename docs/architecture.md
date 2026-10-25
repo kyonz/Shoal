@@ -851,7 +851,9 @@ credential performed it*, and lets policy decide what the run may do.
 - REST + JSON under `/v1`, generated OpenAPI 3.1 spec, cursor pagination,
   problem+json errors. Starting a run accepts an `Idempotency-Key` header: a
   retry with the same key returns the run the first request started. Over a
-  quota the API answers `429` with `Retry-After`.
+  quota the API answers `429` with `Retry-After`, and a process
+  that is already working on as many requests as it allows answers `503` with
+  `Retry-After`.
 - Resources: `tenants`, `api-keys`, `agents`, `skills`, `workflows`
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),

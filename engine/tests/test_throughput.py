@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import httpx
@@ -171,6 +172,36 @@ async def test_requests_over_the_tenant_rate_get_429_with_retry_after(api, engin
     r = await api.get("/v1/me")
     assert r.status_code == 429 and int(r.headers["retry-after"]) >= 1
     assert r.json()["code"] == "quota_exceeded"
+
+
+async def test_a_busy_process_sheds_requests_with_503(engine):
+    engine.settings.api_max_concurrent_requests = 1
+    engine.settings.api_queue_timeout_seconds = 0.05
+    engine.settings.rate_limit_requests_per_second = 0
+    engine.settings.admin_token = SecretStr(ADMIN)
+    app = create_app(engine=engine)
+    release, entered = asyncio.Event(), asyncio.Event()
+    original = engine.quotas.check_request
+
+    async def slow_first(tenant_id):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        await original(tenant_id)
+
+    engine.quotas.check_request = slow_first
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test") as client:
+        r = await client.post("/v1/tenants", json={"slug": "busy"}, headers={"Authorization": f"Bearer {ADMIN}"})
+        client.headers["Authorization"] = f"Bearer {r.json()['api_key']}"
+        held = asyncio.create_task(client.get("/v1/me"))
+        await entered.wait()
+        shed = await client.get("/v1/me")
+        assert shed.status_code == 503 and shed.headers["retry-after"] == "1"
+        assert shed.json()["code"] == "overloaded"
+        assert (await client.get("/healthz")).status_code != 503  # outside /v1: never shed
+        release.set()
+        assert (await held).status_code == 200
+        assert (await client.get("/v1/me")).status_code == 200
 
 
 async def test_tenant_quotas_api_and_pending_run_admission(api, engine):

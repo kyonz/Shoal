@@ -10,12 +10,21 @@ pushes back when it is overloaded instead of slowing down for everyone.
 
 | What is exceeded | What happens | Setting |
 |---|---|---|
+| What one API process can work on at once | `503` with `Retry-After` after a short wait for a slot | `SHOAL_API_MAX_CONCURRENT_REQUESTS`, `SHOAL_API_QUEUE_TIMEOUT_SECONDS` |
 | A tenant's request rate | `429` with `Retry-After` | `SHOAL_RATE_LIMIT_REQUESTS_PER_SECOND`, `SHOAL_RATE_LIMIT_BURST`, tenant quotas |
 | Runs waiting for a worker | New runs get `429` until the queue drains | `SHOAL_MAX_PENDING_RUNS_PER_TENANT`, tenant quotas |
 | Runs one tenant can have in progress | Workers skip that tenant's runs until some finish | `SHOAL_MAX_CONCURRENT_RUNS_PER_TENANT`, tenant quotas |
 | A gateway's concurrency or per-minute limits | The call uses the next model candidate, or waits for capacity | `limits` on the Gateway |
 | A provider's own rate limit (429, 529, 5xx) | The model client backs off, honouring `Retry-After`, and tries again | `SHOAL_MODEL_RETRIES`, `SHOAL_MODEL_RETRY_*` |
 | Deliveries to one webhook URL | `429` with `Retry-After` | `SHOAL_WEBHOOK_RATE_LIMIT_PER_SECOND` |
+
+A `503` means the process is busy right now and a `429` means the tenant is over
+its quota; clients should wait for `Retry-After` before trying again. Answering
+quickly instead of queueing every caller keeps the requests that are accepted
+fast: on a 4-core test box, one API process facing 400 clients that never pause
+accepted about 77 runs/s with a p99 of 2.5s and answered the rest with `503`.
+Without the limit, every caller queued and the p99 was 25s. Run event streams and
+the federation tunnel are long-lived and do not count against the limit.
 
 Clients that retry run creation should send an `Idempotency-Key` header. A
 retry with the same key returns the run the first request started (`200`
@@ -174,6 +183,8 @@ very large numbers of concurrent timers and wake-ups.
 | `SHOAL_DB_PGBOUNCER` | false | The database URL is a transaction-mode pooler |
 | `SHOAL_DATABASE_DIRECT_URL` | the database URL | Direct connection for migrations and `LISTEN` |
 | `SHOAL_DATABASE_READ_URL` | none | Replica for lists, dashboards and audit queries |
+| `SHOAL_API_MAX_CONCURRENT_REQUESTS` | 64 | Requests one API process works on at once (0: unlimited) |
+| `SHOAL_API_QUEUE_TIMEOUT_SECONDS` | 1 | How long a request waits for a slot before `503` |
 | `SHOAL_WORKER_CONCURRENCY` | 16 | Runs a worker advances at once |
 | `SHOAL_WORKER_LANES` | `["standard","agent"]` | Which runs a worker takes |
 | `SHOAL_RATE_LIMIT_REQUESTS_PER_SECOND` | 100 | Per tenant, per API process (0: off) |

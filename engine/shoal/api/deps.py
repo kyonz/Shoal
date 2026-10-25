@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import time
@@ -45,6 +46,7 @@ class AuthCache:
     def __init__(self, engine: Engine, max_entries: int = 10_000):
         self.engine, self.max_entries = engine, max_entries
         self._entries: dict[str, tuple[Any, int, float]] = {}
+        self.pending: dict[str, asyncio.Future[Any]] = {}
 
     def _key(self, *parts: str) -> str:
         return hashlib.sha256("\x00".join(parts).encode()).hexdigest()
@@ -82,11 +84,18 @@ async def authenticate(request: Request, engine: Engine) -> Principal:
     token = _bearer(request)
     if token and not request.headers.get(ASSERTION_HEADER):
         tenant_header = request.headers.get("x-shoal-tenant", "")
-        hit = auth_cache(engine).get("principal", token, tenant_header)
+        cache = auth_cache(engine)
+        hit = cache.get("principal", token, tenant_header)
         if hit is not None:
             return hit
-        principal = await _authenticate(request, engine)
-        auth_cache(engine).put(principal, "principal", token, tenant_header)
+        # Concurrent requests with the same credential share one lookup (no stampede when an entry expires).
+        key = cache._key("principal", token, tenant_header)  # noqa: SLF001
+        pending = cache.pending.get(key)
+        if pending is None:
+            pending = cache.pending[key] = asyncio.ensure_future(_authenticate(request, engine))
+            pending.add_done_callback(lambda _: cache.pending.pop(key, None))
+        principal = await asyncio.shield(pending)
+        cache.put(principal, "principal", token, tenant_header)
         return principal
     return await _authenticate(request, engine)
 
