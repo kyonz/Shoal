@@ -183,10 +183,10 @@ approve the result:
 
 ```sh
 shoal apply -f examples/shared/sandboxes.yaml -f examples/triage-report/
-shoal run triage-report
+shoal run triage-report --wait     # prints the command to approve it: shoal approve <run id>
 ```
 
-Open the run in the UI to watch it live and approve it:
+Or open the run in the UI to watch it live and approve it there:
 
 <p align="center">
   <img src="docs/assets/screenshots/run-viewer.png" alt="A run waiting for approval in the Shoal run viewer" width="820">
@@ -225,6 +225,7 @@ spec:
       message: "Open a PR for {{ steps.fix.output.branch }}?"
     - id: pr
       type: action
+      if: "{{ steps.review.output.approved }}"   # a rejection doesn't stop the run
       action: github.create_pull_request
       with:
         repo: "{{ inputs.repo }}"
