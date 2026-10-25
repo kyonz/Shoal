@@ -2929,6 +2929,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/identities/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Identities */
+        get: operations["version_identities_v1_identities__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/identities/{name}/diff": {
         parameters: {
             query?: never;
@@ -3008,6 +3025,23 @@ export interface paths {
         };
         /** Versions Gateways */
         get: operations["versions_gateways_v1_gateways__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/gateways/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Gateways */
+        get: operations["version_gateways_v1_gateways__name__versions__version__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3103,6 +3137,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model-policies/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Model-Policies */
+        get: operations["version_model_policies_v1_model_policies__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model-policies/{name}/diff": {
         parameters: {
             query?: never;
@@ -3182,6 +3233,23 @@ export interface paths {
         };
         /** Versions Blueprints */
         get: operations["versions_blueprints_v1_blueprints__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/blueprints/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Blueprints */
+        get: operations["version_blueprints_v1_blueprints__name__versions__version__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3277,6 +3345,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skill-sources/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Skill-Sources */
+        get: operations["version_skill_sources_v1_skill_sources__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/skill-sources/{name}/diff": {
         parameters: {
             query?: never;
@@ -3356,6 +3441,23 @@ export interface paths {
         };
         /** Versions Eval-Platforms */
         get: operations["versions_eval_platforms_v1_eval_platforms__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-platforms/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Eval-Platforms */
+        get: operations["version_eval_platforms_v1_eval_platforms__name__versions__version__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -13280,6 +13382,38 @@ export interface operations {
             };
         };
     };
+    version_identities_v1_identities__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     diff_identities_v1_identities__name__diff_get: {
         parameters: {
             query: {
@@ -13485,6 +13619,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_gateways_v1_gateways__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
                 };
             };
             /** @description Validation Error */
@@ -13716,6 +13882,38 @@ export interface operations {
             };
         };
     };
+    version_model_policies_v1_model_policies__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     diff_model_policies_v1_model_policies__name__diff_get: {
         parameters: {
             query: {
@@ -13921,6 +14119,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_blueprints_v1_blueprints__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
                 };
             };
             /** @description Validation Error */
@@ -14152,6 +14382,38 @@ export interface operations {
             };
         };
     };
+    version_skill_sources_v1_skill_sources__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     diff_skill_sources_v1_skill_sources__name__diff_get: {
         parameters: {
             query: {
@@ -14357,6 +14619,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_eval_platforms_v1_eval_platforms__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
                 };
             };
             /** @description Validation Error */
