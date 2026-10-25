@@ -12,7 +12,7 @@ import { CLAUDE_MODELS } from "./kinds";
 export function useSandboxBackends() {
   return useQuery({
     queryKey: ["catalog", "sandbox-backends"],
-    queryFn: () => rawJson<{ name: string; description: string; config_schema: JsonSchema | null }[]>("/v1/sandbox-backends"),
+    queryFn: () => rawJson<{ name: string; description: string; config_schema: JsonSchema | null; network_controls?: string[] }[]>("/v1/sandbox-backends"),
     staleTime: 300_000,
   });
 }

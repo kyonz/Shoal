@@ -489,8 +489,12 @@ class SkillSpec(Model):
 
 
 class NetworkPolicy(Model):
-    egress: Literal["allow", "deny"] = "allow"
-    allow_hosts: list[str] = Field(default_factory=list)
+    """Enforced by the sandbox backend; a backend that cannot enforce a policy refuses to start the sandbox."""
+
+    egress: Literal["allow", "deny"] = Field("allow", description="'deny' blocks all outbound traffic.")
+    allow_hosts: list[str] = Field(
+        default_factory=list, description="Only these hosts may be reached (needs a backend that supports it, e.g. remote)."
+    )
 
 
 class SandboxProfileSpec(Model):

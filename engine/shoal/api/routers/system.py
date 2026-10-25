@@ -155,7 +155,8 @@ async def sandbox_backends(ctx: CtxDep) -> list[dict[str, Any]]:
     out = []
     for name, backend in ctx.engine.registry.available("sandboxes").items():
         schema = backend.config_schema.model_json_schema() if getattr(backend, "config_schema", None) else None
-        out.append({"name": name, "description": getattr(backend, "description", ""), "config_schema": schema})
+        out.append({"name": name, "description": getattr(backend, "description", ""), "config_schema": schema,
+                    "network_controls": sorted(getattr(backend, "network_controls", ()))})
     return out
 
 
