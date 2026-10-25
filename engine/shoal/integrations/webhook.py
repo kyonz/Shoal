@@ -14,6 +14,9 @@ from shoal.integrations.base import ConnectionContext, EventDef, Integration, In
 
 class WebhookConnection(BaseModel):
     secret: SecretStr | None = Field(None, description="HMAC-SHA256 secret, or a shared token.")
+    allow_unsigned: bool = Field(
+        False, description="Accept deliveries when no secret is set (anyone who has the URL can fire triggers)."
+    )
     signature_header: str = Field("X-Signature-256", description="Header carrying the HMAC signature.")
     signature_prefix: str = "sha256="
     event_type_header: str = Field("X-Event-Type", description="Header naming the event type.")
@@ -41,7 +44,7 @@ class WebhookIntegration(Integration):
     async def verify_webhook(self, ctx: ConnectionContext, headers: dict[str, str], body: bytes) -> bool:
         cfg: WebhookConnection = ctx.config
         if cfg.secret is None:
-            return True
+            return cfg.allow_unsigned
         secret = cfg.secret.get_secret_value()
         token = headers.get("x-shoal-token")
         if token:

@@ -254,3 +254,127 @@ def test_cli_grant_parsing():
     assert _parse_grant("editor=hub_group:platform@payments")["namespace"] == "payments"
     with pytest.raises(Exception, match="expected ROLE"):
         _parse_grant("viewer=user:bob")
+
+
+async def test_revoked_link_is_refused_not_served_as_hosted(world):
+    hub, member, hub_app, member_app, client = world
+    hub_api = client(hub_app, await _tenant(hub_app, client, "acme"))
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    await member_api.put("/v1/federation/membership", json={"hub_url": "http://hub.test", "token": token, "max_mode": "read_write"})
+    assert (await hub_api.get("/v1/me")).json()["federated"] is True
+    assert (await client(hub_app).post("/v1/federation/links/acme/enrollment")).status_code == 200
+
+    assert (await client(hub_app).delete("/v1/federation/links/acme")).status_code == 204
+    for call in (hub_api.get("/v1/namespaces/default/workflows"), hub_api.put("/v1/namespaces/default/workflows/w", json=HELLO)):
+        r = await call
+        assert r.status_code == 503 and r.json()["code"] == "federation_revoked", r.text
+    assert (await client(hub_app).post("/v1/federation/links/acme/enrollment")).status_code == 409
+    # Nothing landed on the hub, so the tenant can be federated again.
+    assert (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).status_code == 201
+
+    # The member hears it was rejected, and says so.
+    [membership] = await member.federation_member.memberships()
+    member.federation_member.start_connector(membership)
+    for _ in range(100):
+        if membership.id in member.federation_member.connector_errors:
+            break
+        await asyncio.sleep(0.02)
+    r = (await member_api.get("/v1/federation/membership")).json()
+    assert "revoked" in r["connector_error"]
+    for task in list(member.federation_member._tasks.values()):
+        task.cancel()
+
+
+async def test_ceiling_and_exposure_hold_for_calls_already_handed_out(world):
+    hub, member, hub_app, member_app, client = world
+    hub_api = client(hub_app, await _tenant(hub_app, client, "acme"))
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    assert (await member_api.put("/v1/namespaces/private", json={})).status_code == 201
+    await member_api.put("/v1/federation/membership", json={
+        "hub_url": "http://hub.test", "token": token, "max_mode": "read_write", "namespaces": ["default"],
+        "grants": [{"role": "tenant-admin", "subject_kind": "hub_user", "subject_id": "sa:admin"}],
+    })
+    await member_api.put("/v1/namespaces/private/workflows/hidden", json=HELLO)
+    await member_api.put("/v1/namespaces/default/workflows/echo", json={
+        "spec": {"inputs": {"secret": {"type": "string"}}, "outputs": {"echo": "{{ inputs.secret }}"},
+                 "steps": [{"id": "s", "type": "set", "values": {}}]}})
+    run = (await member_api.post("/v1/namespaces/default/workflows/echo/runs", json={"inputs": {"secret": "s3cr3t"}})).json()
+    await member.run_until_idle()
+
+    # The audit log through the hub leaves out namespaces the member does not expose.
+    r = await via_hub(member, hub_api.get("/v1/audit"))
+    assert r.status_code == 200 and "private" not in r.text, r.text
+    assert any(e["target"] == "default/echo" for e in r.json()["items"])
+
+    # A row read before the member tightened its ceiling is not what the call is checked against.
+    [stale] = await member.federation_member.memberships()
+    await member_api.patch("/v1/federation/membership", json={"visibility": "metadata"})
+    assertion = p.sign_assertion(member.secrets.cipher.decrypt(stale.secret_ciphertext),
+                                 {"sub": "sa:admin", "method": "GET", "path": f"/v1/runs/{run['id']}"})
+    answer = await member.federation_member.handle(stale, {
+        "id": "fwd_1", "method": "GET", "path": f"/v1/runs/{run['id']}", "query": "", "assertion": assertion, "headers": {}, "body": ""})
+    assert answer["status"] == 200 and b"s3cr3t" not in __import__("base64").b64decode(answer["body"])
+
+    # A member-side failure still answers, so the hub isn't left waiting.
+    app, member.federation_member.app = member.federation_member.app, object()
+    answer = await member.federation_member.handle(stale, {"id": "fwd_2", "method": "GET", "path": "/v1/namespaces", "assertion": assertion})
+    member.federation_member.app = app
+    assert answer["status"] == 502
+
+    # Forwarded calls are not kept on the hub once answered.
+    from sqlalchemy import func, select
+
+    from shoal.store import tables as t
+    async with hub.store.session() as s:
+        assert (await s.execute(select(func.count()).select_from(t.FederationRequest))).scalar() == 0
+
+
+async def test_federated_tenant_cannot_join_another_hub(world):
+    _, _, hub_app, _, client = world
+    hub_api = client(hub_app, await _tenant(hub_app, client, "acme"))
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    r = await hub_api.put("/v1/federation/membership", json={"hub_url": "http://other.test", "token": token})
+    assert r.status_code == 409, r.text
+
+
+async def test_leaving_tells_the_hub_and_removes_hub_roles(world):
+    hub, member, hub_app, member_app, client = world
+    hub_api = client(hub_app, await _tenant(hub_app, client, "acme"))
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    await member_api.put("/v1/federation/membership", json={
+        "hub_url": "http://hub.test", "token": token, "max_mode": "read_write",
+        "grants": [{"role": "viewer", "subject_kind": "hub_user", "subject_id": "sa:admin"},
+                   {"role": "viewer", "subject_kind": "hub_group", "subject_id": "platform"}],
+    })
+    local = len(await member.directory.list_bindings((await member.store.get_tenant_by_slug("acme")).id))
+
+    assert (await member_api.delete("/v1/federation/membership")).status_code == 204
+    bindings = (await member_api.get("/v1/role-bindings")).json()
+    assert not [b for b in bindings if b["subject_kind"] in ("hub_user", "hub_group")]
+    assert len(bindings) == local - 2
+    entry = (await member_api.get("/v1/audit", params={"action": "federation.left"})).json()["items"][0]
+    assert entry["data"]["hub_notified"] is True and entry["data"]["bindings_removed"] == 2
+
+    assert (await client(hub_app).get("/v1/federation/links/acme")).json()["status"] == "left"
+    r = await hub_api.get("/v1/namespaces/default/workflows")
+    assert r.status_code == 503 and r.json()["code"] == "federation_revoked" and "left" in r.json()["detail"]
+    assert (await client(hub_app).post("/v1/federation/links/acme/enrollment")).status_code == 409
+    assert (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).status_code == 201
+
+
+async def test_leaving_works_when_the_hub_is_gone(world):
+    hub, member, hub_app, member_app, client = world
+    await _tenant(hub_app, client, "acme")
+    token = (await client(hub_app).post("/v1/federation/links", json={"tenant": "acme"})).json()["enrollment_token"]
+    member_api = client(member_app, await _tenant(member_app, client, "acme"))
+    await member_api.put("/v1/federation/membership", json={"hub_url": "http://hub.test", "token": token})
+
+    def gone(request):
+        raise httpx.ConnectError("hub unreachable")
+
+    member.http_transport = httpx.MockTransport(gone)
+    assert (await member_api.delete("/v1/federation/membership")).status_code == 204
+    assert (await member_api.get("/v1/federation/membership")).status_code == 404

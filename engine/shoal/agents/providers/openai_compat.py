@@ -75,6 +75,7 @@ def from_openai_message(message: dict[str, Any]) -> list[dict[str, Any]]:
 
 class OpenAICompatibleProvider(ModelProvider):
     name = "openai-compatible"
+    description = "Any OpenAI-compatible Chat Completions API: LiteLLM, Portkey, OpenRouter, vLLM, Ollama, ..."
 
     def __init__(self) -> None:
         self.transport: httpx.AsyncBaseTransport | None = None

@@ -193,7 +193,8 @@ class TriggerService:
             await store.update_delivery(delivery.id, detail=delivery.detail)
         if spec.overlap == "skip" and spec.workflow:
             active = await store.count_runs(
-                tenant_id, statuses=[RunStatus.pending, RunStatus.running, RunStatus.waiting], trigger_name=name
+                tenant_id, statuses=[RunStatus.pending, RunStatus.running, RunStatus.waiting], trigger_name=name,
+                namespace=current_namespace(),
             )
             if active:
                 await store.update_delivery(delivery.id, status="skipped", detail={**delivery.detail, "reason": "previous run still active"})
@@ -259,9 +260,14 @@ class TriggerService:
             if state.next_fire_at is not None:
                 await self.engine.store.set_trigger_next(state.id, None)
             return 0
-        if state.next_fire_at is None:
-            await self.engine.store.set_trigger_next(state.id, next_fire(spec.schedule, spec.timezone, now))
+        # A changed cron or time zone reschedules; the old next fire time belongs to the old schedule.
+        schedule = f"{spec.schedule} {spec.timezone}"
+        scheduled = (state.cursor or {}).get("schedule")
+        if state.next_fire_at is None or (scheduled is not None and scheduled != schedule):
+            await self.engine.store.set_trigger_next(state.id, next_fire(spec.schedule, spec.timezone, now), schedule=schedule)
             return 0
+        if scheduled is None:  # state from before schedules were recorded
+            await self.engine.store.set_trigger_next(state.id, state.next_fire_at, schedule=schedule)
         if state.next_fire_at > now:
             return 0
         upcoming = next_fire(spec.schedule, spec.timezone, now)

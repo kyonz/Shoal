@@ -70,8 +70,11 @@ class Authorizer:
             return True
         if principal.key_scopes and not granted(principal.key_scopes, permission):
             return False
-        if principal.key_namespaces and namespace is not None and namespace not in principal.key_namespaces:
-            return False
+        if principal.key_namespaces:
+            if namespace is not None and namespace not in principal.key_namespaces:
+                return False
+            if permission in TENANT_PERMISSIONS and not permission.endswith(":read"):
+                return False  # a key limited to namespaces cannot administer the tenant
         if granted(grants.tenant, permission):
             return True
         if namespace is None or permission in TENANT_PERMISSIONS:

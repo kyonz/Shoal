@@ -8,7 +8,7 @@ import { Decoration, EditorView, MatchDecorator, ViewPlugin, placeholder as cmPl
 import { tags as t } from "@lezer/highlight";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { Check, Copy } from "lucide-react";
-import { forwardRef, useMemo, useState } from "react";
+import { createContext, forwardRef, useContext, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { Button } from "./primitives";
 import { Tooltip } from "./overlays";
@@ -69,10 +69,15 @@ export interface CodeEditorProps {
   defaultCompletions?: boolean;
 }
 
+/** Makes every CodeEditor below it read-only unless it says otherwise (e.g. a form the user may only view). */
+export const ReadOnlyContext = createContext(false);
+
 export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(function CodeEditor(
-  { value, onChange, language = "yaml", readOnly, className, height, minHeight, maxHeight, lineNumbers = true, extensions = [], placeholder, autoFocus, defaultCompletions = true },
+  { value, onChange, language = "yaml", readOnly: readOnlyProp, className, height, minHeight, maxHeight, lineNumbers = true, extensions = [], placeholder, autoFocus, defaultCompletions = true },
   ref,
 ) {
+  const inherited = useContext(ReadOnlyContext);
+  const readOnly = readOnlyProp ?? inherited;
   const exts = useMemo(() => {
     const list: Extension[] = [baseTheme, syntaxHighlighting(highlight), expressionHighlight, EditorView.lineWrapping, ...extensions];
     if (language === "yaml") list.push(yaml());

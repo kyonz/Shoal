@@ -613,7 +613,7 @@ class Integration(Protocol):
 
 - **Actions** have pydantic input/output models, so they are simultaneously
   workflow `action` steps, agent tools (JSON schema from the model) and API
-  operations (`POST /v1/connections/{id}/actions/{action}`).
+  operations (`POST /v1/namespaces/{namespace}/connections/{name}/actions/{action}`).
 - **Triggers**: `webhook` (signature-verified, one URL per connection
   `/v1/hooks/{webhook_id}`), `poll` (cursor persisted) and **`schedule`**
   (cron expressions with time zones, e.g. `0 9 * * MON-FRI` in
@@ -815,7 +815,15 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   immediately; group membership changes flow through to role bindings.
 - **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
-  than the owner holds), with expiry, last-used, and revocation.
+  than the owner holds), with expiry, last-used, and revocation. A key
+  limited to namespaces keeps only the tenant-level `:read` permissions of its
+  owner, never tenant administration.
+- **Nobody hands out more than they hold.** Granting a role, changing a custom
+  role's permissions, changing a group that has role bindings, choosing an
+  OIDC provider's default role, minting a key for a service account, and
+  managing (deactivating, deleting, editing) a user or service account all
+  need the caller to hold every permission involved. Nobody can deactivate or
+  delete themselves.
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
   KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
   are injected at the last moment and redacted from events and logs.
@@ -914,7 +922,12 @@ one control plane, and a federated deployment can also sit next to the hub.
   people. The hub stores the link (`shoal federation link <tenant>` creates it
   and `shoal federation links` shows connection health), never the member's
   data or secrets. Only an empty tenant can be federated; a revoked link can be
-  replaced by linking the tenant again. Operators can manage links as code with
+  replaced by linking the tenant again. Until then the hub refuses the tenant's
+  calls with `503 federation_revoked` instead of serving it as an empty hosted
+  tenant, and the member's Federation page says the hub rejected its link.
+  A member that leaves (`shoal federation leave`) tells the hub, which marks
+  the link `left` and refuses the same way, and removes the role bindings it
+  gave hub people and groups. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -927,9 +940,10 @@ one control plane, and a federated deployment can also sit next to the hub.
     can also expose only some namespaces and choose `metadata` visibility,
     which hides step outputs, prompts and logs from the hub.
 - **Member is the source of truth.** Requests for a federated tenant are
-  forwarded live through the tunnel; data is not replicated to the hub. The
-  hub keeps only link status, health and small rollups (run counts, spend,
-  eval scores) for its dashboards. When the hub is unreachable the member
+  forwarded live through the tunnel; data is not replicated to the hub. A
+  forwarded call waits in the hub's queue encrypted, and is deleted as soon as
+  it is answered or times out. The hub keeps only link status and the
+  member's version (rollups such as run counts and spend are planned). When the hub is unreachable the member
   keeps running on its own; the hub shows the tenant as disconnected.
 - **One API.** Clients (UI, CLI, Terraform, A2A) talk to the hub with the
   same `/v1` API for hosted and federated tenants; the hub routes by tenant.
@@ -939,8 +953,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   (HS256). It names the user, their hub groups, the request id, and the
   method and path it was issued for, so it cannot be replayed against
   another call. The member authorises it again with its own
-  RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
-  and are bound to roles like any subject. A call succeeds only if the hub
+  RBAC, where hub people act as `hub:user:<email>` and are bound to roles like
+  any subject, by `hub_user` (email or service actor) or `hub_group` (hub group name).
+  The member reads its ceiling afresh for every call, so lowering it applies at once,
+  and a member that exposes only some namespaces shows the hub only their audit entries. A call succeeds only if the hub
   allows it, the link mode allows it, and the member's RBAC allows it. The
   hub's operator token gets no rights in a member by default: a member that
   wants operators to browse binds `hub_user` `system:admin` explicitly. (Decided.)
@@ -965,7 +981,14 @@ one control plane, and a federated deployment can also sit next to the hub.
 ### 11.4 Where secrets live
 
 Every credential is encrypted at rest, write-only through the API, resolved at
-the moment of use and redacted from run logs. There are four scopes:
+the moment of use and redacted from run logs. The `env` provider reads
+`SHOAL_SECRET_<TENANT>__<NAME>` and then `SHOAL_SECRET_<NAME>`; the second is
+readable by every tenant, so instances shared by several organisations set
+`SHOAL_SECRET_ENV_SHARED=false`. Variables that configure Shoal itself
+(`SHOAL_SECRET_KEY`, `SHOAL_SECRET_PROVIDERS`) are never handed out as
+secrets. Deleting a namespace deletes its secrets, role bindings and
+personal credentials; deleting a user deletes their personal credentials.
+There are four scopes:
 
 | Scope | Holds | Managed by |
 |---|---|---|
@@ -985,7 +1008,9 @@ who has not connected it, the step **waits** (event `credential.required`
 with a link to connect) and resumes as soon as they save the credential,
 rather than failing. People connect under `/v1/me/credentials` (paste a token,
 or `oauth:` on the connection runs an authorization-code flow with PKCE and
-refreshes access tokens before they expire) or with `shoal credentials
+refreshes access tokens before they expire; the callback only saves the
+grant in the browser that started the flow or one signed in as that person,
+so an authorize link sent to someone else cannot collect their account) or with `shoal credentials
 set|connect`. Every set, removal and revocation is audited. This applies to
 every integration, MCP servers included.
 

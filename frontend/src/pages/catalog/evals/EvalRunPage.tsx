@@ -29,6 +29,7 @@ import {
 } from "@/components/ui";
 import { isMissingEndpoint, isTerminal, pct, useCancelEvalRun, useEvalRun, type Comparison, type EvalResult } from "./api";
 import { NewerServerNotice } from "./EvalExtension";
+import { ExportRunButton } from "./Platforms";
 
 function Delta({ value }: { value: number | null | undefined }) {
   if (value == null || !isFinite(value)) return <span className="text-faint">—</span>;
@@ -150,6 +151,8 @@ export default function EvalRunPage() {
             >
               Cancel
             </Button>
+          ) : done && canRun ? (
+            <ExportRunButton ns={ns} runId={r.id} evalSpec={evalRes.data?.spec} />
           ) : null
         }
       />
@@ -313,8 +316,8 @@ export default function EvalRunPage() {
                     {graderNames.map((n) => {
                       const g = c.scores?.[n];
                       return (
-                        <Td key={n} className={cn("text-right tabular-nums", g?.passed === false && "text-bad")} title={g?.reason as string | undefined}>
-                          {g ? pct(g.score) : "—"}
+                        <Td key={n} className={cn("text-right tabular-nums", g?.passed === false && "text-bad")} title={graderNote(g)}>
+                          {g ? (g.error ? "error" : pct(g.score)) : "—"}
                         </Td>
                       );
                     })}
@@ -360,8 +363,18 @@ export default function EvalRunPage() {
   );
 }
 
+/** Hover text for a grader cell: its error, or the judge's level and reasoning. */
+function graderNote(g: NonNullable<EvalResult["scores"]>[string] | undefined): string | undefined {
+  if (!g) return undefined;
+  if (typeof g.error === "string") return g.error;
+  const d = (g.detail ?? {}) as { level?: string; reasoning?: string; errors?: string[] };
+  if (d.reasoning) return d.level ? `${d.level}: ${d.reasoning}` : d.reasoning;
+  if (d.errors?.length) return d.errors.join("\n");
+  return undefined;
+}
+
 function CaseResult({ c }: { c: EvalResult }) {
-  if (c.status === "pending" || c.status === "running") return <StatusBadge status={c.status} />;
+  if (c.status === "pending" || c.status === "running" || c.status === "cancelled") return <StatusBadge status={c.status} />;
   if (c.passed)
     return (
       <span className="inline-flex items-center gap-1 text-ok">

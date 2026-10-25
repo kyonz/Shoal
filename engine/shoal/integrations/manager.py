@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 INSTALL_STATE_TTL = timedelta(minutes=15)
+# Key spaces the engine itself waits on (signals, approvals, child runs, credentials); never set by an event.
+INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
 
 
 class IntegrationManager:
@@ -171,6 +173,8 @@ class IntegrationManager:
             if not await ctx.integration.verify_webhook(ctx, headers, body):
                 raise InvalidRequest("webhook signature verification failed")
             events = await ctx.integration.parse_webhook(ctx, headers, body)
+        for event in events:
+            event.wake_keys = self.own_wake_keys(ctx.integration.key, event.wake_keys)
         woken: list[str] = []
         fired: list[dict[str, Any]] = []
         interactions: list[dict[str, Any]] = []
@@ -193,6 +197,19 @@ class IntegrationManager:
         if reply is not None:
             result["reply"] = reply
         return result
+
+    def own_wake_keys(self, integration_key: str, keys: list[str]) -> list[str]:
+        """Drop wake keys an integration may not claim, so a delivery cannot steer runs waiting on another system.
+
+        Wake keys are tenant-wide (``github:pr:acme/api#12``) and a waiting step trusts the event it receives,
+        so a key whose prefix names a *different* registered integration (a generic webhook sending
+        ``X-Shoal-Wake-Key: github:pr:...``) or one of the engine's own key spaces is ignored.
+        """
+        reserved = (set(self.engine.registry.names("integrations")) | INTERNAL_WAKE_PREFIXES) - {integration_key}
+        kept = [k for k in keys if k.partition(":")[0] not in reserved]
+        if len(kept) != len(keys):
+            log.warning("ignored wake keys %s from a %s webhook", sorted(set(keys) - set(kept)), integration_key)
+        return kept
 
     async def inject_event(self, tenant_id: str, connection: str, event: IntegrationEvent) -> dict[str, Any]:
         """Process an already-parsed event (polling integrations, tests, replays)."""

@@ -8,6 +8,8 @@ import tarfile
 import time
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec, shell_quote
 
 DEFAULT_IMAGE = "ghcr.io/kyonz/shoal-sandbox:latest"
@@ -69,9 +71,17 @@ class DockerSandbox(Sandbox):
         await asyncio.to_thread(self.container.remove, force=True)
 
 
+class DockerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: str | None = Field(None, description="Container runtime, e.g. runsc (gVisor).")
+
+
 class DockerBackend(SandboxBackend):
     name = "docker"
     description = "One Docker container per sandbox on the worker's Docker host."
+    network_controls = frozenset({"deny"})  # network_disabled
+    config_schema = DockerConfig
 
     def __init__(self) -> None:
         self._client: Any = None

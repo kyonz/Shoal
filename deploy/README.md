@@ -12,7 +12,9 @@ docker run -p 8080:8080 -e SHOAL_ADMIN_TOKEN=change-me shoal
 
 The image builds the UI from `frontend/` when it exists and serves it from `/`. It runs as
 UID 10001 with SQLite under `/var/lib/shoal` by default; set `SHOAL_DATABASE_URL` for Postgres.
-Release tags publish `ghcr.io/kyonz/ai-workflow-manager` (amd64 and arm64).
+No image is published yet: build it yourself as above, and push it to a registry when your cluster
+needs to pull it. Once releases are tagged, the manual release workflow publishes
+`ghcr.io/kyonz/ai-workflow-manager` (amd64 and arm64), which is the chart's default image.
 
 ## docker compose (Postgres, API, workers)
 
@@ -33,7 +35,11 @@ throwaway Temporal dev server to try it with. See [Running Shoal on Temporal](..
 ## Kubernetes (Helm)
 
 ```sh
+docker build -f deploy/Dockerfile -t registry.example.com/shoal:0.1.0 .   # until a release is published
+docker push registry.example.com/shoal:0.1.0
+
 helm install shoal deploy/helm/shoal -n shoal --create-namespace \
+  --set image.repository=registry.example.com/shoal --set image.tag=0.1.0 \
   --set config.publicUrl=https://shoal.example.com \
   --set ingress.enabled=true --set ingress.hosts[0].host=shoal.example.com \
   --set-json 'ingress.hosts[0].paths=[{"path":"/","pathType":"Prefix"}]'
