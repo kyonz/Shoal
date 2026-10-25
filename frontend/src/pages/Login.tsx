@@ -5,7 +5,7 @@ import { Navigate, useNavigate, useSearchParams } from "react-router";
 import { client, unwrap } from "@/api/client";
 import { useAuth } from "@/lib/auth";
 import { Button, ErrorNotice, Field, Input, Spinner } from "@/components/ui";
-import { ShoalMark } from "@/components/layout/AppShell";
+import { ShoalLogo } from "@/components/layout/AppShell";
 
 const LAST_TENANT = "shoal.loginTenant";
 
@@ -68,8 +68,8 @@ export default function Login() {
       </div>
       <div className="relative w-full max-w-[400px]">
         <div className="mb-7 flex flex-col items-center text-center">
-          <ShoalMark className="mb-4 size-11" />
-          <h1 className="text-xl font-semibold tracking-tight">Sign in to Shoal</h1>
+          <div className="mb-5"><ShoalLogo className="h-12" /></div>
+          <h1 className="text-xl font-semibold tracking-tight">Sign in to your workspace</h1>
           <p className="mt-1 text-[13px] text-muted">Agent workflows for your whole organisation.</p>
         </div>
         <div className="rounded-2xl border border-border bg-panel p-6 shadow-pop">

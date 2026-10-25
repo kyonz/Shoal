@@ -63,10 +63,12 @@ export interface CodeEditorProps {
   extensions?: Extension[];
   placeholder?: string;
   autoFocus?: boolean;
+  /** Turn off the default completions (when supplying your own). */
+  defaultCompletions?: boolean;
 }
 
 export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(function CodeEditor(
-  { value, onChange, language = "yaml", readOnly, className, height, minHeight, maxHeight, lineNumbers = true, extensions = [], placeholder, autoFocus },
+  { value, onChange, language = "yaml", readOnly, className, height, minHeight, maxHeight, lineNumbers = true, extensions = [], placeholder, autoFocus, defaultCompletions = true },
   ref,
 ) {
   const exts = useMemo(() => {
@@ -91,9 +93,9 @@ export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(functi
       basicSetup={{
         lineNumbers,
         foldGutter: lineNumbers,
-        highlightActiveLine: !readOnly,
-        highlightActiveLineGutter: !readOnly,
-        autocompletion: true,
+        highlightActiveLine: lineNumbers && !readOnly,
+        highlightActiveLineGutter: lineNumbers && !readOnly,
+        autocompletion: defaultCompletions,
         bracketMatching: true,
         closeBrackets: true,
         indentOnInput: true,

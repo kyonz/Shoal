@@ -9,17 +9,21 @@ import { useTheme } from "@/lib/theme";
 import { Button, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Popover, Tooltip } from "@/components/ui";
 import { CommandPalette, useCommandPalette } from "./CommandPalette";
 import { NAV } from "./nav";
+import shoalIcon from "@/assets/brand/shoal-icon.svg";
+import shoalLogo from "@/assets/brand/shoal-logo.svg";
+import shoalLogoDark from "@/assets/brand/shoal-logo-dark.svg";
 
 export function ShoalMark({ className }: { className?: string }) {
-  // Placeholder mark until the real logo lands.
+  return <img src={shoalIcon} alt="" aria-hidden className={cn("w-auto", className)} draggable={false} />;
+}
+
+/** The full wordmark, swapped for the light-on-dark variant in dark mode. */
+export function ShoalLogo({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden>
-      <rect width="32" height="32" rx="8" fill="var(--accent)" />
-      <g fill="none" stroke="var(--accent-fg)" strokeWidth="2.4" strokeLinecap="round">
-        <path d="M7 12c3-3 6-3 9 0s6 3 9 0" />
-        <path d="M7 20c3-3 6-3 9 0s6 3 9 0" opacity=".7" />
-      </g>
-    </svg>
+    <>
+      <img src={shoalLogo} alt="Shoal" className={cn("w-auto dark:hidden", className)} draggable={false} />
+      <img src={shoalLogoDark} alt="Shoal" className={cn("hidden w-auto dark:block", className)} draggable={false} />
+    </>
   );
 }
 
@@ -48,7 +52,7 @@ export function AppShell() {
   const ns = useNs();
   const location = useLocation();
   const { can } = useAuth();
-  const [collapsed, setCollapsed] = useCollapsed();
+  const [savedCollapsed, setCollapsed] = useCollapsed();
   const palette = useCommandPalette();
 
   useEffect(() => {
@@ -57,6 +61,10 @@ export function AppShell() {
 
   // Full-bleed pages (builder, run viewer) manage their own scrolling.
   const fullBleed = /\/workflows\/[^/]+$|\/runs\/[^/]+$/.test(location.pathname);
+  // Canvas pages need the room: the sidebar starts collapsed there.
+  const [expandedHere, setExpandedHere] = useState(false);
+  useEffect(() => setExpandedHere(false), [fullBleed]);
+  const collapsed = fullBleed ? !expandedHere : savedCollapsed;
 
   return (
     <div className="flex h-full">
@@ -67,7 +75,7 @@ export function AppShell() {
         )}
       >
         <div className={cn("flex h-12 items-center gap-2 border-b border-border", collapsed ? "justify-center px-0" : "px-3")}>
-          <ShoalMark className="size-7 shrink-0" />
+          <ShoalMark className={cn("shrink-0", collapsed ? "h-5" : "h-6")} />
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <div className="text-[13px] leading-tight font-semibold tracking-tight">Shoal</div>
@@ -121,7 +129,7 @@ export function AppShell() {
             variant="ghost"
             size={collapsed ? "icon-sm" : "sm"}
             className={cn(!collapsed && "w-full justify-start")}
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={() => (fullBleed ? setExpandedHere(collapsed) : setCollapsed(!collapsed))}
             icon={collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
           >
             {!collapsed && "Collapse"}

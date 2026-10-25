@@ -87,10 +87,14 @@ export class ApiError extends Error {
     this.body = body;
   }
 
-  /** Field errors from a 422 problem document. */
+  /** Field errors from a 422 problem document (top-level `errors` or `details.errors`). */
   get fieldErrors(): { loc: string[]; msg: string }[] {
-    const b = this.body as { errors?: { loc: string[]; msg: string }[] } | undefined;
-    return b?.errors ?? [];
+    const b = this.body as { errors?: unknown; details?: { errors?: unknown } } | undefined;
+    const list = (Array.isArray(b?.errors) ? b.errors : Array.isArray(b?.details?.errors) ? b.details.errors : []) as {
+      loc: string[] | string;
+      msg: string;
+    }[];
+    return list.map((e) => ({ loc: Array.isArray(e.loc) ? e.loc.map(String) : String(e.loc ?? "").split("."), msg: e.msg }));
   }
 
   /** Per-document results of a failed `/v1/apply`. */

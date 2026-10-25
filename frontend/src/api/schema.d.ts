@@ -1020,6 +1020,193 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/evals/{name}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Eval Run */
+        post: operations["start_eval_run_v1_namespaces__namespace__evals__name__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/eval-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval Runs */
+        get: operations["list_eval_runs_v1_namespaces__namespace__eval_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-runs/{eval_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An eval run with per-case scores, per-variant aggregates and the diff against its baseline */
+        get: operations["get_eval_run_v1_eval_runs__eval_run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-runs/{eval_run_id}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Eval Run Results */
+        get: operations["eval_run_results_v1_eval_runs__eval_run_id__results_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-runs/{eval_run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Eval Run */
+        post: operations["cancel_eval_run_v1_eval_runs__eval_run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-runs/{eval_run_id}/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Case-by-case diff against another eval run */
+        get: operations["compare_eval_runs_v1_eval_runs__eval_run_id__compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-runs/{eval_run_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Export Eval Run */
+        post: operations["export_eval_run_v1_eval_runs__eval_run_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/evals/{name}/scores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scores per workflow version across completed runs of an eval */
+        get: operations["eval_scores_v1_namespaces__namespace__evals__name__scores_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/evals/{name}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import a dataset from an eval platform as the eval's cases (creates a new Eval version) */
+        post: operations["import_eval_dataset_v1_namespaces__namespace__evals__name__import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/eval-sinks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval Sinks */
+        get: operations["list_eval_sinks_v1_eval_sinks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Export a workflow run as a trace to an eval platform */
+        post: operations["export_run_trace_v1_runs__run_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/a2a/{workflow}/.well-known/agent-card.json": {
         parameters: {
             query?: never;
@@ -1049,6 +1236,59 @@ export interface paths {
         /** A2A JSON-RPC endpoint (message/send, tasks/get, tasks/cancel) */
         post: operations["rpc_v1_namespaces__namespace__a2a__workflow__post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/blueprints/{name}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adopt */
+        post: operations["adopt_v1_namespaces__namespace__blueprints__name__adopt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/blueprint-adoptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Adoptions */
+        get: operations["list_adoptions_v1_namespaces__namespace__blueprint_adoptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/blueprint-adoptions/{adoption_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Adoption */
+        get: operations["get_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__get"];
+        /** Upgrade an adoption to another blueprint version or change its parameters */
+        put: operations["upgrade_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__put"];
+        post?: never;
+        /** Remove an adoption and the resources it created */
+        delete: operations["remove_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1743,6 +1983,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/connections/{name}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Actions and queryable resources this connection offers
+         * @description The integration catalogue lists static actions; dynamic integrations (remote) only know theirs per connection.
+         */
+        get: operations["list_actions_v1_namespaces__namespace__connections__name__actions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/connections/{name}/actions/{action}": {
         parameters: {
             query?: never;
@@ -1863,6 +2123,77 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** AdoptIn */
+        AdoptIn: {
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Prefix
+             * @description Prepended (with '-') to resource names through {{ prefix }} in the blueprint.
+             * @default
+             */
+            prefix: string;
+            /**
+             * Version
+             * @description Blueprint spec.version to adopt; defaults to the current one.
+             */
+            version?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        /** AdoptResult */
+        AdoptResult: {
+            /** @description Absent on a dry run. */
+            adoption?: components["schemas"]["AdoptionOut"] | null;
+            /** Resources */
+            resources: components["schemas"]["AppliedResource"][];
+            /**
+             * Removed
+             * @description Resources the new version no longer has.
+             */
+            removed?: components["schemas"]["ResourceRef"][];
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        /** AdoptionOut */
+        AdoptionOut: {
+            /** Id */
+            id: string;
+            /** Namespace */
+            namespace: string;
+            /** Blueprint */
+            blueprint: string;
+            /** Blueprint Version */
+            blueprint_version: string;
+            /** Prefix */
+            prefix: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Resources */
+            resources: components["schemas"]["ResourceRef"][];
+            /** Created By */
+            created_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** ApiKeyCreated */
         ApiKeyCreated: {
             key: components["schemas"]["ApiKeyOut"];
@@ -1921,6 +2252,19 @@ export interface components {
             last_used_at: string | null;
             /** Revoked At */
             revoked_at: string | null;
+        };
+        /** AppliedResource */
+        AppliedResource: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Outcome */
+            outcome?: string | null;
+            /** Version */
+            version?: number | null;
+            /** Plural */
+            plural?: string | null;
         };
         /** ApplyResult */
         ApplyResult: {
@@ -2051,6 +2395,31 @@ export interface components {
             /** Finished At */
             finished_at: string | null;
         };
+        /** DatasetImportIn */
+        DatasetImportIn: {
+            /**
+             * Sink
+             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'.
+             */
+            sink: string;
+            /**
+             * Config
+             * @description Sink settings; secrets by name (api_key_secret, ...).
+             */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Dataset */
+            dataset: string;
+            /** Limit */
+            limit?: number | null;
+            /**
+             * Mode
+             * @description Append to or replace the eval's cases.
+             * @default append
+             */
+            mode: string;
+        };
         /** DeliveryOut */
         DeliveryOut: {
             /** Id */
@@ -2072,6 +2441,234 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** EvalResultOut */
+        EvalResultOut: {
+            /** Id */
+            id: string;
+            /** Variant */
+            variant: string;
+            /** Workflow Version */
+            workflow_version: number;
+            /** Case Name */
+            case_name: string;
+            /** Case */
+            case: {
+                [key: string]: unknown;
+            };
+            /** Run Id */
+            run_id: string | null;
+            /** Status */
+            status: string;
+            /** Outputs */
+            outputs: {
+                [key: string]: unknown;
+            } | null;
+            /** Scores */
+            scores: {
+                [key: string]: unknown;
+            };
+            /** Score */
+            score: number | null;
+            /** Passed */
+            passed: boolean | null;
+            /** Error */
+            error: {
+                [key: string]: unknown;
+            } | null;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /** EvalRunDetail */
+        EvalRunDetail: {
+            /** Id */
+            id: string;
+            /** Namespace */
+            namespace: string;
+            /** Eval Name */
+            eval_name: string;
+            /** Eval Version */
+            eval_version: number;
+            /** Workflow Name */
+            workflow_name: string;
+            /** Workflow Version */
+            workflow_version: number;
+            /** Variants */
+            variants: {
+                [key: string]: unknown;
+            }[];
+            /** Mode */
+            mode: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Gate */
+            gate: {
+                [key: string]: unknown;
+            };
+            /** Baseline Id */
+            baseline_id: string | null;
+            /** Exports */
+            exports: {
+                [key: string]: unknown;
+            };
+            /** Error */
+            error: {
+                [key: string]: unknown;
+            } | null;
+            /** Labels */
+            labels: {
+                [key: string]: unknown;
+            };
+            /** Started By */
+            started_by: string | null;
+            /** Initiator */
+            initiator: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** Results */
+            results: components["schemas"]["EvalResultOut"][];
+        };
+        /** EvalRunIn */
+        EvalRunIn: {
+            /**
+             * Version
+             * @description Workflow version to evaluate (default: current). Ignored with variants.
+             */
+            version?: number | null;
+            /**
+             * Variants
+             * @description Arms to compare; overrides the eval's variants.
+             */
+            variants?: components["schemas"]["EvalVariant"][] | null;
+            /**
+             * Inputs
+             * @description Input overrides merged into every case.
+             */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Baseline
+             * @description 'previous', 'version:N', an eval run id, or 'none'.
+             */
+            baseline?: string | null;
+            /** Fail Under */
+            fail_under?: number | null;
+            /** Max Regression */
+            max_regression?: number | null;
+            /**
+             * Cases
+             * @description Only run these case names.
+             */
+            cases?: string[] | null;
+            /** Labels */
+            labels?: {
+                [key: string]: string;
+            };
+        };
+        /** EvalRunOut */
+        EvalRunOut: {
+            /** Id */
+            id: string;
+            /** Namespace */
+            namespace: string;
+            /** Eval Name */
+            eval_name: string;
+            /** Eval Version */
+            eval_version: number;
+            /** Workflow Name */
+            workflow_name: string;
+            /** Workflow Version */
+            workflow_version: number;
+            /** Variants */
+            variants: {
+                [key: string]: unknown;
+            }[];
+            /** Mode */
+            mode: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Gate */
+            gate: {
+                [key: string]: unknown;
+            };
+            /** Baseline Id */
+            baseline_id: string | null;
+            /** Exports */
+            exports: {
+                [key: string]: unknown;
+            };
+            /** Error */
+            error: {
+                [key: string]: unknown;
+            } | null;
+            /** Labels */
+            labels: {
+                [key: string]: unknown;
+            };
+            /** Started By */
+            started_by: string | null;
+            /** Initiator */
+            initiator: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /**
+         * EvalVariant
+         * @description One arm of a comparison: a workflow version plus input overrides (e.g. a different agent or model policy).
+         */
+        EvalVariant: {
+            /** Name */
+            name: string;
+            /**
+             * Version
+             * @description Workflow version; defaults to the current one.
+             */
+            version?: number | null;
+            /**
+             * Inputs
+             * @description Merged over every case's inputs.
+             */
+            inputs?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ExportOut */
+        ExportOut: {
+            /** Sink */
+            sink: string;
+            /** Url */
+            url: string | null;
+            /** Ids */
+            ids: {
+                [key: string]: unknown;
+            };
         };
         /** GroupIn */
         GroupIn: {
@@ -2259,6 +2856,15 @@ export interface components {
             /** Total */
             total?: number | null;
         };
+        /** Page[EvalRunOut] */
+        Page_EvalRunOut_: {
+            /** Items */
+            items: components["schemas"]["EvalRunOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Total */
+            total?: number | null;
+        };
         /** Page[GroupOut] */
         Page_GroupOut_: {
             /** Items */
@@ -2400,6 +3006,13 @@ export interface components {
             status?: {
                 [key: string]: unknown;
             };
+        };
+        /** ResourceRef */
+        ResourceRef: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
         };
         /** ResourceVersionOut */
         ResourceVersionOut: {
@@ -2642,6 +3255,32 @@ export interface components {
              */
             created_at: string;
         };
+        /** SinkIn */
+        SinkIn: {
+            /**
+             * Sink
+             * @description Eval sink plugin, e.g. 'braintrust' or 'langfuse'.
+             */
+            sink: string;
+            /**
+             * Config
+             * @description Sink settings; secrets by name (api_key_secret, ...).
+             */
+            config?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SinkOut */
+        SinkOut: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Config Schema */
+            config_schema: {
+                [key: string]: unknown;
+            };
+        };
         /** StartRunIn */
         StartRunIn: {
             /** Inputs */
@@ -2758,6 +3397,26 @@ export interface components {
             data?: {
                 [key: string]: unknown;
             };
+        };
+        /** UpgradeIn */
+        UpgradeIn: {
+            /**
+             * Version
+             * @description Blueprint spec.version to move to; defaults to the current one.
+             */
+            version?: string | null;
+            /**
+             * Params
+             * @description Parameters to change; the rest keep their adopted values.
+             */
+            params?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
         };
         /** UserIn */
         UserIn: {
@@ -5443,6 +6102,370 @@ export interface operations {
             };
         };
     };
+    start_eval_run_v1_namespaces__namespace__evals__name__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EvalRunIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_runs_v1_namespaces__namespace__eval_runs_get: {
+        parameters: {
+            query?: {
+                eval?: string | null;
+                status?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_EvalRunOut_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_eval_run_v1_eval_runs__eval_run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eval_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eval_run_results_v1_eval_runs__eval_run_id__results_get: {
+        parameters: {
+            query?: {
+                variant?: string | null;
+            };
+            header?: never;
+            path: {
+                eval_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalResultOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_eval_run_v1_eval_runs__eval_run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eval_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalRunOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_eval_runs_v1_eval_runs__eval_run_id__compare_get: {
+        parameters: {
+            query: {
+                baseline: string;
+            };
+            header?: never;
+            path: {
+                eval_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_eval_run_v1_eval_runs__eval_run_id__export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eval_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SinkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eval_scores_v1_namespaces__namespace__evals__name__scores_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_eval_dataset_v1_namespaces__namespace__evals__name__import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetImportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_sinks_v1_eval_sinks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SinkOut"][];
+                };
+            };
+        };
+    };
+    export_run_trace_v1_runs__run_id__export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SinkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     agent_card_v1_namespaces__namespace__a2a__workflow___well_known_agent_card_json_get: {
         parameters: {
             query?: never;
@@ -5497,6 +6520,173 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adopt_v1_namespaces__namespace__blueprints__name__adopt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_adoptions_v1_namespaces__namespace__blueprint_adoptions_get: {
+        parameters: {
+            query?: {
+                blueprint?: string | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                adoption_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upgrade_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                adoption_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                adoption_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -7635,6 +8825,40 @@ export interface operations {
         };
     };
     connection_webhook_v1_namespaces__namespace__connections__name__webhook_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_actions_v1_namespaces__namespace__connections__name__actions_get: {
         parameters: {
             query?: never;
             header?: never;

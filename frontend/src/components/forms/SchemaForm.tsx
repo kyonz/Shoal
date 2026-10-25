@@ -35,6 +35,8 @@ export interface SchemaFormProps {
   order?: string[];
   /** Field-level errors by property name. */
   errors?: Record<string, string>;
+  /** Widget for every free-text string field (e.g. an expression editor). */
+  stringWidget?: Widget;
   /** Collapse optional fields under "More options". */
   collapseOptional?: boolean;
   className?: string;
@@ -102,7 +104,7 @@ export function compactObject(obj: Record<string, unknown>): Record<string, unkn
 
 // --------------------------------------------------------------------------- the form
 
-export function SchemaForm({ schema, value, onChange, root, widgets, hidden = [], order = [], errors, collapseOptional, className }: SchemaFormProps) {
+export function SchemaForm({ schema, value, onChange, root, widgets, hidden = [], order = [], errors, collapseOptional, className, stringWidget }: SchemaFormProps) {
   const r = root ?? schema;
   const s = resolve(schema, r);
   const props = s.properties ?? {};
@@ -136,6 +138,7 @@ export function SchemaForm({ schema, value, onChange, root, widgets, hidden = []
       required={required.has(k)}
       onChange={(val) => set(k, val)}
       widget={widgets?.[k]}
+      stringWidget={stringWidget}
       error={errors?.[k]}
     />
   );
@@ -160,7 +163,7 @@ export function SchemaForm({ schema, value, onChange, root, widgets, hidden = []
   );
 }
 
-export function SchemaField({ name, schema, root, value, onChange, required, widget, error, label }: {
+export function SchemaField({ name, schema, root, value, onChange, required, widget, error, label, stringWidget }: {
   name: string;
   schema: JsonSchema;
   root: JsonSchema;
@@ -170,6 +173,7 @@ export function SchemaField({ name, schema, root, value, onChange, required, wid
   widget?: Widget;
   error?: string;
   label?: ReactNode;
+  stringWidget?: Widget;
 }) {
   const { schema: s } = unwrapNullable(schema, root);
   const title = label ?? s.title ?? humanize(name);
@@ -225,6 +229,7 @@ export function SchemaField({ name, schema, root, value, onChange, required, wid
         />,
       );
     case "string": {
+      if (stringWidget) return wrap(stringWidget({ value, onChange, schema: s, name, required }));
       if (MULTILINE.test(name) || s.format === "textarea") {
         return wrap(
           <Textarea
@@ -261,7 +266,7 @@ export function SchemaField({ name, schema, root, value, onChange, required, wid
           <fieldset className="rounded-lg border border-border p-3">
             <legend className="px-1 text-xs font-medium">{title}</legend>
             {description && <p className="-mt-1 mb-2 text-xs text-faint">{description}</p>}
-            <SchemaForm schema={s} root={root} value={value as Record<string, unknown>} onChange={(o) => onChange(isEmpty(o) ? undefined : o)} />
+            <SchemaForm schema={s} root={root} value={value as Record<string, unknown>} stringWidget={stringWidget} onChange={(o) => onChange(isEmpty(o) ? undefined : o)} />
           </fieldset>
         );
       }
