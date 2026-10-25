@@ -577,6 +577,9 @@ class ModelPolicySpec(Model):
 
 
 class BlueprintParam(Model):
+    """Something the adopting team supplies. ``connection`` and ``secret`` params take the
+    name of a connection (visible from the namespace) or a secret in the namespace."""
+
     type: Literal["string", "number", "boolean", "connection", "secret", "choice"] = "string"
     description: str | None = None
     integration: str | None = Field(None, description="For type=connection: the integration it must be.")
@@ -594,11 +597,15 @@ class BlueprintSpec(Model):
     author: str | None = None
     tags: list[str] = Field(default_factory=list)
     categories: list[str] = Field(default_factory=list)
-    status: Literal["draft", "published", "promoted", "deprecated"] = "draft"
-    visibility: Literal["tenant", "install", "public"] = "tenant"
+    status: Literal["draft", "published", "featured", "deprecated"] = Field(
+        "draft", description="Only published and featured blueprints can be adopted; featuring needs blueprints:feature."
+    )
+    namespaces: list[str] = Field(default_factory=list, description="Namespaces that may adopt it (empty: all).")
     params: dict[str, BlueprintParam] = Field(default_factory=dict)
     resources: list[dict[str, Any]] = Field(
-        min_length=1, description="Resource templates; {{ params.* }} and {{ prefix }} are substituted."
+        min_length=1,
+        description="Resource templates (apiVersion/kind/metadata/spec). Expressions over `params`, `prefix` and "
+        "`blueprint` are filled in at adoption; all other {{ }} expressions are left for run time.",
     )
 
 

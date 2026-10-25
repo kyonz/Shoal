@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
 
 from awm import __version__
-from awm.api.routers import a2a, admin, auth, hooks, resources, runs, scim, system
+from awm.api.routers import a2a, admin, auth, blueprints, hooks, resources, runs, scim, system
 from awm.config import Settings
 from awm.core.errors import AWMError
 from awm.core.ids import new_id
@@ -183,7 +183,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, admin, runs, a2a, resources):
+    for module in (system, auth, hooks, scim, admin, runs, a2a, blueprints, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:
         _mount_frontend(app, engine.settings.static_dir)

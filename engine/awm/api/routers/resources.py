@@ -172,6 +172,10 @@ def _tenant_routes(plural: str, kind: str) -> None:
     @router.put(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"put_{plural}")
     async def put_one(name: str, body: ResourceIn, ctx: CtxDep, response: Response) -> Any:
         await ctx.require(verbs["write"])
+        if kind == "Blueprint" and (body.spec or {}).get("status") == "featured":
+            current = await ctx.engine.store.find_resource(ctx.tenant_id, kind, name)
+            if current is None or current.spec.status != "featured":  # type: ignore[attr-defined]
+                await ctx.require("blueprints:feature")
         return await _put(ctx, kind, name, SHARED_NAMESPACE, body, response)
 
     @router.get(f"/{plural}/{{name}}", tags=tag, response_model=ResourceOut, name=f"get_{plural}")

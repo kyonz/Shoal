@@ -22,6 +22,7 @@ import httpx
 from awm.auth.directory import Directory
 from awm.auth.oidc import OIDCService
 from awm.auth.rbac import Authorizer
+from awm.blueprints import BlueprintService
 from awm.campaigns.service import CampaignService
 from awm.config import Settings, get_settings
 from awm.core import clock
@@ -104,6 +105,7 @@ class Engine:
         self.executor = Executor(self)
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)
+        self.blueprints = BlueprintService(self)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._stopping = asyncio.Event()
 

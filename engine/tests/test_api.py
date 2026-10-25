@@ -300,3 +300,82 @@ async def test_audit_covers_writes_denials_and_failures(admin, api):
     assert export.headers["content-type"].startswith("application/x-ndjson")
     lines = [json.loads(line) for line in export.text.splitlines()]
     assert any(e["action"] == "workflow.created" for e in lines)
+
+
+GREETER = {
+    "spec": {
+        "title": "Greeter",
+        "summary": "A workflow that greets",
+        "version": "1.0.0",
+        "status": "published",
+        "params": {"greeting": {"default": "Hello"}, "team": {}},
+        "resources": [
+            {"kind": "Workflow", "metadata": {"name": "{{ prefix }}greet", "labels": {"team": "{{ params.team }}"}},
+             "spec": {"inputs": {"name": {"type": "string"}},
+                      "steps": [{"id": "g", "type": "set", "values": {"text": "{{ params.greeting }} {{ inputs.name }}"}}]}},
+            {"kind": "Workflow", "metadata": {"name": "{{ prefix }}wave"},
+             "spec": {"steps": [{"id": "w", "type": "set", "values": {"text": "wave"}}]}},
+        ],
+    }
+}
+
+
+async def test_blueprint_adoption_lifecycle(admin, api):
+    assert (await admin.put("/v1/namespaces/team-a", json={})).status_code == 201
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 201
+    adopt = "/v1/namespaces/team-a/blueprints/greeter/adopt"
+
+    bad = await admin.post(adopt, json={"params": {}})
+    assert bad.status_code == 422 and bad.json()["details"]["params"] == {"team": "required"}
+
+    dry = await admin.post(adopt, json={"params": {"team": "a"}, "prefix": "x", "dry_run": True})
+    assert dry.status_code == 200 and dry.json()["dry_run"] is True, dry.text
+    assert [r["name"] for r in dry.json()["resources"]] == ["x-greet", "x-wave"]
+    assert (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).status_code == 404
+
+    r = await admin.post(adopt, json={"params": {"team": "a"}, "prefix": "x"})
+    assert r.status_code == 201, r.text
+    adoption = r.json()["adoption"]
+    assert adoption["blueprint_version"] == "1.0.0" and adoption["params"] == {"greeting": "Hello", "team": "a"}
+    wf = (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).json()
+    assert wf["metadata"]["labels"]["team"] == "a" and wf["metadata"]["labels"]["awm.dev/adoption"] == adoption["id"]
+    # run-time expressions are left alone, adoption-time ones filled in
+    assert wf["spec"]["steps"][0]["values"]["text"] == "Hello {{ inputs.name }}"
+
+    clash = await admin.post(adopt, json={"params": {"team": "a"}, "prefix": "x"})
+    assert clash.status_code == 409
+
+    # v2 drops the wave workflow; upgrading the adoption removes it and keeps the params
+    v2 = json.loads(json.dumps(GREETER))
+    v2["spec"]["version"] = "2.0.0"
+    v2["spec"]["resources"] = v2["spec"]["resources"][:1]
+    assert (await admin.put("/v1/blueprints/greeter", json=v2)).status_code == 200
+    url = f"/v1/namespaces/team-a/blueprint-adoptions/{adoption['id']}"
+    up = await admin.put(url, json={"params": {"greeting": "Hi"}})
+    assert up.status_code == 200, up.text
+    assert up.json()["removed"] == [{"kind": "Workflow", "name": "x-wave"}]
+    assert up.json()["adoption"]["blueprint_version"] == "2.0.0"
+    assert (await admin.get("/v1/namespaces/team-a/workflows/x-wave")).status_code == 404
+    wf = (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).json()
+    assert wf["spec"]["steps"][0]["values"]["text"] == "Hi {{ inputs.name }}"
+
+    # an older version can still be adopted by its version number
+    old = await admin.post(adopt, json={"params": {"team": "b"}, "prefix": "y", "version": "1.0.0"})
+    assert old.status_code == 201 and len(old.json()["resources"]) == 2
+    listed = (await admin.get("/v1/namespaces/team-a/blueprint-adoptions")).json()
+    assert {a["prefix"] for a in listed} == {"x", "y"}
+
+    # viewers can browse but not adopt; drafts and restricted blueprints cannot be adopted
+    viewer = await _key_for(admin, "bp-viewer", "viewer", "team-a")
+    r = await api.post(adopt, json={"params": {"team": "a"}, "prefix": "z"}, headers={"Authorization": f"Bearer {viewer}"})
+    assert r.status_code == 403
+    restricted = json.loads(json.dumps(GREETER))
+    restricted["spec"]["namespaces"] = ["team-b"]
+    await admin.put("/v1/blueprints/greeter", json=restricted)
+    r = await admin.post(adopt, json={"params": {"team": "a"}, "prefix": "z"})
+    assert r.status_code == 403
+
+    assert (await admin.delete(url)).status_code == 204
+    assert (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).status_code == 404
+    assert (await admin.get(url)).status_code == 404
+    assert any(e["action"] == "blueprint.adopted" for e in (await admin.get("/v1/audit")).json()["items"])

@@ -399,6 +399,23 @@ class Secret(Base):
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class BlueprintAdoption(Base):
+    """A blueprint rendered into a namespace; owns the resources it created."""
+
+    __tablename__ = "blueprint_adoptions"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), index=True)
+    blueprint: Mapped[str] = mapped_column(String(63), index=True)
+    blueprint_version: Mapped[str] = mapped_column(String(40))
+    prefix: Mapped[str] = mapped_column(String(40), default="")
+    params: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    resources: Mapped[list[Any]] = mapped_column(default=list, doc="[{kind, name}] it applied.")
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class AuditEntry(Base):
     """Append-only record of who did what. Written for every mutating API call,
     sign-in, denied request and governance decision."""
