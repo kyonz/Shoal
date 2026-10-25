@@ -3,7 +3,7 @@ and connection / trigger operations."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from fastapi import APIRouter, Query, Request, Response
@@ -28,11 +28,21 @@ from shoal.api.schemas import (
 from shoal.core.diff import diff
 from shoal.core.errors import InvalidRequest, NotFound
 from shoal.core.ids import new_id
-from shoal.core.models import KIND_BY_PLURAL, Connection, ResourceBase, Trigger, parse_resource
+from shoal.core.models import (
+    KIND_BY_PLURAL,
+    Connection,
+    ResourceBase,
+    SandboxProfile,
+    Trigger,
+    parse_resource,
+)
 from shoal.core.scope import SHARED_NAMESPACE, TENANT_SCOPED_KINDS, use_namespace
 from shoal.integrations.base import IntegrationEvent, describe_actions, describe_resources
 from shoal.store import tables as t
 from shoal.triggers import validate_cron
+
+if TYPE_CHECKING:
+    from shoal.engine import Engine
 
 router = APIRouter(prefix="/v1")
 
@@ -109,12 +119,27 @@ def validate_semantics(resource: ResourceBase) -> None:
             raise InvalidRequest(f"invalid schedule: {exc}") from exc
 
 
+def validate_plugin_config(engine: Engine, resource: ResourceBase) -> None:
+    """Checks against the installed plugins: a sandbox profile's config must fit its backend's schema."""
+    if isinstance(resource, SandboxProfile) and resource.spec.backend in engine.registry.names("sandboxes"):
+        schema = getattr(engine.plugin("sandboxes", resource.spec.backend), "config_schema", None)
+        if schema is not None:
+            try:
+                schema.model_validate(resource.spec.config)
+            except ValidationError as exc:
+                errors = [{**e, "loc": f"spec.config.{e['loc']}" if e["loc"] else "spec.config"} for e in _errors(exc)]
+                summary = "; ".join(f"{e['loc']}: {e['msg']}" for e in errors)
+                raise InvalidRequest(f"invalid config for sandbox backend '{resource.spec.backend}': {summary}",
+                                     details={"errors": errors}) from exc
+
+
 MessageQuery = Query(None, max_length=2000, description="Change note stored with the new version.")
 
 
 async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn, response: Response,
                message: str | None = None) -> ResourceOut:
     resource = build_resource(kind, name, body)
+    validate_plugin_config(ctx.engine, resource)
     row, outcome = await ctx.engine.store.apply_resource(
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec), message=message
     )
@@ -316,6 +341,7 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
         try:
             resource = parse_resource({**doc, "spec": strip_nulls(doc.get("spec"))})
             validate_semantics(resource)
+            validate_plugin_config(ctx.engine, resource)
         except (ValidationError, ValueError, InvalidRequest) as exc:
             message = "; ".join(f"{e['loc']}: {e['msg']}" for e in _errors(exc)) if isinstance(exc, ValidationError) else str(exc)
             results.append(ApplyResult(kind=kind, name=name, namespace=ns, outcome="invalid", error=message))

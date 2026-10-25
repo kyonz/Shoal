@@ -519,6 +519,23 @@ async def test_journey_blueprints_adopt_cleanly(admin):
     assert campaign["spec"]["targets"]["filter"]["org"] == "acme" and campaign["spec"]["policy"]["budget_usd"] == 500
 
 
+async def test_sandbox_profile_config_is_checked_against_the_backend(admin):
+    r = await admin.put("/v1/namespaces/default/sandbox-profiles/k8s", json={"spec": {
+        "backend": "kubernetes", "config": {"namespce": "sbx", "run_as_user": -1}}})
+    assert r.status_code == 422, r.text
+    assert "spec.config.namespce" in r.text and "spec.config.run_as_user" in r.text
+    ok = {"backend": "kubernetes", "config": {"namespace": "shoal-{tenant}", "runtime_class": "gvisor"}}
+    assert (await admin.put("/v1/namespaces/default/sandbox-profiles/k8s", json={"spec": ok})).status_code == 201
+
+    doc = "apiVersion: shoal.dev/v1\nkind: SandboxProfile\nmetadata: {name: e2b}\nspec: {backend: e2b, config: {domian: x}}\n"
+    r = await admin.post("/v1/apply", content=doc)
+    assert r.status_code == 422 and "spec.config.domian" in r.text
+
+    backends = {b["name"]: b for b in (await admin.get("/v1/sandbox-backends")).json()}
+    assert "runtime_class" in backends["kubernetes"]["config_schema"]["properties"]
+    assert backends["local"]["config_schema"]["properties"] == {}
+
+
 async def test_approvers_over_the_api(admin, api):
     await admin.put("/v1/namespaces/default/workflows/gated", json={"spec": {"steps": [
         {"id": "ok", "type": "approval", "message": "Ship it?", "approvers": ["sa:ops"]},

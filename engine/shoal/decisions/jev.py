@@ -85,6 +85,7 @@ def parse_answer(question: DecisionQuestion, raw: dict[str, Any]) -> Answer:
 
 class JevProvider(DecisionProvider):
     name = "jev"
+    description = "TypeSafe Jev (System One): calibrated typed decisions, hosted (needs the typesafe-sdk package)."
 
     def __init__(self, client_factory: Callable[[dict[str, Any]], Any] | None = None):
         self.client_factory = client_factory

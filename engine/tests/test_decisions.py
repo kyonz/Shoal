@@ -262,6 +262,43 @@ async def test_model_policy_fallback_and_tenant_deny_list(engine, tenant):
     assert run.status == "failed" and "not permitted" in run.error["message"]
 
 
+async def test_model_policy_keeps_agent_settings_and_skips_broken_gateways(engine, tenant):
+    seen: list[ModelRequest] = []
+
+    def ok(request: ModelRequest) -> ModelResponse:
+        seen.append(request)
+        return _finisher({})(request)
+
+    set_script_function("ok", ok)
+    await engine.store.apply_resource(tenant.id, res("Gateway", "nokey", {"type": "scripted", "api_key_secret": "missing-key"}))
+    await engine.store.apply_resource(tenant.id, res("Gateway", "gw", {"type": "scripted", "config": {"function": "ok"}}))
+    await engine.store.apply_resource(tenant.id, res("ModelPolicy", "coding", {"rules": [{"name": "all", "candidates": [
+        {"model": "big", "gateway": "nokey"}, {"model": "medium", "gateway": "gw"}]}]}))
+    await engine.store.apply_resource(tenant.id, res("Agent", "coder", {
+        "provider": "anthropic", "model": "policy:coding", "tools": [], "provider_config": {"temperature": 0.2, "effort": "high"}}))
+    await engine.store.apply_resource(
+        tenant.id, res("Workflow", "code", {"steps": [{"id": "work", "type": "agent", "agent": "coder", "prompt": "Go"}]}))
+    run = await run_wf(engine, tenant, "code")
+    assert run.status == "succeeded", run.error
+    assert seen[0].model == "medium" and seen[0].config["temperature"] == 0.2 and seen[0].config["effort"] == "high"
+    fallback = next(e.data for e in await events(engine, tenant, run.id) if e.type == "model.fallback")
+    assert fallback["gateway"] == "nokey" and "missing-key" in fallback["reason"]
+
+    await engine.store.apply_resource(tenant.id, res("ModelPolicy", "coding", {"rules": [{"name": "all", "candidates": [
+        {"model": "big", "gateway": "nokey"}]}]}))
+    run = await run_wf(engine, tenant, "code")
+    assert run.status == "failed" and "no usable candidate" in run.error["message"] and "missing-key" in run.error["message"]
+
+
+async def test_llm_decisions_respect_the_tenant_model_policy(engine, tenant):
+    await engine.store.apply_resource(tenant.id, res("ModelPolicy", "default", {"deny_models": ["tiny"], "rules": [{"name": "any", "candidates": [{"model": "x"}]}]}))
+    await engine.store.apply_resource(tenant.id, res("Workflow", "triage", {"steps": [{
+        "id": "classify", "type": "decide", "provider": "llm", "provider_config": {"gateway": "scripted", "model": "tiny"},
+        "state": "x", "questions": {"repro": {"type": "boolean", "instructions": "Has steps."}}}]}))
+    run = await run_wf(engine, tenant, "triage")
+    assert run.status == "failed" and "not permitted" in run.error["message"]
+
+
 async def test_difficulty_router_picks_rule(engine, tenant):
     engine.registry.register("decision_providers", "fake", FakeDecider(lambda r: {"difficulty": {"easy": 0.1, "hard": 0.9}}))
     set_script_function("ok", _finisher({}))

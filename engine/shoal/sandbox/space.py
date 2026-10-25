@@ -26,6 +26,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec
 
@@ -191,9 +192,20 @@ class SpaceSandbox(Sandbox):
                 raise
 
 
+class SpaceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_url: str | None = Field(None, description="Control plane URL (default: SPACE_API_URL).")
+    data_plane_url: str | None = Field(None, description="Data plane URL (default: SPACE_DATA_PLANE_URL).")
+    token_secret: str | None = Field(None, description="Secret holding the API token (default: SPACE_API_TOKEN).")
+    runtime: str = Field("fc", description="SPACE runtime, e.g. fc (Firecracker).")
+    read_chunk_bytes: int = Field(4 * 1024 * 1024, gt=0, description="Read size for file downloads.")
+
+
 class SpaceBackend(SandboxBackend):
     name = "space"
     description = "Perplexity SPACE: Firecracker microVM sandboxes with suspend/wake (self-hosted)."
+    config_schema = SpaceConfig
 
     def setup(self, engine: Engine) -> None:
         self.engine = engine

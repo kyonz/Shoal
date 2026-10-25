@@ -6,7 +6,8 @@ probability per option/level (or that a statement is true) through a single
 
 ``config``: ``gateway`` (Gateway resource or provider plugin, default
 ``anthropic``), ``model`` (default ``claude-haiku-5-5``), ``effort`` (default
-``low``), plus any provider settings (e.g. ``function`` for ``scripted``).
+``low``), plus any provider settings (e.g. ``function`` for ``scripted``). The tenant's
+``default`` model policy allow/deny lists apply, as they do to agents.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from shoal.agents.providers.base import ModelRequest, ToolDef
 from shoal.core.errors import StepError
 from shoal.core.models import DecisionQuestion
 from shoal.decisions.base import DecisionProvider, DecisionRequest, DecisionResult, answer_from_probabilities
+from shoal.llm.router import DEFAULT_POLICY
 from shoal.runtime.executor import add_usage
 
 if TYPE_CHECKING:
@@ -66,6 +68,7 @@ def describe(questions: dict[str, DecisionQuestion]) -> str:
 
 class LLMDecisionProvider(DecisionProvider):
     name = "llm"
+    description = "Any model through your gateways (default claude-haiku-5-5); self-hostable."
 
     def setup(self, engine: Engine) -> None:
         self.engine = engine
@@ -75,7 +78,10 @@ class LLMDecisionProvider(DecisionProvider):
         gateway = cfg.pop("gateway", "anthropic")
         model = cfg.pop("model", "claude-haiku-5-5")
         effort = cfg.pop("effort", "low")
-        target = await self.engine.models.gateway_target(
+        models = self.engine.models
+        if not models.permitted(model, await models.policy(request.tenant_id, DEFAULT_POLICY)):
+            raise StepError(f"decision model '{model}' is not permitted by the tenant's model policy")
+        target = await models.gateway_target(
             request.tenant_id, gateway, model, effort=effort, overrides=cfg
         )
         tool = ToolDef(

@@ -156,19 +156,26 @@ async def sandbox_backends(ctx: CtxDep) -> list[dict[str, Any]]:
     out = []
     for name, backend in ctx.engine.registry.available("sandboxes").items():
         schema = backend.config_schema.model_json_schema() if getattr(backend, "config_schema", None) else None
-        out.append({"name": name, "description": getattr(backend, "description", ""), "config_schema": schema})
+        out.append({"name": name, "description": getattr(backend, "description", ""), "config_schema": schema,
+                    "network_controls": sorted(getattr(backend, "network_controls", ()))})
     return out
+
+
+def _describe(plugin: Any) -> str:
+    """A plugin's ``description``, else the first line of its class docstring."""
+    cls = plugin if isinstance(plugin, type) else type(plugin)
+    return getattr(plugin, "description", "") or (cls.__doc__ or "").strip().split("\n")[0]
 
 
 @router.get("/v1/providers", tags=["catalog"], summary="Model provider plugins (gateway types)")
 async def providers(ctx: CtxDep) -> list[dict[str, Any]]:
-    return [{"name": n, "description": (type(p).__doc__ or "").strip().split("\n")[0]} for n, p in ctx.engine.registry.available("providers").items()]
+    return [{"name": n, "description": _describe(p)} for n, p in ctx.engine.registry.available("providers").items()]
 
 
 @router.get("/v1/decision-providers", tags=["catalog"])
 async def decision_providers(ctx: CtxDep) -> list[dict[str, Any]]:
     return [
-        {"name": n, "description": (type(p).__doc__ or "").strip().split("\n")[0], "default": n == ctx.engine.settings.default_decision_provider}
+        {"name": n, "description": _describe(p), "default": n == ctx.engine.settings.default_decision_provider}
         for n, p in ctx.engine.registry.available("decision_providers").items()
     ]
 
