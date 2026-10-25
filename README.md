@@ -241,6 +241,8 @@ on the visual canvas. All three produce the same versioned resources.
 - An **agent** is a model, a system prompt, skills (`SKILL.md`), tools, sub-agents, a sandbox profile and limits on turns, tokens, time and cost.
 - Run agents on Shoal's own tool-use loop, as an external coding agent CLI inside the sandbox, or as a remote agent over **A2A**. Workflows can be published as A2A agents too.
 - **LLM gateways and model policies** are managed centrally per tenant: Anthropic and OpenAI-compatible APIs, directly or through LiteLLM, Portkey, OpenRouter and others, without clear-text credentials.
+- **MCP servers as tools:** connect any MCP server and its tools become workflow actions and agent tools.
+- **Cloud identities:** grant workflows and agents AWS IAM roles. Each step gets short-lived STS credentials through Shoal's own OIDC issuer or the deployment's role, with no stored cloud secrets, and every session is tagged with who started the run.
 - **Delegated credentials and workload identity**, so agents act with exactly the access the run allows.
 
 ### Sandboxes
@@ -249,7 +251,8 @@ Every agent and script step runs in a sandbox: `local`, `docker`, `kubernetes`, 
 protocol. Sandbox profiles are per namespace, so one team can run on Kubernetes while another uses E2B.
 
 ### Integrations, campaigns and blueprints
-- **GitHub, Jira, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
+- **GitHub, Jira, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
+- **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
 - **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue.
 
@@ -285,8 +288,7 @@ One container image for the API, workers and CLI; docker compose and a Helm char
 metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
 
 ### In progress
-A Temporal orchestrator backend, a skills marketplace, AWS cloud identities for workflows, and MCP
-servers as agent tool sources.
+A Temporal orchestrator backend and a skills marketplace.
 
 ## Documentation
 
