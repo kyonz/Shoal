@@ -28,6 +28,7 @@ GROUPS = (
     "steps",
     "decision_providers",
     "eval_sinks",
+    "orchestrators",
 )
 
 

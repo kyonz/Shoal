@@ -259,6 +259,9 @@ class Run(Base):
     parent_run_id: Mapped[str | None] = mapped_column(String(40), index=True)
     parent_step_id: Mapped[str | None] = mapped_column(String(64))
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    orchestrator: Mapped[str] = mapped_column(
+        String(20), default="builtin", server_default="builtin", doc="What drives this run (see shoal.runtime.orchestrator)."
+    )
     next_wake_at: Mapped[datetime | None] = mapped_column()
     lease_owner: Mapped[str | None] = mapped_column(String(100))
     lease_expires_at: Mapped[datetime | None] = mapped_column()

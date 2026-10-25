@@ -116,7 +116,7 @@ The full version, with tests, Jira writeback and failure handling, is in [`examp
 **Workflows and runs**
 - Declarative, versioned workflows with typed inputs and outputs, authored as YAML (GitOps) or through the API and UI.
 - Step types: `agent`, `action`, `script`, `wait`, `approval`, `condition`, `map`, `workflow` (sub-workflow) and `decide`, with retries, timeouts, `on_error` and parallel branches via `needs`.
-- A durable executor on Postgres: runs survive restarts and can wait for days. No Temporal required.
+- A durable executor on Postgres: runs survive restarts and can wait for days. No Temporal required, but if you already run Temporal, Shoal can use it to drive runs ([guide](docs/temporal.md)).
 - Versioning with change notes, diffs, rollback and pinned versions; live run events over SSE.
 
 **Agents**
@@ -156,6 +156,7 @@ The full version, with tests, Jira writeback and failure handling, is in [`examp
 | [CLI](docs/cli.md) | Connecting, applying resources, runs, secrets, evals |
 | [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
+| [Temporal](docs/temporal.md) | Driving runs with a Temporal cluster you already operate |
 | [Terraform provider](terraform-provider/README.md) | Managing Shoal as code |
 | [Brand](docs/brand.md) | Logo, colours and how to use them |
 

@@ -105,9 +105,15 @@ YAML/JSON, so they can be authored as files (GitOps) or via the API/UI.
 
 A week-long "wait for review" means runs must be durable. We implement a small
 durable state machine on top of the database rather than requiring Temporal,
-because self-hosters should be able to run Shoal with just Postgres. The executor
-sits behind the `Orchestrator` protocol so a Temporal (or other) backend can be
-added as a plugin later without touching workflows.
+because self-hosters should be able to run Shoal with just Postgres. Scheduling
+sits behind the `Orchestrator` protocol (`shoal.runtime.orchestrator`): it decides
+when and where a run is advanced, the executor decides what advancing means.
+Each run records the orchestrator that drives it. Besides the built-in one,
+Shoal ships an optional Temporal orchestrator (`SHOAL_ORCHESTRATOR=temporal`, the
+`temporal` extra) for operators who already run Temporal: each run is a Temporal
+workflow whose passes are activities, while the store stays the source of truth
+([guide](temporal.md)). Other backends plug in through the `shoal.orchestrators`
+entry point group.
 
 ---
 
