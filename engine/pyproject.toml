@@ -86,6 +86,10 @@ a2a = "shoal.agents.a2a_runtime:A2ARuntime"
 builtin = "shoal.runtime.orchestrator:BuiltinOrchestrator"
 temporal = "shoal.runtime.temporal.orchestrator:TemporalOrchestrator"
 
+[project.entry-points."shoal.dispatch_queues"]
+database = "shoal.runtime.queues:DatabaseQueue"
+sqs = "shoal.runtime.queues.sqs:SQSQueue"
+
 [project.entry-points."shoal.credentials"]
 aws = "shoal.cloud.aws:AwsProvider"
 

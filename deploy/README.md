@@ -104,6 +104,12 @@ Runs are driven by the database unless you set `orchestrator.type=temporal` and
 `orchestrator.temporal.address` to use a Temporal cluster you already run (with an API key Secret or
 an mTLS Secret if it needs one). See [Running Shoal on Temporal](../docs/temporal.md).
 
+Workers poll the database for due runs unless you set `dispatch.queue=sqs` and
+`dispatch.sqs.queueUrl` (and `dispatch.sqs.agentQueueUrl` with an agent pool); then they long-poll
+Amazon SQS, with the service account's AWS role allowed to use the queues.
+[`deploy/terraform/sqs-dispatch`](terraform/sqs-dispatch/) creates them. See
+[Dispatch queues](../docs/dispatch-queues.md).
+
 Pods run as non-root with a read-only root filesystem; `/tmp` and the local sandbox directory
 are `emptyDir` volumes. Model and sandbox credentials go in `extraEnv` / `extraEnvFrom`, and
 `serviceAccount.annotations` takes workload identity bindings. After installing, `helm test shoal`

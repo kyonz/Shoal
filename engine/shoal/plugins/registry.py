@@ -3,7 +3,8 @@
 Plugins are discovered from Python entry points (``shoal.sandboxes``,
 ``shoal.integrations``, ``shoal.providers``, ``shoal.agent_runtimes``,
 ``shoal.credentials``, ``shoal.secrets``, ``shoal.steps``,
-``shoal.decision_providers``, ``shoal.eval_sinks``, ``shoal.skill_sources``) and can also be
+``shoal.decision_providers``, ``shoal.eval_sinks``, ``shoal.skill_sources``,
+``shoal.orchestrators``, ``shoal.dispatch_queues``) and can also be
 registered programmatically, which is how tests inject fakes.
 """
 
@@ -30,6 +31,7 @@ GROUPS = (
     "eval_sinks",
     "skill_sources",
     "orchestrators",
+    "dispatch_queues",
 )
 
 

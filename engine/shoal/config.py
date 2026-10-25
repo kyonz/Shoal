@@ -142,6 +142,31 @@ class Settings(BaseSettings):
     )
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
+    dispatch_queue: str = Field(
+        "database",
+        description="How workers hear that a run is due: database (they poll the runs table) or sqs; plugins add "
+        "more (shoal.dispatch_queues). The database stays the source of truth either way (docs/dispatch-queues.md).",
+    )
+    dispatch_sweep_seconds: float = Field(
+        15.0, gt=0, description="With an external queue, how often workers still look in the database for due runs "
+        "(a lost message, a worker that died mid-run).",
+    )
+    dispatch_wait_seconds: float = Field(
+        20.0, ge=0, le=20, description="How long a worker's receive waits for a message (SQS long polling)."
+    )
+    dispatch_sqs_queue_url: str | None = Field(None, description="Standard SQS queue for wake-ups of every lane.")
+    dispatch_sqs_lane_queue_urls: dict[str, str] = Field(
+        default_factory=dict,
+        description='A queue per lane, e.g. {"agent": "https://sqs.eu-west-1.amazonaws.com/123456789012/shoal-agent"}, '
+        "so separate worker pools only receive their own runs.",
+    )
+    dispatch_sqs_region: str | None = Field(None, description="Region to sign for (default: from the queue URL).")
+    dispatch_sqs_endpoint: str | None = Field(
+        None, description="SQS endpoint override: LocalStack (http://localhost:4566) or a VPC endpoint."
+    )
+    dispatch_sqs_fair_queues: bool = Field(
+        True, description="Send each tenant's messages in their own message group (SQS fair queues)."
+    )
     orchestrator: str = Field(
         "builtin", description="What drives runs: builtin (the database) or temporal (needs the temporal extra)."
     )

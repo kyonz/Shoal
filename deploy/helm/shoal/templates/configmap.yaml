@@ -23,6 +23,23 @@ data:
   SHOAL_ASSISTANT_EFFORT: {{ .Values.config.assistant.effort | quote }}
   SHOAL_ASSISTANT_MAX_TURNS: {{ .Values.config.assistant.maxTurns | quote }}
   SHOAL_ORCHESTRATOR: {{ .Values.orchestrator.type | quote }}
+  SHOAL_DISPATCH_QUEUE: {{ .Values.dispatch.queue | quote }}
+  {{- if eq .Values.dispatch.queue "sqs" }}
+  {{- with .Values.dispatch.sqs }}
+  SHOAL_DISPATCH_SWEEP_SECONDS: {{ $.Values.dispatch.sweepSeconds | quote }}
+  SHOAL_DISPATCH_SQS_QUEUE_URL: {{ required "dispatch.sqs.queueUrl is required when dispatch.queue is sqs" .queueUrl | quote }}
+  {{- if .agentQueueUrl }}
+  SHOAL_DISPATCH_SQS_LANE_QUEUE_URLS: {{ dict "agent" .agentQueueUrl | toJson | quote }}
+  {{- end }}
+  {{- if .region }}
+  SHOAL_DISPATCH_SQS_REGION: {{ .region | quote }}
+  {{- end }}
+  {{- if .endpoint }}
+  SHOAL_DISPATCH_SQS_ENDPOINT: {{ .endpoint | quote }}
+  {{- end }}
+  SHOAL_DISPATCH_SQS_FAIR_QUEUES: {{ .fairQueues | quote }}
+  {{- end }}
+  {{- end }}
   SHOAL_INSTANCE_ADMINS: {{ .Values.instance.admins | toJson | quote }}
   {{- if eq .Values.orchestrator.type "temporal" }}
   {{- with .Values.orchestrator.temporal }}
