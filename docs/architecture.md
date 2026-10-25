@@ -682,6 +682,67 @@ credential performed it*, and lets policy decide what the run may do.
 - Live updates: `GET /v1/runs/{id}/events` (SSE).
 - Outbound: tenant-configurable webhooks for run/campaign lifecycle events.
 
+### 11.2 Federated tenants (tenant connectors)
+
+A tenant can be **hosted** (its data and execution live in the central
+deployment) or **federated**: it runs on its own Shoal deployment inside the
+organisation's infrastructure (its own database, workers, sandboxes, secrets
+and network) and is managed from the central deployment. Both kinds can mix in
+one control plane, and a federated deployment can also sit next to the hub.
+
+```
+          Central deployment (hub)                         Organisation network
+ ┌─────────────────────────────────────┐          ┌──────────────────────────────────┐
+ │ UI · API · OIDC · Terraform target   │          │ Member deployment (tenant "acme") │
+ │ tenants: hosted-a, hosted-b, acme ───┼──tunnel──┼─ tenant connector (dials out)     │
+ │ hub stores: link, health, rollups    │  mTLS    │ API · workers · Postgres · secrets │
+ └─────────────────────────────────────┘          │ sandboxes · GitHub/Jira in-network │
+                                                   └──────────────────────────────────┘
+```
+
+- **Same software, two roles.** A member is an ordinary Shoal deployment with
+  federation enabled. The **tenant connector** is a small process in the
+  member that keeps one outbound, mutually authenticated connection to the hub
+  (HTTP/2 or WebSocket over TLS, mTLS client certificate issued at
+  enrollment and rotated). Nothing in the organisation has to accept inbound
+  traffic.
+- **Enrollment.** An operator creates a federated tenant on the hub, which
+  returns a single-use enrollment token. The member's admin runs
+  `shoal federation join <hub-url> --token …`, choosing the **maximum access**
+  it grants and which namespaces it exposes. The hub stores the link, never
+  the member's data or secrets.
+- **Access modes per link.**
+  - `read`: the hub can list and view resources, runs, events, campaigns,
+    evals and audit, and stream run events. Any write returns
+    `403 federation_read_only`.
+  - `read_write`: the hub can also apply resources, start, cancel and approve
+    runs, launch campaigns, manage namespaces, roles and bindings, and write
+    secret values (write-only, never read back).
+  - The member sets the ceiling and the hub can only ask for less. The member
+    can also expose only some namespaces and choose `metadata` visibility,
+    which hides step outputs, prompts and logs from the hub.
+- **Member is the source of truth.** Requests for a federated tenant are
+  forwarded live through the tunnel; data is not replicated to the hub. The
+  hub keeps only link status, health and small rollups (run counts, spend,
+  eval scores) for its dashboards. When the hub is unreachable the member
+  keeps running on its own; the hub shows the tenant as disconnected.
+- **One API.** Clients (UI, CLI, Terraform, A2A) talk to the hub with the
+  same `/v1` API for hosted and federated tenants; the hub routes by tenant.
+  They can also talk to the member directly.
+- **Identity and authorisation, twice.** People sign in at the hub. Each
+  forwarded request carries a short-lived assertion signed by the hub (user,
+  groups, hub roles, request id). The member authorises it again with its own
+  RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
+  and are bound to roles like any subject. A call succeeds only if the hub
+  allows it, the link mode allows it, and the member's RBAC allows it.
+- **Audit on both sides.** The hub records who asked for what; the member
+  records the action with `via: hub`, the hub request id and the user, so
+  either side can reconstruct it.
+- **Compatibility.** Hub and member negotiate API versions on connect; the hub
+  hides features a member does not support yet.
+- **Not in scope:** moving a tenant between hosted and federated while
+  running (export and re-import instead), and cross-tenant workflows.
+
 ---
 
 ## 13. Acceptance journeys

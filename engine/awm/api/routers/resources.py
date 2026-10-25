@@ -45,7 +45,8 @@ async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
     meta = doc.get("metadata", {})
     status: dict[str, Any] = {}
     if row.kind == "Connection":
-        status["webhook_url"] = await ctx.engine.integrations.webhook_url(ctx.tenant_id, row.name) if row.namespace else None
+        with use_namespace(row.namespace):
+            status["webhook_url"] = await ctx.engine.integrations.webhook_url(ctx.tenant_id, row.name)
     elif row.kind == "Trigger" and doc["spec"].get("event") == "schedule" and doc["spec"].get("schedule"):
         with use_namespace(row.namespace):
             state = await ctx.engine.store.get_trigger_state(ctx.tenant_id, row.name)
