@@ -51,6 +51,7 @@ class Page(BaseModel, Generic[T]):
 class TenantIn(BaseModel):
     slug: str = Field(pattern=NAME)
     name: str | None = None
+    description: str | None = None
     admin_email: str | None = Field(None, description="Optional first human admin (bound to tenant-admin).")
 
 
@@ -58,7 +59,83 @@ class TenantOut(Out):
     id: str
     slug: str
     name: str
+    description: str | None = None
+    status: str = "active"
     created_at: datetime
+
+
+class TenantPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: Literal["active", "suspended"] | None = Field(
+        None, description="Suspended tenants refuse every call except from instance admins; their data is kept."
+    )
+
+
+class TenantSummary(TenantOut):
+    users: int = Field(description="Active people (not service accounts).")
+    namespaces: int
+    federated: bool = Field(description="Managed by a member deployment through federation.")
+
+
+class MyTenant(BaseModel):
+    slug: str
+    name: str
+    status: str
+    member: bool = Field(description="False when an instance admin or auditor can open it without being a member.")
+    current: bool
+
+
+class SwitchTenantIn(BaseModel):
+    tenant: str | None = Field(description="Tenant slug; null leaves every tenant (instance admins only).")
+
+
+class SessionOut(BaseModel):
+    session: str = Field(description="The new session token (also set as the session cookie).")
+    tenant: TenantOut | None
+
+
+class AccountOut(Out):
+    id: str
+    email: str | None
+    display_name: str
+    instance_role: str | None
+    active: bool
+    oidc_issuer: str
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+class AccountMembership(BaseModel):
+    tenant: str
+    tenant_name: str
+    username: str
+    roles: list[str]
+
+
+class AccountDetail(AccountOut):
+    tenants: list[AccountMembership]
+
+
+class AccountPatch(BaseModel):
+    instance_role: Literal["instance-admin", "instance-auditor"] | None = Field(
+        None, description="Set to grant; send null to remove (use the field explicitly)."
+    )
+    active: bool | None = None
+
+
+class TenantMemberIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field("tenant-admin", description="A role in that tenant, granted tenant-wide.")
+
+
+class TenantMemberOut(BaseModel):
+    user_id: str
+    username: str
+    email: str | None
+    display_name: str
+    roles: list[str]
+    linked: bool = Field(description="Linked to an instance account (has signed in through the instance or SSO).")
 
 
 class TenantCreated(BaseModel):
@@ -74,6 +151,8 @@ class Me(BaseModel):
     display_name: str | None
     email: str | None
     is_system_admin: bool
+    account_id: str | None = None
+    instance_role: str | None = None
     namespaces: list[str]
 
 

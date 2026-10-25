@@ -26,17 +26,27 @@ def _safe_redirect(target: str | None) -> str:
     return target
 
 
-@router.get("/providers", response_model=list[LoginProvider], summary="Sign-in options for a tenant (public)")
-async def providers(tenant: str, engine: EngineDep) -> Any:
+@router.get("/providers", response_model=list[LoginProvider],
+            summary="Sign-in options (public): the instance-wide sign-in, or a tenant's own providers")
+async def providers(engine: EngineDep, tenant: str | None = None) -> Any:
+    base = engine.settings.public_url.rstrip("/")
+    if tenant is None:
+        cfg = engine.settings.instance_oidc
+        return [LoginProvider(name="instance", display_name=cfg.display_name, login_url=f"{base}/v1/auth/login/instance")] if cfg else []
     row = await engine.store.get_tenant_by_slug(tenant)
     if row is None:
         raise NotFound(f"tenant '{tenant}' not found")
-    base = engine.settings.public_url.rstrip("/")
     return [
         LoginProvider(name=p.name, display_name=p.display_name, login_url=f"{base}/v1/auth/login/{tenant}/{p.name}")
         for p in await engine.directory.list_oidc_providers(row.id)
         if p.enabled
     ]
+
+
+@router.get("/login/instance", summary="Start the instance-wide sign-in (redirects to the provider)")
+async def login_instance(engine: EngineDep, redirect_to: str | None = None) -> RedirectResponse:
+    url = await engine.oidc.begin(None, "instance", _callback_url(engine), _safe_redirect(redirect_to))
+    return RedirectResponse(url, status_code=302)
 
 
 @router.get("/login/{tenant}/{provider}", summary="Start OIDC sign-in (redirects to the provider)")

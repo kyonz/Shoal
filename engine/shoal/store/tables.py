@@ -57,6 +57,8 @@ class Tenant(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     slug: Mapped[str] = mapped_column(String(63), unique=True)
     name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active | suspended
     settings: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -73,12 +75,29 @@ class Namespace(Base):
     created_by: Mapped[str | None] = mapped_column(String(200))
 
 
+class Account(Base):
+    """A person across the whole instance: one sign-in, linked to a user row in each tenant they belong to."""
+
+    __tablename__ = "accounts"
+    __table_args__ = (UniqueConstraint("oidc_issuer", "oidc_subject"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    oidc_issuer: Mapped[str] = mapped_column(String(500))
+    oidc_subject: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(String(320), index=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    instance_role: Mapped[str | None] = mapped_column(String(40), doc="instance-admin | instance-auditor")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column()
+
+
 class User(Base):
     """A human (OIDC / SCIM) or a service account (owns API keys for automation)."""
 
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "username"),
+        UniqueConstraint("tenant_id", "account_id"),
         Index("ix_users_subject", "tenant_id", "oidc_issuer", "oidc_subject"),
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -90,6 +109,9 @@ class User(Base):
     external_id: Mapped[str | None] = mapped_column(String(200), doc="SCIM externalId from the IdP.")
     oidc_issuer: Mapped[str | None] = mapped_column(String(500))
     oidc_subject: Mapped[str | None] = mapped_column(String(200))
+    account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL"), index=True, doc="The instance account this tenant user belongs to."
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     attributes: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
@@ -172,7 +194,7 @@ class LoginState(Base):
 
     __tablename__ = "login_states"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)  # the `state` parameter
-    tenant_id: Mapped[str] = mapped_column(String(40))
+    tenant_id: Mapped[str | None] = mapped_column(String(40))  # None: the instance sign-in
     provider: Mapped[str] = mapped_column(String(63))
     nonce: Mapped[str] = mapped_column(String(64))
     code_verifier: Mapped[str] = mapped_column(String(128))

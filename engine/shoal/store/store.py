@@ -84,8 +84,8 @@ class Store:
 
     # ------------------------------------------------------------------ tenants
 
-    async def create_tenant(self, slug: str, name: str | None = None) -> t.Tenant:
-        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug)
+    async def create_tenant(self, slug: str, name: str | None = None, *, description: str | None = None) -> t.Tenant:
+        tenant = t.Tenant(id=new_id("ten"), slug=slug, name=name or slug, description=description)
         try:
             async with self.session() as s:
                 s.add(tenant)

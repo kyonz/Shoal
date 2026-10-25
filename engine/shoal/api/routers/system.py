@@ -8,7 +8,7 @@ from fastapi import APIRouter, Response
 from pydantic import TypeAdapter
 
 import shoal
-from shoal.api.deps import CtxDep, EngineDep, SystemCtxDep
+from shoal.api.deps import CtxDep, EngineDep, InstanceReaderCtxDep, SystemCtxDep
 from shoal.api.schemas import Me, Permissions, TenantCreated, TenantIn, TenantOut
 from shoal.core.models import KIND_BY_PLURAL, RESOURCE_KINDS, Step
 from shoal.core.scope import TENANT_SCOPED_KINDS
@@ -46,7 +46,8 @@ async def info(engine: EngineDep) -> dict[str, Any]:
         "api_version": "v1",
         "public_url": engine.settings.public_url,
         "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "skill-sources", "evals", "decisions", "a2a",
-                     "assistant", "script-languages", "cloud-identities"],
+                     "assistant", "script-languages", "cloud-identities", "instance-accounts"],
+        "instance_sign_in": engine.settings.instance_oidc is not None,
         "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "skill_sources", "steps", "credentials")},
     }
 
@@ -66,24 +67,24 @@ async def metrics(engine: EngineDep) -> Response:
 @router.post("/v1/tenants", status_code=201, tags=["tenants"], response_model=TenantCreated)
 async def create_tenant(body: TenantIn, ctx: SystemCtxDep) -> TenantCreated:
     engine = ctx.engine
-    tenant = await engine.store.create_tenant(body.slug, body.name)
+    tenant = await engine.store.create_tenant(body.slug, body.name, description=body.description)
     admin = await engine.directory.create_user(tenant.id, "admin", kind="service", display_name="Bootstrap admin")
     await engine.directory.bind(tenant.id, "tenant-admin", "user", admin.id, actor=ctx.actor)
-    if body.admin_email:
-        human = await engine.directory.create_user(tenant.id, body.admin_email, email=body.admin_email)
-        await engine.directory.bind(tenant.id, "tenant-admin", "user", human.id, actor=ctx.actor)
+    if body.admin_email:  # links their instance account when they have one, so the tenant shows up in their switcher
+        await engine.accounts.add_to_tenant(tenant.id, body.admin_email, "tenant-admin", actor=ctx.actor)
     _, token = await engine.store.create_api_key(tenant.id, "bootstrap", ["*"], owner_id=admin.id, created_by=ctx.actor)
     await engine.store.audit(tenant.id, ctx.actor, "tenant.created", tenant.slug)
+    await engine.store.audit(None, ctx.actor, "tenant.created", tenant.slug)
     return TenantCreated(tenant=TenantOut.model_validate(tenant), api_key=token)
 
 
 @router.get("/v1/tenants", tags=["tenants"], response_model=list[TenantOut])
-async def list_tenants(ctx: SystemCtxDep) -> Any:
+async def list_tenants(ctx: InstanceReaderCtxDep) -> Any:
     return await ctx.engine.store.list_tenants()
 
 
 @router.get("/v1/tenants/{slug}", tags=["tenants"], response_model=TenantOut)
-async def get_tenant(slug: str, ctx: SystemCtxDep) -> Any:
+async def get_tenant(slug: str, ctx: InstanceReaderCtxDep) -> Any:
     from shoal.core.errors import NotFound
 
     tenant = await ctx.engine.store.get_tenant_by_slug(slug)
@@ -114,6 +115,8 @@ async def me(ctx: CtxDep) -> Me:
         display_name=p.display_name,
         email=p.email,
         is_system_admin=p.is_system_admin,
+        account_id=p.account_id,
+        instance_role=p.instance_role,
         namespaces=namespaces,
     )
 

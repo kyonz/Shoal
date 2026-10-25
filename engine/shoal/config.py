@@ -14,6 +14,17 @@ class RemoteIntegration(BaseModel):
     token: SecretStr | None = None
 
 
+class InstanceOIDC(BaseModel):
+    """The instance-wide sign-in: one identity provider for everyone, whichever tenants they belong to."""
+
+    issuer: str
+    client_id: str
+    client_secret: SecretStr | None = None
+    display_name: str = "Single sign-on"
+    scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    allowed_domains: list[str] = Field(default_factory=list, description="Email domains allowed to sign in (empty: any).")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SHOAL_", env_file=".env", extra="ignore")
 
@@ -29,7 +40,19 @@ class Settings(BaseSettings):
         SecretStr("dev-insecure-secret-key-change-me"),
         description="Key used to encrypt stored secrets and sign run identity tokens.",
     )
-    admin_token: SecretStr | None = Field(None, description="System admin bearer token (tenant management).")
+    admin_token: SecretStr | None = Field(None, description="Break-glass system admin bearer token (tenant management).")
+    instance_oidc: InstanceOIDC | None = Field(
+        None,
+        description="Instance-wide sign-in (JSON: issuer, client_id, client_secret, ...). People sign in once and "
+        "switch between the tenants they belong to.",
+    )
+    instance_oidc_client_secret: SecretStr | None = Field(
+        None, description="Client secret for the instance sign-in, when it is not in SHOAL_INSTANCE_OIDC (e.g. from a Kubernetes Secret)."
+    )
+    instance_admins: list[str] = Field(
+        default_factory=list,
+        description="Emails that become instance admins when they sign in (bootstrap; manage the rest in the admin console).",
+    )
     public_url: str = Field("http://localhost:8080", description="External base URL (webhook URLs, A2A cards).")
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     static_dir: str | None = Field(None, description="Serve the built frontend from this directory.")

@@ -22,13 +22,19 @@ def _key(settings: Settings) -> bytes:
     return hashlib.sha256(b"shoal-session:" + settings.secret_key.get_secret_value().encode()).digest()
 
 
-def issue_session(settings: Settings, *, tenant_id: str, user_id: str, ttl: timedelta = timedelta(hours=12)) -> str:
+def issue_session(
+    settings: Settings, *, tenant_id: str | None, user_id: str | None, account_id: str | None = None,
+    ttl: timedelta = timedelta(hours=12),
+) -> str:
+    """A session for one tenant (``tid``, as user ``sub``), held by an instance account (``acc``) when there is one.
+
+    Instance admins can hold a session with no tenant, or for a tenant they are not a member of.
+    """
     now = clock.now()
     claims = {
         "iss": ISSUER,
         "aud": AUDIENCE,
-        "sub": user_id,
-        "tid": tenant_id,
+        **{k: v for k, v in (("sub", user_id), ("tid", tenant_id), ("acc", account_id)) if v},
         "sid": secrets.token_hex(8),
         "iat": int(now.timestamp()),
         "exp": int((now + ttl).timestamp()),

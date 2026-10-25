@@ -755,6 +755,31 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   namespaces. Resource names are unique per (tenant, namespace, kind).
   Lookups fall back from the run's namespace to a tenant-wide `shared`
   namespace, so platform teams can publish shared connections and skills that other namespaces use without being able to see their secrets.
+- **Many tenants on one instance.** One deployment hosts any number of
+  tenants (federation adds tenants on other deployments, §11.2). A person has
+  one **account** on the instance, keyed by their identity provider's
+  `(issuer, sub)`, linked to at most one user in each tenant they belong to;
+  roles stay per tenant. A session belongs to the account and points at one
+  tenant at a time: `GET /v1/me/tenants` lists the tenants to switch to and
+  `POST /v1/me/tenant` issues a session for another one (the UI's tenant
+  switcher). People sign in either through the **instance sign-in**
+  (`SHOAL_INSTANCE_OIDC`, one IdP for everyone) or through a tenant's own
+  providers; both link the account to tenant users with the same identity.
+  Only the instance sign-in links by verified email and applies the
+  `SHOAL_INSTANCE_ADMINS` bootstrap, because tenant admins configure their own
+  providers and those must not vouch for people in other tenants.
+- **Instance admins and tenant admins.** Accounts can hold an instance role:
+  `instance-admin` (create, rename, suspend, resume and delete tenants; give
+  people roles in any tenant; grant instance roles; act as tenant admin in any
+  tenant, audited as `account:<email>`) or `instance-auditor` (read-only
+  everywhere, including audit). Tenant admins (`tenant-admin` role) run their
+  own tenant as before. Instance admins work at `/v1/instance/*` and
+  `/v1/tenants/*`; instance-level events (tenants created or suspended,
+  instance roles, instance sign-ins) go to the instance audit log
+  (`GET /v1/instance/audit`). Suspending a tenant refuses its members' calls and
+  new runs, keeps its data, and leaves running work to finish. Nobody can change
+  their own instance role, and the last instance admin cannot be removed unless
+  the break-glass `SHOAL_ADMIN_TOKEN` is set.
 - **Users, groups and service accounts.** Users come from OIDC sign-in or SCIM
   provisioning; groups come from SCIM or from an OIDC `groups` claim. Service
   accounts are non-human principals that own API keys.
@@ -774,7 +799,8 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
   Shoal session tokens afterwards. Claims map to the user record and optionally
   to role bindings (`groups` claim → group membership). Configured per tenant
-  (several providers allowed) plus a bootstrap admin token for first setup.
+  (several providers allowed) and optionally once for the whole instance, plus
+  a break-glass admin token for first setup.
 - **SCIM 2.0 provisioning.** `/scim/v2/Users`, `/scim/v2/Groups`,
   `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` with filtering
   (`userName eq "…"`) and PATCH, authenticated by a per-tenant SCIM bearer
