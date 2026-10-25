@@ -11,7 +11,7 @@ import { Button, Card, CardHeader, CodeEditor, EmptyState, Field, Input, NativeS
 import { JsonField, KeyValueInput, SchemaForm } from "@/components/forms/SchemaForm";
 import type { EditorContext, EditorExtension } from "./ResourceEditorPage";
 import { looksLikeCredential } from "./kinds";
-import { Combo, MarkdownEditor, ModelCombo, ResourceMultiPicker, ResourcePicker, useProviders, useSandboxBackends } from "./widgets";
+import { Combo, MarkdownEditor, ModelCombo, ResourceMultiPicker, ResourcePicker, ToolsPicker, useProviders, useSandboxBackends } from "./widgets";
 
 export function useSecrets(ns: string) {
   return useQuery({
@@ -65,6 +65,7 @@ export const agentExtension: EditorExtension = {
     ),
     instructions: ({ value, onChange }) => <MarkdownEditor value={value} onChange={onChange} minHeight="300px" />,
     skills: ({ value, onChange }) => <ResourceMultiPicker plural="skills" ns={ns} value={value} onChange={onChange} />,
+    tools: ({ value, onChange }) => <ToolsPicker ns={ns} value={value} onChange={onChange} />,
     subagents: ({ value, onChange }) => <ResourceMultiPicker plural="agents" ns={ns} value={value} onChange={onChange} exclude={name} />,
     sandbox: ({ value, onChange }) => <ResourcePicker plural="sandbox-profiles" ns={ns} value={value} onChange={onChange} placeholder="Workflow default" />,
   }),

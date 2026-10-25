@@ -1,10 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import { useId, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { rawJson } from "@/api/client";
-import { useResources, type JsonSchema, type Plural } from "@/api/hooks";
+import { useIntegrations, useResources, type JsonSchema, type Plural } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { CodeEditor, Input, NativeSelect, Segmented } from "@/components/ui";
 import { CLAUDE_MODELS } from "./kinds";
@@ -181,6 +181,113 @@ export function Markdown({ children, className }: { children: string; className?
   return (
     <div className={cn("prose-shoal", className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- agent tools
+
+export const BUILTIN_TOOLS = ["shell", "read_file", "write_file", "edit_file", "list_files"];
+
+export interface ToolGroup {
+  label: string;
+  options: { value: string; label: string }[];
+}
+
+/** What an agent can be given: built-in tools, MCP servers (whole or per tool) and integration actions. */
+export function useToolOptions(ns: string): ToolGroup[] {
+  const integrations = useIntegrations();
+  const connections = useResources("connections", ns);
+  const mcp = (connections.data ?? []).filter((c) => (c.spec as { integration?: string }).integration === "mcp").map((c) => c.metadata.name);
+  const tools = useQueries({
+    queries: mcp.map((name) => ({
+      queryKey: ["mcp-tools", ns, name],
+      queryFn: () => rawJson<{ actions: { name: string; description: string }[] }>(`/v1/namespaces/${ns}/connections/${encodeURIComponent(name)}/actions`),
+      retry: false,
+      staleTime: 60_000,
+    })),
+  });
+  const groups: ToolGroup[] = [{ label: "Built-in", options: BUILTIN_TOOLS.map((t) => ({ value: t, label: t })) }];
+  mcp.forEach((name, i) => {
+    const list = tools[i]?.data?.actions ?? [];
+    groups.push({
+      label: `MCP server: ${name}`,
+      options: [
+        { value: `mcp:${name}`, label: `mcp:${name} (all ${list.length ? `${list.length} ` : ""}tools)` },
+        ...list.map((a) => ({ value: `mcp:${name}.${a.name}`, label: `mcp:${name}.${a.name}${a.description ? ` — ${a.description.slice(0, 60)}` : ""}` })),
+      ],
+    });
+  });
+  for (const it of integrations.data ?? []) {
+    if (it.key === "mcp" || !it.actions.length) continue;
+    groups.push({
+      label: it.title,
+      options: [{ value: `${it.key}.*`, label: `${it.key}.* (all actions)` }, ...it.actions.map((a) => ({ value: `${it.key}.${a.name}`, label: `${it.key}.${a.name}` }))],
+    });
+  }
+  return groups;
+}
+
+function toolTone(t: string) {
+  if (BUILTIN_TOOLS.includes(t)) return "bg-subtle text-fg";
+  if (t.startsWith("mcp:")) return "bg-info-soft text-info";
+  return "bg-accent-soft text-accent";
+}
+
+export function ToolsPicker({ ns, value, onChange }: { ns: string; value: unknown; onChange: (v: unknown) => void }) {
+  const list = (value as string[] | undefined) ?? [];
+  const groups = useToolOptions(ns);
+  const [custom, setCustom] = useState("");
+  const add = (t: string) => {
+    const v = t.trim();
+    if (!v || list.includes(v)) return;
+    onChange([...list, v]);
+  };
+  const remove = (t: string) => {
+    const next = list.filter((x) => x !== t);
+    onChange(next.length ? next : undefined);
+  };
+  return (
+    <div className="space-y-1.5">
+      <div className="flex min-h-8 flex-wrap items-center gap-1 rounded-lg border border-border bg-panel px-1.5 py-1 shadow-card">
+        {list.map((t) => (
+          <span key={t} className={cn("inline-flex h-5 items-center gap-1 rounded pr-0.5 pl-1.5 font-mono text-[11px]", toolTone(t))}>
+            {t}
+            <button type="button" aria-label={`Remove ${t}`} className="rounded p-0.5 hover:text-fg" onClick={() => remove(t)}>
+              <X className="size-3" />
+            </button>
+          </span>
+        ))}
+        <select value="" onChange={(e) => add(e.target.value)} className="h-5 min-w-28 flex-1 cursor-pointer bg-transparent text-[13px] text-muted outline-none" aria-label="Add a tool">
+          <option value="">+ Add tool…</option>
+          {groups.map((g) => {
+            const opts = g.options.filter((o) => !list.includes(o.value));
+            return opts.length ? (
+              <optgroup key={g.label} label={g.label}>
+                {opts.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null;
+          })}
+        </select>
+      </div>
+      <Input
+        mono
+        className="h-7 text-[11px]"
+        value={custom}
+        placeholder="Or type one: github.create_pull_request, mcp:linear.create_issue…"
+        onChange={(e) => setCustom(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add(custom);
+            setCustom("");
+          }
+        }}
+      />
     </div>
   );
 }
