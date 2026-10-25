@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+import yaml
 from pydantic import SecretStr
 
 from shoal.api.app import create_app
@@ -380,6 +381,70 @@ async def test_blueprint_adoption_lifecycle(admin, api):
     assert (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).status_code == 404
     assert (await admin.get(url)).status_code == 404
     assert any(e["action"] == "blueprint.adopted" for e in (await admin.get("/v1/audit")).json()["items"])
+
+
+async def test_blueprint_upgrade_edge_cases(engine, admin, api):
+    assert (await admin.put("/v1/namespaces/team-a", json={})).status_code == 201
+    v1 = json.loads(json.dumps(GREETER))
+    v1["spec"]["params"]["emoji"] = {"required": False}
+    assert (await admin.put("/v1/blueprints/greeter", json=v1)).status_code == 201
+    r = await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "a", "emoji": "x"}})
+    assert r.status_code == 201, r.text
+    url = f"/v1/namespaces/team-a/blueprint-adoptions/{r.json()['adoption']['id']}"
+
+    # v2 drops a parameter and a resource; the preview says what is updated and what goes
+    v2 = json.loads(json.dumps(GREETER))
+    v2["spec"].update(version="2.0.0", resources=GREETER["spec"]["resources"][:1])
+    assert (await admin.put("/v1/blueprints/greeter", json=v2)).status_code == 200
+    dry = await admin.put(url, json={"dry_run": True})
+    assert dry.status_code == 200, dry.text
+    assert [(x["name"], x["outcome"]) for x in dry.json()["resources"]] == [("greet", "updated")]
+    assert dry.json()["removed"] == [{"kind": "Workflow", "name": "wave"}]
+    assert (await admin.get("/v1/namespaces/team-a/workflows/wave")).status_code == 200
+    up = await admin.put(url, json={})
+    assert up.status_code == 200, up.text
+    assert up.json()["adoption"]["params"] == {"greeting": "Hello", "team": "a"}
+    assert (await admin.put(url, json={"params": {"emoji": "y"}, "dry_run": True})).status_code == 422  # still rejected when asked for
+
+    # deprecated: no new adoptions, but existing ones can still change
+    deprecated = json.loads(json.dumps(v2))
+    deprecated["spec"]["status"] = "deprecated"
+    assert (await admin.put("/v1/blueprints/greeter", json=deprecated)).status_code == 200
+    assert (await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "b"}, "prefix": "b"})).status_code == 403
+    assert (await admin.put(url, json={"params": {"greeting": "Hi"}})).status_code == 200
+
+    # a failed adoption leaves nothing behind, so it can be retried
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 200
+    real_apply, calls = engine.store.apply_resource, []
+
+    async def flaky(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 2:
+            raise RuntimeError("database went away")
+        return await real_apply(*args, **kwargs)
+
+    engine.store.apply_resource = flaky
+    with pytest.raises(RuntimeError):
+        await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "c"}, "prefix": "c"})
+    engine.store.apply_resource = real_apply
+    assert (await admin.get("/v1/namespaces/team-a/workflows/c-greet")).status_code == 404
+    r = await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "c"}, "prefix": "c"})
+    assert r.status_code == 201, r.text
+
+
+async def test_featuring_a_blueprint_needs_feature_on_every_write_path(admin, api):
+    assert (await admin.put("/v1/roles/publisher", json={"permissions": ["blueprints:read", "blueprints:publish"]})).status_code == 201
+    headers = {"Authorization": f"Bearer {await _key_for(admin, 'pub', 'publisher', None)}"}
+    featured = json.loads(json.dumps(GREETER))
+    featured["spec"]["status"] = "featured"
+    assert (await api.put("/v1/blueprints/greeter", json=featured, headers=headers)).status_code == 403
+    assert (await api.put("/v1/blueprints/greeter", json=GREETER, headers=headers)).status_code == 201
+    doc = yaml.safe_dump({"apiVersion": "shoal.dev/v1", "kind": "Blueprint", "metadata": {"name": "greeter"}, **featured})
+    assert (await api.post("/v1/apply", content=doc, headers=headers)).status_code == 403
+    assert (await admin.put("/v1/blueprints/greeter", json=featured)).status_code == 200  # an admin features it (v2)
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 200  # and unfeatures it (v3)
+    assert (await api.post("/v1/blueprints/greeter/rollback", json={"version": 2}, headers=headers)).status_code == 403
+    assert (await api.post("/v1/blueprints/greeter/rollback", json={"version": 1}, headers=headers)).status_code == 200
 
 
 async def test_connection_actions_are_listed_per_connection(admin):

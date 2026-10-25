@@ -70,7 +70,7 @@ export interface EvalResult {
   run_id?: string | null;
   status: string;
   outputs?: Record<string, unknown> | null;
-  scores?: Record<string, { score?: number; passed?: boolean; reason?: string; [k: string]: unknown }>;
+  scores?: Record<string, { score?: number; passed?: boolean; error?: string; detail?: Record<string, unknown>; [k: string]: unknown }>;
   score?: number | null;
   passed?: boolean | null;
   error?: { message?: string; [k: string]: unknown } | null;
