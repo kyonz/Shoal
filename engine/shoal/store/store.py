@@ -764,9 +764,14 @@ class Store:
             )
             return bool(result.rowcount)
 
-    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None) -> None:
+    async def set_trigger_next(self, state_id: str, next_fire_at: datetime | None, *, schedule: str | None = None) -> None:
+        """Set the next fire time; ``schedule`` records the cron and time zone it was computed from."""
         async with self.session() as s:
-            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(next_fire_at=next_fire_at))
+            values: dict[str, Any] = {"next_fire_at": next_fire_at}
+            if schedule is not None:
+                state = await s.get(t.TriggerState, state_id)
+                values["cursor"] = {**((state.cursor if state else None) or {}), "schedule": schedule}
+            await s.execute(update(t.TriggerState).where(t.TriggerState.id == state_id).values(**values))
 
     # ------------------------------------------------------------------ campaigns
 

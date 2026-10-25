@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 
 from shoal.api.app import create_app
+from shoal.core.scope import use_namespace
 
 ADMIN = "test-admin-token"
 
@@ -450,3 +451,34 @@ async def test_journey_blueprints_adopt_cleanly(admin):
     assert wf["spec"]["connections"] == {"jira": "jira", "github": "gh"} and wf["spec"]["defaults"]["agent"] == "team-bugfixer"
     campaign = (await admin.get("/v1/namespaces/default/campaigns/team-coverage-uplift")).json()
     assert campaign["spec"]["targets"]["filter"]["org"] == "acme" and campaign["spec"]["policy"]["budget_usd"] == 500
+
+
+async def test_approvers_over_the_api(admin, api):
+    await admin.put("/v1/namespaces/default/workflows/gated", json={"spec": {"steps": [
+        {"id": "ok", "type": "approval", "message": "Ship it?", "approvers": ["sa:ops"]},
+    ]}})
+    run_id = (await admin.post("/v1/namespaces/default/workflows/gated/runs", json={})).json()["id"]
+    await api._transport.app.state.engine.run_until_idle()  # type: ignore[attr-defined]
+    r = await admin.post(f"/v1/runs/{run_id}/steps/ok/approval", json={"approved": True})
+    assert r.status_code == 403 and r.json()["details"]["approvers"] == ["sa:ops"]
+    token = await _key_for(admin, "ops", "operator", "default")
+    async with httpx.AsyncClient(transport=api._transport, base_url="http://shoal.test", headers={"Authorization": f"Bearer {token}"}) as ops:
+        r = await ops.post(f"/v1/runs/{run_id}/steps/ok/approval", json={"approved": True})
+        assert r.status_code == 200, r.text
+
+
+async def test_rerun_keeps_the_trigger_context(admin, api):
+    engine = api._transport.app.state.engine  # type: ignore[attr-defined]
+    await admin.put("/v1/namespaces/default/workflows/echo", json={"spec": {
+        "outputs": {"key": "{{ event.key }}"}, "steps": [{"id": "a", "type": "set", "values": {}}],
+    }})
+    await admin.put("/v1/namespaces/default/triggers/manual", json={"spec": {
+        "workflow": "echo", "event": "schedule", "schedule": "0 0 * * *",
+    }})
+    tenant_id = (await admin.get("/v1/me")).json()["tenant"]["id"]
+    with use_namespace("default"):
+        fired = await engine.triggers.fire_manual(tenant_id, "manual", {"key": "PROJ-1"})
+    await engine.run_until_idle()
+    rerun = (await admin.post(f"/v1/runs/{fired['run_id']}/rerun")).json()
+    await engine.run_until_idle()
+    assert (await admin.get(f"/v1/runs/{rerun['id']}")).json()["outputs"] == {"key": "PROJ-1"}
