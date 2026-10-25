@@ -68,7 +68,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `sandbox` | string | optional |  |
 | `env` | map | optional | Sandbox env; values may use expressions. |
 | `limits` | object | optional |  |
-| `provider_config` | map | optional |  |
+| `provider_config` | map | optional | Model settings (temperature, effort, ...). Endpoints and credentials belong on a Gateway. |
 | `runtime_config` | map | optional |  |
 | `guard` | object | optional | Optional decision-model screening of tool calls. |
 

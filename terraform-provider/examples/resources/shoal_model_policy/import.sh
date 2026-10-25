@@ -1,1 +1,1 @@
-terraform import shoal_model_policy.default payments/default
+terraform import shoal_model_policy.default default

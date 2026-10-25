@@ -15,5 +15,3 @@ spec:
     max_turns: 120
     timeout: 90m
     budget_usd: 15
-  provider_config:
-    api_key_secret: anthropic-api-key

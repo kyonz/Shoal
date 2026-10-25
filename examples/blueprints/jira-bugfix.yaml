@@ -28,10 +28,6 @@ spec:
       type: connection
       integration: github
       description: GitHub connection used to push the fix and open the PR.
-    anthropic_secret:
-      type: secret
-      description: Secret holding the Anthropic API key the agent uses.
-      default: anthropic-api-key
   resources:
   - kind: Agent
     metadata:
@@ -55,8 +51,6 @@ spec:
         max_turns: 120
         timeout: 90m
         budget_usd: 15
-      provider_config:
-        api_key_secret: '{{ params.anthropic_secret }}'
   - kind: Workflow
     metadata:
       name: '{{ prefix }}jira-bugfix'

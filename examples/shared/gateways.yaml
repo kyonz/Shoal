@@ -1,0 +1,28 @@
+# Gateways and model policies are tenant-wide and managed by tenant admins
+# (gateways:manage, model-policies:manage). Their credentials are secrets in the
+# tenant's `shared` namespace, never clear text:
+#   shoal secrets set anthropic-api-key sk-ant-... --namespace shared
+# Agents pick a gateway with `provider:`; this one shadows the built-in
+# `anthropic` provider so every agent goes through it.
+apiVersion: shoal.dev/v1
+kind: Gateway
+metadata:
+  name: anthropic
+  description: Anthropic API with the organisation's key
+spec:
+  type: anthropic
+  api_key_secret: anthropic-api-key
+---
+apiVersion: shoal.dev/v1
+kind: Gateway
+metadata:
+  name: litellm
+  description: Company LiteLLM proxy (OpenAI-compatible)
+spec:
+  type: openai-compatible
+  base_url: https://llm.internal.example.com/v1
+  api_key_secret: litellm-key
+  headers:
+    x-team: platform                 # non-secret headers only
+  secret_headers:
+    x-litellm-api-key: litellm-key   # header name: secret name

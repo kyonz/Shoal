@@ -12,7 +12,8 @@ from dataclasses import dataclass
 
 from shoal.core.models import KIND_BY_PLURAL
 
-RESOURCE_PLURALS = sorted(p for p in KIND_BY_PLURAL if p not in ("identities", "blueprints"))
+TENANT_PLURALS = ("identities", "blueprints", "gateways", "model-policies")
+RESOURCE_PLURALS = sorted(p for p in KIND_BY_PLURAL if p not in TENANT_PLURALS)
 
 NAMESPACE_PERMISSIONS: dict[str, str] = {
     **{f"{p}:read": f"View {p}" for p in RESOURCE_PLURALS},
@@ -48,6 +49,10 @@ TENANT_PERMISSIONS: dict[str, str] = {
     "blueprints:read": "Browse the blueprint catalogue",
     "blueprints:publish": "Publish blueprints to the tenant catalogue",
     "blueprints:feature": "Feature blueprints in the catalogue",
+    "gateways:read": "View LLM gateways",
+    "gateways:manage": "Create, update and delete LLM gateways (tenant-wide)",
+    "model-policies:read": "View model policies",
+    "model-policies:manage": "Create, update and delete model policies (tenant-wide)",
     "audit:read": "Read the audit log",
     "api-keys:manage": "Manage every API key in the tenant",
     "scim:provision": "Provision users and groups over SCIM",

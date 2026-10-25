@@ -2,15 +2,15 @@
 page_title: "shoal_model_policy Resource - shoal"
 subcategory: ""
 description: |-
-  A model policy: which model serves which agent or workflow, with fallbacks and weighted routing.
-  Maps to /v1/namespaces/{namespace}/model-policies/{name}. spec is written as a plain object (HCL, or yamldecode(file(...))) and uses the same fields as the spec of the YAML resource.
+  A model policy: which model serves which agent or workflow, with fallbacks and weighted routing. Tenant-wide and managed by tenant admins (model-policies:manage).
+  Maps to /v1/model-policies/{name}. spec is written as a plain object (HCL, or yamldecode(file(...))) and uses the same fields as the spec of the YAML resource.
 ---
 
 # shoal_model_policy (Resource)
 
-A model policy: which model serves which agent or workflow, with fallbacks and weighted routing.
+A model policy: which model serves which agent or workflow, with fallbacks and weighted routing. Tenant-wide and managed by tenant admins (`model-policies:manage`).
 
-Maps to `/v1/namespaces/{namespace}/model-policies/{name}`. `spec` is written as a plain object (HCL, or `yamldecode(file(...))`) and uses the same fields as the `spec` of the YAML resource.
+Maps to `/v1/model-policies/{name}`. `spec` is written as a plain object (HCL, or `yamldecode(file(...))`) and uses the same fields as the `spec` of the YAML resource.
 
 ## Example Usage
 
@@ -50,11 +50,11 @@ resource "shoal_model_policy" "default" {
 
 - `description` (String) Human description shown in the UI.
 - `labels` (Map of String) Labels for filtering and selection.
-- `namespace` (String) Namespace. Defaults to the provider's `namespace`. Changing it recreates the resource.
 
 ### Read-Only
 
 - `id` (String) `<namespace>/<name>`.
+- `namespace` (String) Always `shared`: ModelPolicy resources are tenant-wide.
 - `status` (Map of String) Server-computed details, e.g. `webhook_url` for connections or `next_fire_at` for scheduled triggers.
 - `version` (Number) Server version, incremented on every change.
 
@@ -75,5 +75,5 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 ## Import
 
 ```shell
-terraform import shoal_model_policy.default payments/default
+terraform import shoal_model_policy.default default
 ```

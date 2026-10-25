@@ -39,10 +39,6 @@ spec:
       type: string
       default: default
       description: Sandbox profile the agent runs in.
-    anthropic_secret:
-      type: secret
-      description: Secret holding the Anthropic API key the agent uses.
-      default: anthropic-api-key
   resources:
   - kind: Skill
     metadata:
@@ -85,7 +81,6 @@ spec:
         timeout: 2h
         budget_usd: 20
       provider_config:
-        api_key_secret: '{{ params.anthropic_secret }}'
         effort: high
   - kind: Workflow
     metadata:

@@ -357,11 +357,21 @@ Model access is pluggable at two levels.
   `anthropic` (direct, official SDK), `bedrock`, `vertex`, `foundry`, any
   Anthropic-compatible base URL (LiteLLM proxy, Portkey, Cloudflare AI
   Gateway, an internal gateway), and `openai-compatible` (OpenRouter, vLLM,
-  Ollama, Azure OpenAI). A gateway is a tenant-configurable resource with
-  credentials, base URL, default headers, timeouts and retry policy, so a
-  platform team can force all traffic through its own gateway for logging,
-  caching and spend control.
-- **Model policies** (`ModelPolicy` resources) decide *which* model runs.
+  Ollama, Azure OpenAI). A gateway is a **tenant-wide resource managed
+  centrally** by tenant admins (`gateways:manage`) with base URL, default
+  headers, timeouts and retry policy, so a platform team can force all
+  traffic through its own gateway for logging, caching and spend control.
+  **Credentials are never clear text**: the API key (`api_key_secret`) and
+  credential headers (`secret_headers: {header: secret}`) are names of
+  encrypted secrets in the tenant's `shared` namespace, resolved at call time
+  and redacted from run logs. Header or config names that look like
+  credentials (`authorization`, `*-key`, `*token*`, `secret`, ...) are
+  rejected in the plain fields. Agents choose a gateway by name
+  (`provider:`) and may tune the model (`provider_config`: effort,
+  max_tokens, ...) but cannot set endpoints or credentials (`base_url`,
+  `headers`, `api_key`, ...), so nothing routes around the central gateway.
+- **Model policies** (`ModelPolicy` resources, tenant-wide, managed with
+  `model-policies:manage`) decide *which* model runs.
   Agents name a model directly (`claude-opus-5-5`) or a policy/class
   (`model: policy:coding`). A policy is an ordered set of rules matching on
   tenant, agent, workflow, labels and task class, and yields candidates with:
@@ -649,14 +659,14 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   every row carries `tenant_id`, all store queries are tenant-scoped by
   construction, Postgres row-level security as defence in depth). Inside a
   tenant, **namespaces** group the things a team owns: agents, skills,
-  workflows, connections, triggers, campaigns, sandbox profiles, gateways,
-  secrets and runs all live in exactly one namespace (`default` exists in every
+  workflows, connections, triggers, campaigns, sandbox profiles, secrets and
+  runs all live in exactly one namespace (gateways, model policies, identities
+  and blueprints are tenant-wide, stored in `shared`) (`default` exists in every
   tenant). Users and groups are added to a namespace as members with a role, so
   a platform team can own `platform` while product teams get their own
   namespaces. Resource names are unique per (tenant, namespace, kind).
   Lookups fall back from the run's namespace to a tenant-wide `shared`
-  namespace, so platform teams can publish shared connections, gateways and
-  skills that other namespaces use without being able to see their secrets.
+  namespace, so platform teams can publish shared connections and skills that other namespaces use without being able to see their secrets.
 - **Users, groups and service accounts.** Users come from OIDC sign-in or SCIM
   provisioning; groups come from SCIM or from an OIDC `groups` claim. Service
   accounts are non-human principals that own API keys.

@@ -29,8 +29,6 @@ def jira():
     for d in map(strip, load("examples/jira-bugfix/agent.yaml", "examples/jira-bugfix/workflow.yaml", "examples/jira-bugfix/trigger.yaml")):
         d["metadata"]["name"] = P + d["metadata"]["name"]
         s = d["spec"]
-        if d["kind"] == "Agent":
-            s["provider_config"]["api_key_secret"] = "{{ params.anthropic_secret }}"
         if d["kind"] == "Workflow":
             s["connections"] = {"jira": "{{ params.jira }}", "github": "{{ params.github }}"}
             s["defaults"]["agent"] = P + s["defaults"]["agent"]
@@ -48,7 +46,6 @@ def github():
         s = d["spec"]
         if d["kind"] == "Agent":
             s["skills"] = [P + x for x in s.get("skills", [])]
-            s["provider_config"]["api_key_secret"] = "{{ params.anthropic_secret }}"
         if d["kind"] == "Workflow":
             s["connections"] = {"github": "{{ params.github }}"}
             s["defaults"]["agent"] = P + s["defaults"]["agent"]
@@ -64,15 +61,13 @@ def github():
         res.append(d)
     return res
 
-ANTHROPIC = {"type": "secret", "description": "Secret holding the Anthropic API key the agent uses.", "default": "anthropic-api-key"}
 blueprints = [
     {"apiVersion": "shoal.dev/v1", "kind": "Blueprint", "metadata": {"name": "jira-bugfix", "description": "Acceptance journey J2"},
      "spec": {"title": "Jira bugfix with writeback", "summary": "When a ticket moves to Ready for AI, an agent fixes the bug, opens a PR and reports back on the ticket.",
               "version": "1.0.0", "status": "featured", "author": "Shoal", "tags": ["jira", "github", "bugfix"], "categories": ["engineering"],
               "readme": "Adopt with your Jira and GitHub connections. Then point a Jira webhook (Issue updated) at the Jira connection's webhook URL.\nTickets moved into the **Ready for AI** column are fixed on a branch, a PR is opened and the ticket gets a comment with the result.\nTickets need the repository (owner/name) in custom field 10050; edit the trigger after adopting to use another field.\n",
               "params": {"jira": {"type": "connection", "integration": "jira", "description": "Jira site to watch and write back to."},
-                         "github": {"type": "connection", "integration": "github", "description": "GitHub connection used to push the fix and open the PR."},
-                         "anthropic_secret": ANTHROPIC},
+                         "github": {"type": "connection", "integration": "github", "description": "GitHub connection used to push the fix and open the PR."}},
               "resources": jira()}},
     {"apiVersion": "shoal.dev/v1", "kind": "Blueprint", "metadata": {"name": "github-uplift", "description": "Acceptance journey J1"},
      "spec": {"title": "GitHub org uplift", "summary": "Raise every repository in an org towards a goal (100% coverage by default), wait up to a week for review, merge where allowed.",
@@ -82,8 +77,7 @@ blueprints = [
                          "org": {"type": "string", "description": "GitHub organisation to uplift."},
                          "goal": {"type": "string", "default": "Raise test coverage to 100%", "description": "What each PR should achieve."},
                          "budget_usd": {"type": "number", "default": 500, "description": "Campaign spend limit in USD."},
-                         "sandbox": {"type": "string", "default": "default", "description": "Sandbox profile the agent runs in."},
-                         "anthropic_secret": ANTHROPIC},
+                         "sandbox": {"type": "string", "default": "default", "description": "Sandbox profile the agent runs in."}},
               "resources": github()}},
 ]
 for bp in blueprints:

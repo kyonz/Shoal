@@ -40,7 +40,10 @@ NAMESPACED = {p: k for p, k in KIND_BY_PLURAL.items() if k not in TENANT_SCOPED_
 TENANT_SCOPED = {p: k for p, k in KIND_BY_PLURAL.items() if k in TENANT_SCOPED_KINDS}
 # Tenant-scoped kinds use tenant permissions: identities:read|write, blueprints:read|publish
 TENANT_VERBS = {"identities": {"read": "identities:read", "write": "identities:write", "delete": "identities:write"},
-                "blueprints": {"read": "blueprints:read", "write": "blueprints:publish", "delete": "blueprints:publish"}}
+                "blueprints": {"read": "blueprints:read", "write": "blueprints:publish", "delete": "blueprints:publish"},
+                "gateways": {"read": "gateways:read", "write": "gateways:manage", "delete": "gateways:manage"},
+                "model-policies": {"read": "model-policies:read", "write": "model-policies:manage",
+                                   "delete": "model-policies:manage"}}
 
 
 async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:

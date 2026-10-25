@@ -70,7 +70,7 @@ def sign(secret: str, body: bytes) -> str:
 async def test_examples_are_valid():
     resources = load_path(EXAMPLES)
     kinds = sorted({r.to_document()["kind"] for r in resources})
-    assert kinds == ["Agent", "Blueprint", "Campaign", "Connection", "SandboxProfile", "Skill", "Trigger", "Workflow"]
+    assert kinds == ["Agent", "Blueprint", "Campaign", "Connection", "Gateway", "SandboxProfile", "Skill", "Trigger", "Workflow"]
 
 
 async def test_journey_github_org_uplift_campaign(world):
