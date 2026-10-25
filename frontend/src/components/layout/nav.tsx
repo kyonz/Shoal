@@ -72,8 +72,8 @@ export const NAV: NavGroup[] = [
     label: "Configure",
     items: [
       { label: "Sandboxes", to: "sandbox-profiles", icon: Boxes, namespaced: true, permission: "sandbox-profiles:read", keywords: "docker kubernetes e2b space" },
-      { label: "Gateways", to: "gateways", icon: Server, namespaced: true, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
-      { label: "Model policies", to: "model-policies", icon: Route, namespaced: true, permission: "model-policies:read", keywords: "routing fallback" },
+      { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
+      { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read", keywords: "routing fallback" },
     ],
   },
   {
@@ -97,6 +97,8 @@ export const ADMIN_NAV: NavItem[] = [
   { label: "Sign-in & SCIM", to: "/admin/auth", icon: KeyRound, namespaced: false, permission: "auth:manage" },
   { label: "API keys", to: "/admin/api-keys", icon: KeyRound, namespaced: false },
   { label: "Identities", to: "/admin/identities", icon: GitBranch, namespaced: false, permission: "identities:read" },
+  { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read" },
+  { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read" },
   { label: "Federation", to: "/admin/federation", icon: Globe, namespaced: false, permission: "federation:manage" },
   { label: "Audit log", to: "/admin/audit", icon: Activity, namespaced: false, permission: "audit:read" },
 ];

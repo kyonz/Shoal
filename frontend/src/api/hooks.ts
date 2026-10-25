@@ -17,7 +17,7 @@ export type Plural =
   | "identities"
   | "blueprints";
 
-export const TENANT_SCOPED: Plural[] = ["identities", "blueprints"];
+export const TENANT_SCOPED: Plural[] = ["identities", "blueprints", "gateways", "model-policies"];
 
 export function resourcePath(plural: Plural, ns: string, name?: string) {
   const base = TENANT_SCOPED.includes(plural) ? `/v1/${plural}` : `/v1/namespaces/${ns}/${plural}`;

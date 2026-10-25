@@ -1,12 +1,16 @@
 /** Kind-specific widgets and sections for the generic editor. */
 import { useQuery } from "@tanstack/react-query";
-import { FilePlus2, Trash2 } from "lucide-react";
+import { FilePlus2, KeyRound, Trash2, TriangleAlert } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 import { rawJson, type Schemas } from "@/api/client";
+import { useResources } from "@/api/hooks";
 import { useCan } from "@/lib/auth";
-import { Button, Card, CardHeader, CodeEditor, EmptyState, Input, NativeSelect } from "@/components/ui";
-import { JsonField, SchemaForm } from "@/components/forms/SchemaForm";
-import type { EditorExtension } from "./ResourceEditorPage";
+import { nsPath } from "@/lib/ns";
+import { Button, Card, CardHeader, CodeEditor, EmptyState, Field, Input, NativeSelect } from "@/components/ui";
+import { JsonField, KeyValueInput, SchemaForm } from "@/components/forms/SchemaForm";
+import type { EditorContext, EditorExtension } from "./ResourceEditorPage";
+import { looksLikeCredential } from "./kinds";
 import { Combo, MarkdownEditor, ModelCombo, ResourceMultiPicker, ResourcePicker, useProviders, useSandboxBackends } from "./widgets";
 
 export function useSecrets(ns: string) {
@@ -32,12 +36,26 @@ export function SecretPicker({ ns, value, onChange }: { ns: string; value: unkno
   );
 }
 
+/** Gateway credentials live in the tenant's shared namespace. */
+export const SHARED_NS = "shared";
+
+function SharedSecretPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+  return (
+    <div>
+      <SecretPicker ns={SHARED_NS} value={value} onChange={onChange} />
+      <Link to={nsPath(SHARED_NS, "secrets")} className="mt-1 inline-block text-xs text-accent hover:underline">
+        Manage shared secrets
+      </Link>
+    </div>
+  );
+}
+
 // --------------------------------------------------------------------------- agents
 
 export const agentExtension: EditorExtension = {
   widgets: ({ ns, name }) => ({
     model: ({ value, onChange }) => <ModelCombo value={value} onChange={onChange} />,
-    provider: ({ value, onChange }) => <ProviderSelect value={value} onChange={onChange} />,
+    provider: ({ value, onChange }) => <AgentProviderSelect ns={ns} value={value} onChange={onChange} />,
     runtime: ({ value, onChange }) => (
       <NativeSelect value={(value as string) ?? "tool-loop"} onChange={(e) => onChange(e.target.value === "tool-loop" ? undefined : e.target.value)}>
         <option value="tool-loop">tool-loop — Shoal's own model ↔ tools loop</option>
@@ -51,6 +69,58 @@ export const agentExtension: EditorExtension = {
     sandbox: ({ value, onChange }) => <ResourcePicker plural="sandbox-profiles" ns={ns} value={value} onChange={onChange} placeholder="Workflow default" />,
   }),
 };
+
+/** An agent's provider: a tenant gateway, or a built-in provider plugin used directly. */
+function AgentProviderSelect({ ns, value, onChange }: { ns: string; value: unknown; onChange: (v: unknown) => void }) {
+  const providers = useProviders();
+  const gateways = useResources("gateways", ns);
+  const v = (value as string) ?? "anthropic";
+  const gw = gateways.data ?? [];
+  const gwNames = new Set(gw.map((g) => g.metadata.name));
+  // A gateway with a provider's name shadows it, so the built-in is not offered separately.
+  const builtins = (providers.data ?? []).filter((p) => !gwNames.has(p.name));
+  const known = gwNames.has(v) || builtins.some((p) => p.name === v);
+  const current = gw.find((g) => g.metadata.name === v);
+  return (
+    <div>
+      <NativeSelect value={v} onChange={(e) => onChange(e.target.value)}>
+        {!known && <option value={v}>{v} (not found)</option>}
+        {gw.length > 0 && (
+          <optgroup label="Gateways">
+            {gw.map((g) => (
+              <option key={g.metadata.name} value={g.metadata.name}>
+                {g.metadata.name}
+                {g.metadata.description ? ` — ${g.metadata.description}` : ""}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label="Built-in providers">
+          {builtins.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+              {p.description ? ` — ${p.description}` : ""}
+            </option>
+          ))}
+        </optgroup>
+      </NativeSelect>
+      <p className="mt-1 text-xs text-faint">
+        {current ? (
+          <>
+            Through the <span className="font-mono">{v}</span> gateway ({String(current.spec?.type ?? "anthropic")}).{" "}
+          </>
+        ) : known ? (
+          "Calls the provider directly with the server's credentials. "
+        ) : null}
+        Gateways are managed in the{" "}
+        <Link to="/admin/gateways" className="text-accent hover:underline">
+          admin console
+        </Link>
+        .
+      </p>
+    </div>
+  );
+}
 
 function ProviderSelect({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
   const { data } = useProviders();
@@ -201,11 +271,63 @@ function BackendConfig({ spec, setSpec, readOnly }: { spec: Record<string, unkno
 // --------------------------------------------------------------------------- gateways
 
 export const gatewayExtension: EditorExtension = {
-  widgets: ({ ns }) => ({
+  widgets: () => ({
     type: ({ value, onChange }) => <ProviderSelect value={value} onChange={onChange} />,
-    api_key_secret: ({ value, onChange }) => <SecretPicker ns={ns} value={value} onChange={onChange} />,
+    api_key_secret: ({ value, onChange }) => <SharedSecretPicker value={value} onChange={onChange} />,
   }),
+  sections: (ctx) => <GatewayHeaders ctx={ctx} />,
 };
+
+function GatewayHeaders({ ctx }: { ctx: EditorContext }) {
+  const { spec, setSpec, canWrite, errors } = ctx;
+  const headers = (spec.headers as Record<string, string>) ?? {};
+  const secretHeaders = (spec.secret_headers as Record<string, string>) ?? {};
+  // KeyValueInput keeps its own rows; remount both lists when headers move between them.
+  const [generation, setGeneration] = useState(0);
+  const set = (field: "headers" | "secret_headers", v: Record<string, string>, next = { ...spec }) => {
+    if (Object.keys(v).length) next[field] = v;
+    else delete next[field];
+    return next;
+  };
+  const flagged = Object.keys(headers).filter(looksLikeCredential);
+  const move = () => {
+    const plain = Object.fromEntries(Object.entries(headers).filter(([k]) => !looksLikeCredential(k)));
+    const secret = { ...secretHeaders, ...Object.fromEntries(flagged.map((k) => [k, secretHeaders[k] ?? ""])) };
+    setSpec(set("secret_headers", secret, set("headers", plain)));
+    setGeneration((g) => g + 1);
+  };
+  return (
+    <Card>
+      <CardHeader title="Headers" description="Sent with every model request through this gateway." />
+      <fieldset disabled={!canWrite} className="space-y-4 p-4">
+        <Field label="Secret headers" description="Header name and the shared secret that holds its value, e.g. x-portkey-api-key → portkey-key." error={errors.secret_headers}>
+          <KeyValueInput
+            key={`s${generation}`}
+            value={secretHeaders}
+            onChange={(v) => setSpec(set("secret_headers", v))}
+            keyPlaceholder="x-api-key"
+            valueWidget={(v, setV) => <SecretPicker ns={SHARED_NS} value={v || undefined} onChange={(nv) => setV((nv as string) ?? "")} />}
+          />
+        </Field>
+        <Field label="Plain headers" description="Non-secret values only, such as a team or routing tag." error={errors.headers}>
+          <KeyValueInput key={`p${generation}`} value={headers} onChange={(v) => setSpec(set("headers", v))} keyPlaceholder="x-team" valuePlaceholder="platform" />
+        </Field>
+        {flagged.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warn/25 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+            <TriangleAlert className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1">
+              <span className="font-mono">{flagged.join(", ")}</span> {flagged.length === 1 ? "looks" : "look"} like a credential. Plain headers can't carry
+              credentials; keep the value in a shared secret instead.
+            </span>
+            <Button size="sm" variant="secondary" icon={<KeyRound className="size-3.5" />} onClick={move}>
+              Move to secret headers
+            </Button>
+          </div>
+        )}
+      </fieldset>
+    </Card>
+  );
+}
 
 // --------------------------------------------------------------------------- model policies
 
