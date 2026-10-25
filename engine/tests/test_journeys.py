@@ -224,3 +224,26 @@ async def test_journey_jira_bugfix_reports_failure(world):
     [(_, comment)] = jira.comments
     assert "could not produce a passing fix" in comment_text(comment)
     assert "Could not reproduce reliably." in comment_text(comment)
+
+
+async def test_queued_jira_webhook_is_acknowledged_then_processed_by_a_worker(world):
+    engine, tenant, github, jira = world
+    github.add_repo("acme/api")
+    jira.add_issue("BUG-8", "Crash on logout", "Logout crashes.")
+    await apply_examples(engine, tenant.id, "jira-bugfix", agent_outputs={"bugfixer": {
+        "tests_passed": True, "branch": "fix/bug-8", "root_cause": "x", "test_summary": "ok", "summary": "fixed"}})
+    webhook_id = (await engine.integrations.webhook_url(tenant.id, "jira-acme")).rsplit("/", 1)[-1]
+    body = jira_issue_updated("BUG-8", "Ready for AI", 1700000100)
+
+    with pytest.raises(Exception, match="signature"):  # still verified before it is acknowledged
+        await engine.integrations.accept_webhook(webhook_id, {"X-Hub-Signature": "sha256=bad"}, body)
+    accepted = await engine.integrations.accept_webhook(webhook_id, {"X-Hub-Signature": sign(JIRA_WEBHOOK_SECRET, body)}, body)
+    assert accepted["queued"] is True
+    assert await engine.store.count_runs(tenant.id) == 0  # nothing started inside the request
+
+    assert await engine.integrations.process_queued_webhooks() == 1
+    delivery = await engine.store.get_webhook_delivery(accepted["delivery"])
+    assert delivery.status == "done" and delivery.result["triggers"][0]["status"] == "fired"
+    await engine.run_until_idle()
+    run = await engine.store.get_run(tenant.id, delivery.result["triggers"][0]["run_id"])
+    assert run.status == "succeeded", run.error

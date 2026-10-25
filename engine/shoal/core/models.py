@@ -709,6 +709,15 @@ def credential_fields(values: dict[str, Any]) -> list[str]:
     return sorted(k for k in values if CREDENTIAL_NAME.search(k))
 
 
+class GatewayLimits(Model):
+    """Pacing for one gateway, shared by every worker. Calls over a limit wait (or use the next candidate)."""
+
+    max_concurrency: int | None = Field(None, ge=1, description="Model calls in flight at once.")
+    requests_per_minute: int | None = Field(None, ge=1)
+    tokens_per_minute: int | None = Field(None, ge=1, description="Input plus output tokens.")
+    max_wait: Duration = Field(timedelta(minutes=5), description="Longest a call waits for capacity before failing.")
+
+
 class GatewaySpec(Model):
     """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...).
 
@@ -725,6 +734,7 @@ class GatewaySpec(Model):
         default_factory=dict, description="Header name to secret name (in `shared`), e.g. {x-portkey-api-key: portkey-key}."
     )
     config: dict[str, Any] = Field(default_factory=dict)
+    limits: GatewayLimits | None = Field(None, description="Rate and concurrency limits, e.g. your provider tier's.")
 
     @model_validator(mode="after")
     def _no_clear_text_credentials(self) -> GatewaySpec:

@@ -82,6 +82,8 @@ def install_error_handlers(app: FastAPI) -> None:
             log.error("request failed: %s", exc.message, extra={"details": exc.details})
         status = exc.status_code
         headers = {"WWW-Authenticate": "Bearer"} if status == 401 else None
+        if status == 429 and exc.details.get("retry_after"):
+            headers = {"Retry-After": str(exc.details["retry_after"])}
         response = problem(request, status, exc.code, exc.message, details=exc.details)
         if headers:
             response.headers.update(headers)
@@ -299,12 +301,14 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         eng = app.state.engine
         await eng.start()
+        eng.events.start_listening()  # live run views wake on Postgres notifications instead of polling
         eng.federation_member.start(app)
         if run_worker:
             eng.start_background_worker()
         try:
             yield
         finally:
+            await eng.events.stop_listening()
             if owns_engine:
                 await eng.close()
 

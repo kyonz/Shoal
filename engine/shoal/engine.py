@@ -37,6 +37,7 @@ from shoal.federation import FederationHub, FederationMember
 from shoal.identity import IdentityService
 from shoal.integrations.manager import IntegrationManager
 from shoal.integrations.remote import register_remote_integration
+from shoal.limits import GatewayLimiter, Quotas
 from shoal.llm.router import ModelRouter
 from shoal.plugins.registry import Registry, factory
 from shoal.runtime.events import EventBus
@@ -46,7 +47,7 @@ from shoal.runtime.signals import Signals
 from shoal.sandbox.manager import SandboxManager
 from shoal.secrets.providers import SecretManager
 from shoal.skills import SkillSourceService
-from shoal.store.store import Store
+from shoal.store.store import store_from_settings
 from shoal.store.tables import Run
 from shoal.triggers import TriggerService
 
@@ -121,7 +122,7 @@ class Engine:
         http_transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.settings = settings or get_settings()
-        self.store = Store(self.settings.database_url)
+        self.store = store_from_settings(self.settings)
         self.registry = registry or Registry()
         _builtin_steps(self.registry)
         self.http_transport = http_transport
@@ -139,6 +140,8 @@ class Engine:
         self.identities = IdentityService(self)
         self.workload = WorkloadIssuer(self.settings)
         self.cloud = CloudIdentities(self)
+        self.quotas = Quotas(self)
+        self.gateway_limiter = GatewayLimiter(self)
         self.models = ModelRouter(self)
         self.decisions = DecisionService(self)
         self.executor = Executor(self)
@@ -183,6 +186,7 @@ class Engine:
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        await self.events.stop_listening()
         await self.orchestrator.close()
         await self.store.close()
 
@@ -201,7 +205,8 @@ class Engine:
         """Claim and advance due built-in runs once. Returns the number processed."""
         lease = timedelta(seconds=self.settings.lease_seconds)
         run_ids = await self.store.claim_runs(
-            self.worker_id, limit=limit or self.settings.worker_concurrency, lease=lease
+            self.worker_id, limit=limit or self.settings.worker_concurrency, lease=lease,
+            tenant_limits=self.quotas.concurrency_limits,
         )
         await asyncio.gather(*(self.executor.advance(run_id, self.worker_id) for run_id in run_ids))
         return len(run_ids)
@@ -214,14 +219,20 @@ class Engine:
         await self._prune_audit()
 
     async def _prune_audit(self) -> None:
-        """Apply audit retention at most once an hour."""
-        days = self.settings.audit_retention_days
+        """Apply audit and run event retention at most once an hour."""
+        audit_days, event_days = self.settings.audit_retention_days, self.settings.run_event_retention_days
         now = clock.now()
-        if not days or (self._last_audit_prune and now - self._last_audit_prune < timedelta(hours=1)):
+        if not (audit_days or event_days) or (
+            self._last_audit_prune and now - self._last_audit_prune < timedelta(hours=1)
+        ):
             return
         self._last_audit_prune = now
-        await self.store.prune_audit(now - timedelta(days=days))
+        if audit_days:
+            await self.store.prune_audit(now - timedelta(days=audit_days))
+        if event_days:
+            await self.store.prune_run_events(now - timedelta(days=event_days))
         await self.federation.prune(now - timedelta(hours=1))  # forwarded calls are only kept briefly
+        await self.store.prune_webhooks(now - timedelta(days=1))  # processed webhook deliveries
 
     async def run_until_idle(self, max_iterations: int = 1000) -> None:
         """Process everything that is due right now (tests, CLI ``--wait``)."""
@@ -234,17 +245,35 @@ class Engine:
         raise RuntimeError("run_until_idle did not settle")
 
     async def _process_all_due(self) -> int:
-        return await self.process_due() + await self.orchestrator.drain()
+        webhooks = await self.integrations.process_queued_webhooks()
+        return webhooks + await self.process_due() + await self.orchestrator.drain()
 
     async def run_worker(self, *, scheduler: bool = True) -> None:
         """Long-running worker loop: claims built-in runs, serves the orchestrator and runs the scheduler."""
         log.info("worker %s started (orchestrator: %s)", self.worker_id, self.orchestrator.name)
         serving = asyncio.create_task(self.orchestrator.serve())
+        webhooks = asyncio.create_task(self._webhook_loop())
         try:
             await self._claim_loop(scheduler=scheduler)
         finally:
             serving.cancel()
-            await asyncio.gather(serving, return_exceptions=True)
+            webhooks.cancel()
+            await asyncio.gather(serving, webhooks, return_exceptions=True)
+
+    async def _webhook_loop(self) -> None:
+        """Process webhook deliveries the API queued."""
+        while not self._stopping.is_set():
+            try:
+                if await self.integrations.process_queued_webhooks():
+                    continue
+                await asyncio.wait_for(self._stopping.wait(), timeout=self.settings.poll_interval_seconds)
+            except TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("webhook loop error")
+                await asyncio.sleep(2)
 
     async def _claim_loop(self, *, scheduler: bool) -> None:
         semaphore = asyncio.Semaphore(self.settings.worker_concurrency)
@@ -259,7 +288,9 @@ class Engine:
                 free = semaphore._value  # noqa: SLF001 - cheap capacity check
                 claimed = []
                 if free:
-                    claimed = await self.store.claim_runs(self.worker_id, limit=free, lease=lease)
+                    claimed = await self.store.claim_runs(
+                        self.worker_id, limit=free, lease=lease, tenant_limits=self.quotas.concurrency_limits
+                    )
                 for run_id in claimed:
                     await semaphore.acquire()
                     task = asyncio.create_task(self._advance(run_id, semaphore))

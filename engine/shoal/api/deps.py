@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import time
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
@@ -33,10 +35,63 @@ def _bearer(request: Request) -> str | None:
     return request.cookies.get(SESSION_COOKIE)
 
 
+class AuthCache:
+    """Recently authenticated principals (with their grants), keyed by a hash of the credential.
+
+    Entries live ``auth_cache_seconds`` and are dropped as soon as this process changes keys, users, groups,
+    roles or bindings; a change made by another process takes effect within the TTL.
+    """
+
+    def __init__(self, engine: Engine, max_entries: int = 10_000):
+        self.engine, self.max_entries = engine, max_entries
+        self._entries: dict[str, tuple[Any, int, float]] = {}
+
+    def _key(self, *parts: str) -> str:
+        return hashlib.sha256("\x00".join(parts).encode()).hexdigest()
+
+    def get(self, *parts: str) -> Any:
+        entry = self._entries.get(self._key(*parts))
+        if entry is None:
+            return None
+        value, generation, expires = entry
+        if generation != self.engine.store.auth_generation or time.monotonic() > expires:
+            self._entries.pop(self._key(*parts), None)
+            return None
+        return value
+
+    def put(self, value: Any, *parts: str) -> None:
+        ttl = self.engine.settings.auth_cache_seconds
+        if ttl <= 0:
+            return
+        if len(self._entries) >= self.max_entries:
+            self._entries.pop(next(iter(self._entries)))  # oldest first (dicts keep insertion order)
+        self._entries[self._key(*parts)] = (value, self.engine.store.auth_generation, time.monotonic() + ttl)
+
+
+def auth_cache(engine: Engine) -> AuthCache:
+    cache = getattr(engine, "_auth_cache", None)
+    if cache is None:
+        cache = engine._auth_cache = AuthCache(engine)  # type: ignore[attr-defined]
+    return cache
+
+
 async def authenticate(request: Request, engine: Engine) -> Principal:
     cached = getattr(request.state, "principal", None)
     if cached is not None:
         return cached
+    token = _bearer(request)
+    if token and not request.headers.get(ASSERTION_HEADER):
+        tenant_header = request.headers.get("x-shoal-tenant", "")
+        hit = auth_cache(engine).get("principal", token, tenant_header)
+        if hit is not None:
+            return hit
+        principal = await _authenticate(request, engine)
+        auth_cache(engine).put(principal, "principal", token, tenant_header)
+        return principal
+    return await _authenticate(request, engine)
+
+
+async def _authenticate(request: Request, engine: Engine) -> Principal:
     assertion = request.headers.get(ASSERTION_HEADER)
     if assertion:  # forwarded by this member's federation hub, through the tenant connector
         principal, claims = await engine.federation_member.principal_for(
@@ -114,7 +169,10 @@ class Ctx:
 
     async def namespace(self, name: str, permission: str) -> str:
         """Authorize a namespaced call; 404 for namespaces that do not exist."""
-        await self.engine.store.get_namespace(self.tenant_id, name)
+        cache = auth_cache(self.engine)
+        if not cache.get("namespace", self.tenant_id, name):
+            await self.engine.store.get_namespace(self.tenant_id, name)
+            cache.put(True, "namespace", self.tenant_id, name)
         await self.require(permission, name)
         return name
 
@@ -125,6 +183,8 @@ class Ctx:
 async def get_ctx(request: Request, engine: EngineDep) -> Ctx:
     principal = await authenticate(request, engine)
     request.state.principal = principal
+    if not principal.is_system_admin:
+        await engine.quotas.check_request(principal.tenant_id)
     return Ctx(engine, principal)
 
 

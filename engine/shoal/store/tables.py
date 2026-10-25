@@ -236,6 +236,9 @@ class Run(Base):
     __table_args__ = (
         Index("ix_runs_claim", "status", "next_wake_at"),
         Index("ix_runs_tenant_created", "tenant_id", "created_at"),
+        Index("ix_runs_idempotency", "tenant_id", "idempotency_key", unique=True),
+        Index("ix_runs_tenant_status", "tenant_id", "status"),
+        Index("ix_runs_lease", "lease_expires_at"),
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
@@ -259,6 +262,9 @@ class Run(Base):
     parent_run_id: Mapped[str | None] = mapped_column(String(40), index=True)
     parent_step_id: Mapped[str | None] = mapped_column(String(64))
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(200), doc="Client key from the Idempotency-Key header: a retried start returns this run."
+    )
     orchestrator: Mapped[str] = mapped_column(
         String(20), default="builtin", server_default="builtin", doc="What drives this run (see shoal.runtime.orchestrator)."
     )
@@ -293,6 +299,7 @@ class StepRun(Base):
 
 class RunEvent(Base):
     __tablename__ = "run_events"
+    __table_args__ = (Index("ix_run_events_created", "created_at"),)
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     tenant_id: Mapped[str] = mapped_column(String(40), index=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
@@ -300,6 +307,17 @@ class RunEvent(Base):
     type: Mapped[str] = mapped_column(String(60))
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class LimiterLease(Base):
+    """A unit of a shared limit (a model call in flight, a request this minute), held until it expires or is released."""
+
+    __tablename__ = "limiter_leases"
+    __table_args__ = (Index("ix_limiter_key_expires", "key", "expires_at"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    key: Mapped[str] = mapped_column(String(200))
+    weight: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime] = mapped_column()
 
 
 class WaitSubscription(Base):
@@ -347,6 +365,24 @@ class UserCredential(Base):
     expires_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class WebhookInbox(Base):
+    """A verified webhook delivery waiting for a worker (the API acknowledges it before processing)."""
+
+    __tablename__ = "webhook_inbox"
+    __table_args__ = (Index("ix_webhook_inbox_due", "status", "next_attempt_at"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    webhook_id: Mapped[str] = mapped_column(String(40))
+    headers: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    body: Mapped[str] = mapped_column(Text, doc="The raw body, base64.")
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(default=utcnow)
+    lease_expires_at: Mapped[datetime | None] = mapped_column()
+    result: Mapped[dict[str, Any] | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class WebhookEndpoint(Base):

@@ -72,6 +72,17 @@ secrets:
 database:
   # e.g. postgresql+asyncpg://shoal:password@db.example.com:5432/shoal
   url: ""
+  # When url points at a pooler (PgBouncer, RDS Proxy, ...): the direct URL that
+  # migrations and live-update notifications (LISTEN/NOTIFY) use, and set
+  # pgbouncer: true if the pooler runs in transaction mode.
+  directUrl: ""
+  pgbouncer: false
+  # Connections each Shoal process keeps. Postgres (or the pooler) must allow
+  # (api replicas x api processes + worker replicas) x (size + maxOverflow).
+  pool:
+    size: 20
+    maxOverflow: 10
+    timeoutSeconds: 10
 
 # A single-instance Postgres for evaluation and small installs. Use a managed
 # or operator-run database in production and set database.url instead.
@@ -93,6 +104,25 @@ postgresql:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 1Gi}
+  maxConnections: 200
+
+# PgBouncer in front of the bundled Postgres (transaction pooling), so scaling API
+# and worker replicas does not exhaust Postgres connections. For an external
+# database, run your own pooler and set database.url, directUrl and pgbouncer.
+pgbouncer:
+  enabled: true
+  image:
+    repository: edoburu/pgbouncer
+    tag: "v1.26.0-p0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  maxClientConn: 2000
+  # Server connections per database/user pair, and the cap across all of them.
+  defaultPoolSize: 50
+  maxDbConnections: 150
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {memory: 128Mi}
 
 # Extra environment for every Shoal pod (model provider keys, sandbox services, ...).
 extraEnv: []

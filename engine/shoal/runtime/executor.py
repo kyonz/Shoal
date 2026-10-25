@@ -76,8 +76,19 @@ class Executor:
         parent_step_id: str | None = None,
         labels: dict[str, str] | None = None,
         initiator: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        admit: bool = False,
+        row: t.Resource | None = None,
+        audit: dict[str, Any] | None = None,
     ) -> t.Run:
-        row = await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
+        """Create a run. ``admit`` applies the tenant's queue quota (API entry points); ``row`` saves a lookup."""
+        if idempotency_key:
+            existing = await self.store.run_by_idempotency_key(tenant_id, idempotency_key)
+            if existing is not None:
+                return self._replay(existing, workflow_name)
+        if admit:
+            await self.engine.quotas.admit_run(tenant_id)
+        row = row or await self.store.get_resource_row(tenant_id, "Workflow", workflow_name)
         document = row.document
         if version is not None and version != row.version:
             document = await self.store.get_resource_version(tenant_id, "Workflow", workflow_name, version)
@@ -112,18 +123,28 @@ class Executor:
             parent_run_id=parent_run_id,
             parent_step_id=parent_step_id,
             orchestrator=self.engine.orchestrator.name,
+            idempotency_key=idempotency_key,
             next_wake_at=now,
             created_at=now,
             updated_at=now,
         )
         steps = [new_step_row(tenant_id, run.id, s.id, s.type) for s in spec.steps]
-        await self.store.create_run(run, steps)
-        await self.engine.events.emit(
-            run,
-            "run.created",
-            {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by, "initiator": initiator},
-        )
+        created = {"workflow": workflow_name, "version": run.workflow_version, "started_by": started_by, "initiator": initiator}
+        extra: list[Any] = [t.RunEvent(tenant_id=tenant_id, run_id=run.id, type="run.created", data=created)]
+        if audit is not None:  # the caller's audit entry, written with the run
+            extra.append(self.store.audit_entry(tenant_id, started_by, "run.started", run.id, namespace=namespace, **audit))
+        stored = await self.store.create_run(run, steps, extra)
+        if stored is not run:  # a concurrent retry with the same key won
+            return self._replay(stored, workflow_name)
+        await self.engine.events.notify(run, "run.created", created)
         await self.engine.orchestrator.submit(run)
+        return run
+
+    @staticmethod
+    def _replay(run: t.Run, workflow_name: str) -> t.Run:
+        if run.workflow_name != workflow_name:
+            raise Conflict(f"idempotency key was already used to start a run of '{run.workflow_name}'")
+        run.replayed = True  # type: ignore[attr-defined]
         return run
 
     # ------------------------------------------------------------------ advance

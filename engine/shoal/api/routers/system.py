@@ -5,13 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Response
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import shoal
 from shoal.api.deps import CtxDep, EngineDep, SystemCtxDep
 from shoal.api.schemas import Me, Permissions, TenantCreated, TenantIn, TenantOut
 from shoal.core.models import KIND_BY_PLURAL, RESOURCE_KINDS, Step
 from shoal.core.scope import TENANT_SCOPED_KINDS
+from shoal.limits import TenantQuotas
+
+
+class QuotasOut(BaseModel):
+    tenant: TenantQuotas
+    effective: TenantQuotas
 
 router = APIRouter()
 
@@ -96,6 +102,45 @@ async def get_tenant(slug: str, ctx: SystemCtxDep) -> Any:
 async def delete_tenant(slug: str, ctx: SystemCtxDep) -> None:
     await ctx.engine.store.delete_tenant(slug)
     await ctx.engine.store.audit(None, ctx.actor, "tenant.deleted", slug)
+
+
+async def _tenant(ctx: SystemCtxDep, slug: str) -> Any:
+    from shoal.core.errors import NotFound
+
+    tenant = await ctx.engine.store.get_tenant_by_slug(slug)
+    if tenant is None:
+        raise NotFound(f"tenant '{slug}' not found")
+    return tenant
+
+
+@router.get("/v1/tenants/{slug}/quotas", tags=["tenants"], response_model=QuotasOut)
+async def get_tenant_quotas(slug: str, ctx: SystemCtxDep) -> QuotasOut:
+    tenant = await _tenant(ctx, slug)
+    return await _quotas(ctx, tenant)
+
+
+@router.put("/v1/tenants/{slug}/quotas", tags=["tenants"], response_model=QuotasOut,
+            summary="Set a tenant's quotas (unset fields use the server defaults; 0 means unlimited)")
+async def put_tenant_quotas(slug: str, body: TenantQuotas, ctx: SystemCtxDep) -> QuotasOut:
+    tenant = await _tenant(ctx, slug)
+    own = body.model_dump(exclude_none=True)
+    tenant = await ctx.engine.store.update_tenant_settings(tenant.id, quotas=own or None)
+    ctx.engine.quotas.forget(tenant.id)
+    await ctx.engine.store.audit(tenant.id, ctx.actor, "tenant.quotas", slug, quotas=own)
+    return await _quotas(ctx, tenant)
+
+
+async def _quotas(ctx: Any, tenant: Any) -> QuotasOut:
+    own = TenantQuotas.model_validate((tenant.settings or {}).get("quotas") or {})
+    ctx.engine.quotas.forget(tenant.id)
+    return QuotasOut(tenant=own, effective=await ctx.engine.quotas.for_tenant(tenant.id))
+
+
+@router.get("/v1/quotas", tags=["me"], response_model=QuotasOut, summary="The calling tenant's quotas")
+async def my_quotas(ctx: CtxDep) -> QuotasOut:
+    tenant = await ctx.engine.store.get_tenant(ctx.tenant_id)
+    own = TenantQuotas.model_validate((tenant.settings or {}).get("quotas") or {})
+    return QuotasOut(tenant=own, effective=await ctx.engine.quotas.for_tenant(tenant.id))
 
 
 # --------------------------------------------------------------------------- the caller

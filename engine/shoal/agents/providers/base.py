@@ -57,4 +57,20 @@ class ProviderRefusal(Exception):
 
 
 class ProviderUnavailable(Exception):
-    """Transient provider failure (rate limit, overload, outage). Routers fall back on it."""
+    """Transient provider failure (rate limit, overload, outage). Routers fall back on it.
+
+    ``retry_after`` (seconds) is the provider's hint for when to try again, when it gave one.
+    """
+
+    def __init__(self, message: str = "", *, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(headers: Any) -> float | None:
+    """Parse a ``Retry-After`` header given in seconds (HTTP dates are ignored)."""
+    value = headers.get("retry-after") if headers is not None else None
+    try:
+        return max(0.0, float(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None

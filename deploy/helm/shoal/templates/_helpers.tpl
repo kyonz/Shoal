@@ -51,6 +51,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-postgresql" (include "shoal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "shoal.pgbouncer.fullname" -}}
+{{- printf "%s-pgbouncer" (include "shoal.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* True when Shoal reaches Postgres through a transaction-mode pooler. */}}
+{{- define "shoal.pgbouncer.inUse" -}}
+{{- if .Values.postgresql.enabled }}{{ .Values.pgbouncer.enabled }}{{ else }}{{ .Values.database.pgbouncer }}{{ end }}
+{{- end }}
+
 {{/* Environment shared by the API and worker containers. */}}
 {{- define "shoal.env" -}}
 - name: SHOAL_SECRET_KEY
@@ -59,6 +68,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_ADMIN_TOKEN}}
 - name: SHOAL_DATABASE_URL
   valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_DATABASE_URL}}
+- name: SHOAL_DATABASE_DIRECT_URL
+  valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_DATABASE_DIRECT_URL, optional: true}}
 - name: SHOAL_WORKER_ID
   valueFrom: {fieldRef: {fieldPath: metadata.name}}
 {{- with .Values.orchestrator.temporal.apiKeySecret }}

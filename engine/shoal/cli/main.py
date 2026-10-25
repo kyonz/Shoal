@@ -746,7 +746,7 @@ async def _with_connection(fn: Any) -> Any:
     from shoal.config import get_settings
     from shoal.store.store import Store
 
-    store = Store(get_settings().database_url)
+    store = Store(get_settings().database_direct_url or get_settings().database_url)
     try:
         async with store.engine.begin() as conn:
             return await conn.run_sync(fn)
@@ -763,7 +763,7 @@ def db_upgrade(revision: Annotated[str, typer.Argument(help="Target revision.")]
     from shoal.store.store import Store
 
     async def run() -> str | None:
-        store = Store(get_settings().database_url)
+        store = Store(get_settings().database_direct_url or get_settings().database_url)
         try:
             return await store.migrate(revision)
         finally:
