@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -37,6 +37,7 @@ from shoal.api.schemas import (
     UserPatch,
 )
 from shoal.auth.permissions import ALL_PERMISSIONS, TENANT_PERMISSIONS, granted
+from shoal.core import clock
 from shoal.core.errors import Forbidden, InvalidRequest, NotFound
 from shoal.store import tables as t
 
@@ -479,6 +480,15 @@ async def create_api_key(body: ApiKeyIn, ctx: CtxDep) -> Any:
         raise InvalidRequest("the system admin token cannot own API keys; set 'service_account'")
     for ns in body.namespaces:
         await ctx.engine.store.get_namespace(ctx.tenant_id, ns)
+    expires_at = body.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if max_days := ctx.engine.settings.api_key_max_days:
+        latest = clock.now() + timedelta(days=max_days)
+        if expires_at is None:
+            expires_at = latest
+        elif expires_at > latest + timedelta(minutes=5):  # slack for the client's clock
+            raise InvalidRequest(f"API keys on this server expire within {max_days} days")
     p = ctx.principal
     if p.api_key_id:  # a key can only mint keys within its own limits
         if any(granted(body.scopes, perm) and not granted(p.key_scopes, perm) for perm in ALL_PERMISSIONS):
@@ -486,7 +496,7 @@ async def create_api_key(body: ApiKeyIn, ctx: CtxDep) -> Any:
         if p.key_namespaces and (not body.namespaces or set(body.namespaces) - set(p.key_namespaces)):
             raise Forbidden("an API key cannot create a key for namespaces outside its own")
     key, token = await ctx.engine.store.create_api_key(
-        ctx.tenant_id, body.name, body.scopes, expires_at=body.expires_at, created_by=ctx.actor, owner_id=owner_id, namespaces=body.namespaces
+        ctx.tenant_id, body.name, body.scopes, expires_at=expires_at, created_by=ctx.actor, owner_id=owner_id, namespaces=body.namespaces
     )
     await ctx.audit("api_key.created", key.id, name=body.name, owner_id=owner_id)
     return ApiKeyCreated(key=ApiKeyOut.model_validate(key), token=token)
