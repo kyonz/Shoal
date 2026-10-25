@@ -1,5 +1,5 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, Cloud, FlaskConical, Library, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Cloud, FlaskConical, Library, Puzzle, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
 import { nsPath } from "@/lib/ns";
 
@@ -155,6 +155,18 @@ export const KINDS: Record<string, KindConfig> = {
     admin: true,
     template: { source: "git", title: "Public skills", config: { url: "https://github.com/anthropics/skills", ref: "main", path: "skills" } },
     summary: (s) => [s.source, (s.config as { url?: string } | undefined)?.url].filter(Boolean).join(" · ") || undefined,
+  },
+  "custom-integrations": {
+    plural: "custom-integrations",
+    kind: "CustomIntegration",
+    label: "Custom integrations",
+    singular: "custom integration",
+    icon: Puzzle,
+    blurb: "Integrations your organisation built: a remote service speaking the Shoal integration protocol, or an installed Python package. Shoal pulls their settings so teams connect them like a built-in.",
+    order: ["title", "source", "url", "token_secret", "package", "description", "connection_scopes", "namespaces", "enabled", "timeout_seconds", "allow_insecure"],
+    admin: true,
+    template: { source: "remote", url: "https://my-integration.example.com", token_secret: "my-integration-token" },
+    summary: (s) => [s.source, s.url ?? s.package, Array.isArray(s.connection_scopes) && s.connection_scopes.length === 1 ? `${s.connection_scopes[0]} only` : null].filter(Boolean).join(" · ") || undefined,
   },
 };
 

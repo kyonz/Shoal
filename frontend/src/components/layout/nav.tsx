@@ -11,8 +11,10 @@ import {
   KeyRound,
   LayoutDashboard,
   Library,
+  Lock,
   Network,
   Plug,
+  Puzzle,
   Rocket,
   Route,
   Server,
@@ -33,6 +35,8 @@ export interface NavItem {
   namespaced: boolean;
   /** Hidden unless the caller holds this permission (in the current namespace). */
   permission?: string;
+  /** Check `permission` in this namespace instead (admin pages for the shared namespace). */
+  permissionNamespace?: string;
   keywords?: string;
 }
 
@@ -78,17 +82,19 @@ export const NAV: NavGroup[] = [
     label: "Configure",
     items: [
       { label: "Sandboxes", to: "sandbox-profiles", icon: Boxes, namespaced: true, permission: "sandbox-profiles:read", keywords: "docker kubernetes e2b space" },
-      { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read", keywords: "llm provider litellm openrouter" },
-      { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read", keywords: "routing fallback" },
-      { label: "Skill sources", to: "/admin/skill-sources", icon: Library, namespaced: false, permission: "skill-sources:read", keywords: "marketplace git registry" },
     ],
   },
   {
     label: "Organisation",
     items: [
       { label: "Blueprints", to: "blueprints", icon: Store, namespaced: true, permission: "blueprints:read", keywords: "marketplace templates adopt" },
-      { label: "Identities", to: "/admin/identities", icon: Network, namespaced: false, permission: "identities:read", keywords: "people github jira attribution" },
-      { label: "Admin console", to: "/admin", icon: ShieldCheck, namespaced: false, keywords: "users groups roles oidc scim audit api keys" },
+      {
+        label: "Admin console",
+        to: "/admin",
+        icon: ShieldCheck,
+        namespaced: false,
+        keywords: "users groups roles oidc scim audit api keys organisation connections custom integrations gateways model policies skill sources identities shared secrets",
+      },
       { label: "Docs", to: "/docs", icon: BookOpen, namespaced: false, keywords: "help guide reference" },
     ],
   },
@@ -103,6 +109,10 @@ export const ADMIN_NAV: NavItem[] = [
   { label: "Roles", to: "/admin/roles", icon: ShieldCheck, namespaced: false, permission: "roles:manage" },
   { label: "Sign-in & SCIM", to: "/admin/auth", icon: KeyRound, namespaced: false, permission: "auth:manage" },
   { label: "API keys", to: "/admin/api-keys", icon: KeyRound, namespaced: false },
+  // Organisation-level configuration: shared with every namespace (or the ones it names).
+  { label: "Custom integrations", to: "/admin/custom-integrations", icon: Puzzle, namespaced: false, permission: "custom-integrations:read" },
+  { label: "Organisation connections", to: "/admin/connections", icon: Cable, namespaced: false, permission: "connections:read", permissionNamespace: "shared" },
+  { label: "Shared secrets", to: "/admin/secrets", icon: Lock, namespaced: false, permission: "secrets:read", permissionNamespace: "shared" },
   { label: "Identities", to: "/admin/identities", icon: GitBranch, namespaced: false, permission: "identities:read" },
   { label: "Gateways", to: "/admin/gateways", icon: Server, namespaced: false, permission: "gateways:read" },
   { label: "Model policies", to: "/admin/model-policies", icon: Route, namespaced: false, permission: "model-policies:read" },

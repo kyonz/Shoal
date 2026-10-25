@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { nsPath, useNs, useSwitchNamespace } from "@/lib/ns";
 import { relTime } from "@/lib/format";
 import { Kbd, StatusIcon } from "@/components/ui";
-import { NAV } from "./nav";
+import { ADMIN_NAV, NAV } from "./nav";
 
 export function useCommandPalette() {
   const [open, setOpen] = useState(false);
@@ -110,6 +110,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                       <ArrowRight className="opacity-40" />
                     </Command.Item>
                   ))}
+                {ADMIN_NAV.filter((i) => i.to !== "/admin" && (!i.permission || can(i.permission, i.permissionNamespace))).map((i) => (
+                  <Command.Item key={`admin-${i.label}`} className={item} value={`admin ${i.label}`} onSelect={() => go(i.to)}>
+                    <i.icon />
+                    <span className="flex-1">{i.label}</span>
+                    <span className="text-xs text-faint">Admin console</span>
+                    <ArrowRight className="opacity-40" />
+                  </Command.Item>
+                ))}
               </Command.Group>
               <Command.Group heading="Switch namespace" className={group}>
                 {(namespaces.data ?? []).filter((n) => n.name !== ns).map((n) => (

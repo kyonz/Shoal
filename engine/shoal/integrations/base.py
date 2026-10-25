@@ -8,7 +8,10 @@ An integration (``github``, ``jira``, ...) declares three capabilities:
   campaign target selection and UI pickers;
 * **events** - webhook / poll events that fire triggers and wake waits.
 
-A tenant configures a *connection* (credentials + settings) per integration.
+A tenant configures a *connection* (credentials + settings) per integration,
+either for the whole organisation (``org``: stored in the ``shared`` namespace
+and shared to namespaces) or for one namespace (``namespace``); each
+integration declares which of those it supports in ``connection_scopes``.
 """
 
 from __future__ import annotations
@@ -16,13 +19,17 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args, get_origin
 
 import httpx
 from pydantic import BaseModel, Field, SecretStr
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
+
+
+ConnectionScope = Literal["org", "namespace"]
+CONNECTION_SCOPES: tuple[ConnectionScope, ...] = ("org", "namespace")
 
 
 class IntegrationEvent(BaseModel):
@@ -160,6 +167,8 @@ class Integration:
     description: ClassVar[str] = ""
     connection_model: ClassVar[type[BaseModel]]
     events: ClassVar[list[EventDef]] = []
+    # Where connections may live: "org" (the shared namespace, shared to namespaces) and/or "namespace".
+    connection_scopes: ClassVar[tuple[ConnectionScope, ...]] = CONNECTION_SCOPES
 
     actions: ClassVar[dict[str, ActionDef]]
     resources: ClassVar[dict[str, ResourceDef]]
@@ -238,6 +247,7 @@ class Integration:
             "description": cls.description,
             "connection_schema": connection_schema,
             "secret_fields": cls.secret_fields(),
+            "connection_scopes": list(cls.connection_scopes),
             "actions": describe_actions(cls.actions),
             "resources": describe_resources(cls.resources),
             "events": [{"name": e.name, "description": e.description, "example": e.example} for e in cls.events],

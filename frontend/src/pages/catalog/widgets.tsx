@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { rawJson } from "@/api/client";
-import { useIntegrations, useResources, type JsonSchema, type Plural } from "@/api/hooks";
+import { useIntegrations, useNamespaces, useResources, type JsonSchema, type Plural } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { CodeEditor, Input, NativeSelect, Segmented } from "@/components/ui";
 import { CLAUDE_MODELS } from "./kinds";
@@ -94,8 +94,21 @@ export function ResourceMultiPicker({ plural, ns, value, onChange, exclude }: {
   exclude?: string;
 }) {
   const { data } = useResources(plural, ns);
+  const names = (data ?? []).map((r) => r.metadata.name).filter((n) => n !== exclude);
+  return <ChipPicker options={names} value={value} onChange={onChange} />;
+}
+
+/** Pick namespaces (never `shared`, which is the organisation itself). */
+export function NamespaceMultiPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+  const { data } = useNamespaces();
+  const names = (data ?? []).map((n) => n.name).filter((n) => n !== "shared");
+  return <ChipPicker options={names} value={value} onChange={onChange} />;
+}
+
+/** Several names from a list, shown as removable chips; an empty pick is `undefined`. */
+export function ChipPicker({ options: all, value, onChange }: { options: string[]; value: unknown; onChange: (v: unknown) => void }) {
   const list = (value as string[] | undefined) ?? [];
-  const options = (data ?? []).map((r) => r.metadata.name).filter((n) => !list.includes(n) && n !== exclude);
+  const options = all.filter((n) => !list.includes(n));
   const [draft, setDraft] = useState("");
   const add = (n: string) => {
     if (!n || list.includes(n)) return;
@@ -127,7 +140,7 @@ export function ResourceMultiPicker({ plural, ns, value, onChange, exclude }: {
           </option>
         ))}
       </select>
-      {!options.length && (data?.length ?? 0) === 0 && <Plus className="size-3 text-faint" />}
+      {!options.length && all.length === 0 && <Plus className="size-3 text-faint" />}
     </div>
   );
 }

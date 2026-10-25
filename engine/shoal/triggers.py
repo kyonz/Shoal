@@ -106,7 +106,9 @@ class TriggerService:
                         conn_row = await self.engine.store.get_resource_row(tenant_id, "Connection", connection)
                     except NotFound:
                         conn_row = None
-                    if conn_row is not None and conn_row.namespace != connection_namespace:
+                    # The trigger's namespace must resolve its connection to the one that received the event
+                    # (an organisation connection not shared with the namespace does not resolve).
+                    if conn_row is None or conn_row.namespace != connection_namespace:
                         continue
                 outcome = self.evaluate(trigger, event)
                 if not outcome["matched"] and not outcome.get("error"):

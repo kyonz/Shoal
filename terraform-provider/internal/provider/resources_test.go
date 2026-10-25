@@ -89,6 +89,15 @@ resource "shoal_skill_source" "public" {
     config = { url = "https://github.com/anthropics/skills", ref = "main", path = "skills" }
   }
 }
+
+resource "shoal_custom_integration" "hooks" {
+  name = "acme-hooks"
+  spec = {
+    source            = "package"
+    package           = "webhook"
+    connection_scopes = ["org"]
+  }
+}
 `, workflowYAML, greeting)
 }
 
@@ -109,6 +118,9 @@ func TestAccDeclarativeResources(t *testing.T) {
 					resource.TestMatchResourceAttr("shoal_connection.github", "status.webhook_url", regexp.MustCompile(`/v1/hooks/`)),
 					resource.TestCheckResourceAttr("shoal_identity.ada", "namespace", "shared"),
 					resource.TestCheckResourceAttr("shoal_skill_source.public", "namespace", "shared"),
+					resource.TestCheckResourceAttr("shoal_custom_integration.hooks", "namespace", "shared"),
+					resource.TestCheckResourceAttr("shoal_custom_integration.hooks", "status.ready", "true"),
+					resource.TestCheckResourceAttr("shoal_custom_integration.hooks", "status.connection_scopes", `["org"]`),
 					resource.TestCheckResourceAttrSet("shoal_secret.token", "updated_at"),
 				),
 			},

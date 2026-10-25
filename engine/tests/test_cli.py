@@ -291,3 +291,20 @@ def test_skills_import_and_upgrade(cli, tenant_key, server, tmp_path):
     assert "(was 1.0.0)" in upgraded.stdout and "/spec/instructions" in upgraded.stdout
     rolled = cli(*auth, "skills", "rollback", "pdf", "1")
     assert rolled.exit_code == 0 and "(1.0.0)" in rolled.stdout
+
+
+def test_integrations_register_and_list(cli, tenant_key, server):
+    engine = server.app.state.engine
+    engine.settings.integration_allow_imports = True
+    auth = ("--token", tenant_key)
+    bad = cli(*auth, "integrations", "register", "x")
+    assert bad.exit_code == 2 and "exactly one of --url or --package" in bad.output
+    done = cli(*auth, "integrations", "register", "hooks", "--package", "shoal.integrations.webhook:WebhookIntegration",
+               "--scope", "namespace", "--allow-namespace", "default")
+    assert done.exit_code == 0, done.output
+    assert "registered hooks" in done.stdout and "namespace level" in done.stdout
+    listed = json.loads(cli(*auth, "integrations", "list", "-o", "json").stdout)
+    hooks = next(i for i in listed if i["key"] == "hooks")
+    assert hooks["source"] == "custom" and hooks["connection_scopes"] == ["namespace"]
+    assert cli(*auth, "get", "custom-integrations", "-o", "name").stdout.split() == ["custom-integrations/hooks"]
+    assert cli(*auth, "integrations", "refresh", "hooks").exit_code == 0

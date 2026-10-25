@@ -25,6 +25,83 @@ There are two ways to ship one:
    end of this page. Python integrations can also be served this way with one
    command, so the same code can run in-process or out-of-process.
 
+Either way, a tenant admin then [registers it](#registering-an-integration-for-your-organisation)
+for the organisation, and Shoal pulls its settings so people connect to it
+like a built-in.
+
+## Registering an integration for your organisation
+
+A `CustomIntegration` resource registers an integration for one tenant. Shoal
+pulls its manifest (connection settings schema, secret fields, auth type,
+actions, resources and events), adds it to that tenant's catalogue under the
+resource's name, and the connect forms are rendered from the pulled schema.
+Registrations are tenant-wide and need `custom-integrations:manage` (tenant
+admins have it); in the UI they live in **Admin console → Custom integrations**.
+
+```yaml
+apiVersion: shoal.dev/v1
+kind: CustomIntegration
+metadata: { name: acme-crm }            # actions are called acme-crm.<action>
+spec:
+  source: remote                        # an HTTP service speaking shoal.integration/v1
+  url: https://crm-integration.acme.internal
+  token_secret: acme-crm-service-token  # secret in the `shared` namespace
+---
+apiVersion: shoal.dev/v1
+kind: CustomIntegration
+metadata: { name: linear }
+spec:
+  source: package                       # an installed Python package
+  package: shoal-linear                 # entry point name, distribution, or module:Class
+  connection_scopes: [namespace]        # narrow where connections may live
+  namespaces: [platform, payments]      # only these teams see it (empty: everyone)
+```
+
+The same from the CLI or Terraform:
+
+```bash
+shoal integrations register acme-crm --url https://crm-integration.acme.internal --token-secret acme-crm-service-token
+shoal integrations register linear --package shoal-linear --scope namespace --allow-namespace platform
+shoal integrations list            # what this namespace can connect
+shoal integrations refresh acme-crm  # pull the manifest again after the service changed
+```
+
+`status` on the resource says whether it is `ready`, or the `error` from the
+last pull. A service that is briefly down keeps serving the manifest it served
+last. `module:Class` paths import code into the server, so they are refused
+unless the operator sets `SHOAL_INTEGRATION_ALLOW_IMPORTS=true`; installed
+packages and remote services are always allowed. A registration cannot take
+the name of an installed integration, except to register that same package
+(for example to limit it to some namespaces).
+
+## Organisation and namespace connections
+
+A connection lives at one of two levels:
+
+| Level | Stored in | Who sets it up | Who can use it |
+| --- | --- | --- | --- |
+| **Organisation** (`org`) | the `shared` namespace | tenant admins, in **Admin console → Organisation connections** | every namespace, or only those listed in `spec.namespaces` |
+| **Namespace** (`namespace`) | the team's namespace | the team, in **Connect → Connections** | that namespace only |
+
+Every integration declares the levels it supports in `connection_scopes`
+(a class attribute in the SDK, a manifest field for remote services; default
+both), and a registration can narrow it further. Creating a connection at a
+level the integration does not support is rejected.
+
+```yaml
+apiVersion: shoal.dev/v1
+kind: Connection
+metadata: { name: github-acme, namespace: shared }
+spec:
+  integration: github
+  secrets: { token: github-acme-token }   # secrets in `shared`
+  namespaces: [payments, platform]        # only these namespaces may use it
+```
+
+A namespace connection with the same name wins over an organisation one.
+`GET /v1/namespaces/{ns}/org-connections` lists the organisation connections a
+namespace may use.
+
 ## Quick start
 
 ```bash
@@ -188,10 +265,13 @@ spec:
   secrets: { token: incidents-service-token, api_key: incidents-api-key }
 ```
 
+**Per organisation:** register it as a `CustomIntegration` (see
+[above](#registering-an-integration-for-your-organisation)); it shows up in
+that tenant's catalogue like a built-in (`incidents.create_incident`).
+
 **Operator-wide:** `await register_remote_integration(engine.registry, url, token)`
-fetches the manifest and registers the service under its own key, so it shows
-up in the catalogue like a built-in (`incidents.create_incident`) and tenants
-connect to it with an ordinary connection.
+(or `SHOAL_REMOTE_INTEGRATIONS`) fetches the manifest and registers the service
+under its own key for every tenant.
 
 The URL must be `https` (plain `http` is allowed for loopback, or with
 `allow_insecure: true`) because the service receives the connection's secrets.
@@ -236,9 +316,14 @@ The manifest:
   "resources": [{"name": "incident", "description": "Incidents.", "filter_schema": {"type": "object"}, "key_field": "id"}],
   "events": [{"name": "incident.opened", "description": "An incident was opened.", "example": {}}],
   "webhooks": true,
-  "test": true
+  "test": true,
+  "auth": "token",
+  "connection_scopes": ["org", "namespace"]
 }
 ```
+
+`auth` is a hint for the UI (`token`, `oauth2`, `basic`, `none`, ...);
+`connection_scopes` says where connections may live (default both).
 
 Shoal caches a manifest for 60 seconds per connection and refreshes it on
 "Test connection". Action input is validated by the service; Shoal checks only

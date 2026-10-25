@@ -17,9 +17,10 @@ export type Plural =
   | "identities"
   | "cloud-identities"
   | "blueprints"
-  | "skill-sources";
+  | "skill-sources"
+  | "custom-integrations";
 
-export const TENANT_SCOPED: Plural[] = ["identities", "blueprints", "gateways", "model-policies", "skill-sources"];
+export const TENANT_SCOPED: Plural[] = ["identities", "blueprints", "gateways", "model-policies", "skill-sources", "custom-integrations"];
 
 export function resourcePath(plural: Plural, ns: string, name?: string) {
   const base = TENANT_SCOPED.includes(plural) ? `/v1/${plural}` : `/v1/namespaces/${ns}/${plural}`;
@@ -37,7 +38,7 @@ export const keys = {
   versions: (plural: Plural, ns: string, name: string) => ["versions", plural, ns, name] as const,
   runs: (ns: string, filters?: object) => ["runs", ns, filters ?? {}] as const,
   run: (id: string) => ["run", id] as const,
-  integrations: ["integrations"] as const,
+  integrations: (ns?: string) => (ns ? (["integrations", ns] as const) : (["integrations"] as const)),
   schemas: ["schemas"] as const,
   stepSchema: ["schemas", "steps"] as const,
 };
@@ -82,12 +83,20 @@ export interface IntegrationAction {
   output_schema: JsonSchema | null;
 }
 
+/** Where an integration's connections may live: the organisation (shared to namespaces) or one namespace. */
+export type ConnectionScope = "org" | "namespace";
+
 export interface IntegrationCatalog {
   key: string;
   title: string;
   description: string;
   connection_schema: JsonSchema;
   secret_fields: string[];
+  connection_scopes?: ConnectionScope[];
+  /** installed (built-in or plugin package) or custom (registered by the organisation). */
+  source?: "installed" | "custom";
+  custom?: { source: "remote" | "package"; url?: string | null; package?: string | null; namespaces: string[] };
+  auth?: string | null;
   actions: IntegrationAction[];
   resources: { name: string; description: string; filter_schema: JsonSchema }[];
   events: { name: string; description: string; example: unknown }[];
@@ -117,11 +126,27 @@ export interface JsonSchema {
   [key: string]: unknown;
 }
 
-export function useIntegrations() {
+/** The integration catalogue; with `ns`, only the registered integrations that namespace may use. */
+export function useIntegrations(ns?: string) {
   return useQuery({
-    queryKey: keys.integrations,
-    queryFn: () => rawJson<IntegrationCatalog[]>("/v1/integrations"),
+    queryKey: keys.integrations(ns),
+    queryFn: () => rawJson<IntegrationCatalog[]>(ns ? `/v1/integrations?namespace=${encodeURIComponent(ns)}` : "/v1/integrations"),
     staleTime: 300_000,
+  });
+}
+
+/** Whether an integration allows connections at this level (organisation = the shared namespace). */
+export function allowsScope(integration: IntegrationCatalog | undefined, scope: ConnectionScope) {
+  return !integration?.connection_scopes || integration.connection_scopes.includes(scope);
+}
+
+/** Organisation connections (in `shared`) this namespace may use. */
+export function useOrgConnections(ns: string, enabled = true) {
+  return useQuery({
+    queryKey: ["org-connections", ns],
+    queryFn: () => rawJson<Resource[]>(`/v1/namespaces/${encodeURIComponent(ns)}/org-connections`),
+    enabled: enabled && ns !== "shared",
+    retry: false,
   });
 }
 
@@ -183,6 +208,8 @@ export function usePutResource(plural: Plural, ns: string) {
       qc.setQueryData(keys.resource(plural, ns, name), res);
       void qc.invalidateQueries({ queryKey: keys.resources(plural, ns) });
       void qc.invalidateQueries({ queryKey: keys.versions(plural, ns, name) });
+      if (plural === "custom-integrations") void qc.invalidateQueries({ queryKey: keys.integrations() });
+      if (plural === "connections") void qc.invalidateQueries({ queryKey: ["org-connections"] });
     },
   });
 }
@@ -191,7 +218,10 @@ export function useDeleteResource(plural: Plural, ns: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => rawJson<void>(resourcePath(plural, ns, name), { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.resources(plural, ns) }),
+    onSuccess: () => {
+      if (plural === "custom-integrations") void qc.invalidateQueries({ queryKey: keys.integrations() });
+      return qc.invalidateQueries({ queryKey: keys.resources(plural, ns) });
+    },
   });
 }
 

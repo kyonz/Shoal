@@ -90,6 +90,13 @@ Sources themselves are tenant-wide resources: `shoal apply` a `SkillSource` and
 `shoal integrations new servicenow --title ServiceNow` scaffolds an integration project from the
 SDK template (see [integrations.md](integrations.md)).
 
+`shoal integrations register NAME --url URL [--token-secret SECRET]` (a remote service) or
+`--package PACKAGE` (an installed one) registers an integration for your organisation; Shoal pulls
+its manifest so it can be connected like a built-in. `--scope org|namespace` narrows where its
+connections may live and `--allow-namespace NS` limits which namespaces see it (both repeatable).
+`shoal integrations list` shows what the current namespace can connect, and
+`shoal integrations refresh NAME` pulls a registered integration's manifest again.
+
 ## Running the server
 
 ```sh

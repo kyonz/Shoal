@@ -291,7 +291,7 @@ async def test_registered_remote_integration_behaves_like_a_builtin():
     async with engine_harness(http=transport) as world:
         cls = await register_remote_integration(world.engine.registry, "https://svc.test", SERVICE_TOKEN, transport=transport)
         assert cls.key == "tickets"
-        catalog = {c["key"]: c for c in world.engine.integrations.catalog()}
+        catalog = {c["key"]: c for c in await world.engine.integrations.catalog()}
         assert catalog["tickets"]["remote"]["url"] == "https://svc.test"
         assert catalog["tickets"]["actions"][0]["input_schema"]["required"] == ["title"]
         assert "remote" in catalog  # the generic adapter is listed too
@@ -394,4 +394,4 @@ async def test_operator_remote_integrations_register_at_start():
             RemoteIntegration(url="https://down.test"),  # unreachable: logged, start carries on
         ]
         await world.engine.start()
-        assert "tickets" in {c["key"] for c in world.engine.integrations.catalog()}
+        assert "tickets" in {c["key"] for c in await world.engine.integrations.catalog()}

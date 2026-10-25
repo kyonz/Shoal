@@ -39,7 +39,7 @@ export function SecretPicker({ ns, value, onChange }: { ns: string; value: unkno
 /** Gateway credentials live in the tenant's shared namespace. */
 export const SHARED_NS = "shared";
 
-function SharedSecretPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+export function SharedSecretPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
   return (
     <div>
       <SecretPicker ns={SHARED_NS} value={value} onChange={onChange} />

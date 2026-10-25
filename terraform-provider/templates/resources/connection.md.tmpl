@@ -26,6 +26,10 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `description` | string | optional |  |
 | `config` | map | optional | Non-secret settings. |
 | `secrets` | map | optional | Connection field -> secret name. |
+| `credentials` | one of `shared`, `per_user`, `per_user_or_shared` | optional | Whose credential calls use: the connection's (`shared`), the person the run acts for (`per_user`; the step waits until they connect), or theirs when they have one (`per_user_or_shared`). Default: `shared`. |
+| `user_fields` | list of string | optional | Connection fields each person supplies (default: the fields in `secrets`). |
+| `oauth` | object | optional | Lets people connect with OAuth instead of pasting a token. |
+| `namespaces` | list of string | optional | Organisation connections only (stored in `shared`): the namespaces that may use it (empty: all). |
 
 ## Import
 

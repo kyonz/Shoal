@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         description="Operator-wide remote integrations (open integrations protocol) registered at start-up, "
         'e.g. SHOAL_REMOTE_INTEGRATIONS=\'[{"url": "https://acme-crm.internal", "token": "..."}]\'.',
     )
+    integration_allow_imports: bool = Field(
+        False,
+        description="Let tenant admins register custom integrations as `module:Class` import paths. Off by default: "
+        "they can still register installed packages (shoal.integrations entry points) and remote services.",
+    )
     skill_source_cache_dir: str | None = Field(
         None, description="Where git skill sources keep their checkouts (default: a directory under the system temp dir)."
     )

@@ -748,13 +748,19 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   construction, Postgres row-level security as defence in depth). Inside a
   tenant, **namespaces** group the things a team owns: agents, skills,
   workflows, connections, triggers, campaigns, sandbox profiles, secrets and
-  runs all live in exactly one namespace (gateways, model policies, identities
-  and blueprints are tenant-wide, stored in `shared`) (`default` exists in every
+  runs all live in exactly one namespace (gateways, model policies, identities,
+  skill sources, custom integrations and blueprints are tenant-wide, stored in
+  `shared`, and managed in the admin console) (`default` exists in every
   tenant). Users and groups are added to a namespace as members with a role, so
   a platform team can own `platform` while product teams get their own
   namespaces. Resource names are unique per (tenant, namespace, kind).
   Lookups fall back from the run's namespace to a tenant-wide `shared`
   namespace, so platform teams can publish shared connections and skills that other namespaces use without being able to see their secrets.
+  Connections are either organisation connections (in `shared`, offered to
+  every namespace or only those in `spec.namespaces`) or namespace connections;
+  each integration declares which levels it allows (`connection_scopes`), and
+  organisations register their own integrations as `CustomIntegration`
+  resources (see [integrations.md](integrations.md)).
 - **Users, groups and service accounts.** Users come from OIDC sign-in or SCIM
   provisioning; groups come from SCIM or from an OIDC `groups` claim. Service
   accounts are non-human principals that own API keys.
