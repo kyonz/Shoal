@@ -345,6 +345,9 @@ function ScriptEditor({ step, set }: { step: StepDoc; set: SetFn }) {
               <Input mono value={str(step.workdir)} placeholder="/workspace" onChange={(e) => set({ workdir: e.target.value })} />
             </Field>
           </div>
+          <Field label="Cloud identities" description="Short-lived cloud credentials (e.g. AWS) the script gets as environment variables.">
+            <ResourceTags plural="cloud-identities" value={(step.cloud_identities as string[]) ?? []} onChange={(v) => set({ cloud_identities: v })} />
+          </Field>
           <Field label="Environment variables">
             <KeyValueInput value={(step.env as Record<string, string>) ?? {}} onChange={(v) => set({ env: Object.keys(v).length ? v : undefined })} keyPlaceholder="NAME" />
           </Field>
