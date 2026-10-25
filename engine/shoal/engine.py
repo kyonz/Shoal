@@ -39,6 +39,7 @@ from shoal.runtime.executor import Executor
 from shoal.runtime.signals import Signals
 from shoal.sandbox.manager import SandboxManager
 from shoal.secrets.providers import SecretManager
+from shoal.skills import SkillSourceService
 from shoal.store.store import Store
 from shoal.store.tables import Run
 from shoal.triggers import TriggerService
@@ -82,6 +83,11 @@ def _builtin_steps(registry: Registry) -> None:
 
     registry.register("eval_sinks", "braintrust", BraintrustSink, replace=False)
     registry.register("eval_sinks", "langfuse", LangfuseSink, replace=False)
+    from shoal.skills.git import GitSkillSource
+    from shoal.skills.registry import RegistrySkillSource
+
+    registry.register("skill_sources", "git", GitSkillSource, replace=False)
+    registry.register("skill_sources", "registry", RegistrySkillSource, replace=False)
 
 
 class Engine:
@@ -115,6 +121,7 @@ class Engine:
         self.triggers = TriggerService(self)
         self.campaigns = CampaignService(self)
         self.blueprints = BlueprintService(self)
+        self.skill_sources = SkillSourceService(self)
         self.signals = Signals(self)
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)

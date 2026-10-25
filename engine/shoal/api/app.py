@@ -32,6 +32,7 @@ from shoal.api.routers import (
     resources,
     runs,
     scim,
+    skill_sources,
     system,
 )
 from shoal.config import Settings
@@ -41,6 +42,7 @@ from shoal.core.requestctx import RequestInfo, current_request, reset_request, s
 from shoal.engine import Engine
 from shoal.federation.protocol import ASSERTION_HEADER
 from shoal.integrations.base import IntegrationError
+from shoal.skills.base import SkillSourceError
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +81,14 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(IntegrationError)
     async def _integration(request: Request, exc: IntegrationError) -> JSONResponse:
         return problem(request, 502, "integration_error", str(exc), upstream_status=exc.status)
+
+    @app.exception_handler(SkillSourceError)
+    async def _skill_source(request: Request, exc: SkillSourceError) -> JSONResponse:
+        if exc.status == 404:
+            return problem(request, 404, "not_found", str(exc))
+        if exc.status == 400:
+            return problem(request, 422, "invalid_request", str(exc))
+        return problem(request, 502, "skill_source_error", str(exc), upstream_status=exc.status)
 
     @app.exception_handler(RequestValidationError)
     async def _request_invalid(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -250,7 +260,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["Location", "X-Request-Id"],
     )
-    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, resources):
+    for module in (system, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:
         _mount_frontend(app, engine.settings.static_dir)
