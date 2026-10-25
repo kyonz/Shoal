@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { useParams, type RouteObject } from "react-router";
+import { Navigate, useParams, type RouteObject } from "react-router";
 import { Lazy } from "@/App";
 import type { CatalogPlural } from "./pages";
 
@@ -11,15 +11,33 @@ const BlueprintDetailPage = lazy(() => import("./blueprints/BlueprintDetailPage"
 const SkillMarketplacePage = lazy(() => import("./skillSources/SkillMarketplacePage"));
 
 /** Remount the editor when the resource name changes. */
-function KeyedEditor({ plural }: { plural: CatalogPlural }) {
+export function KeyedEditor({ plural }: { plural: CatalogPlural }) {
   const { name, ns } = useParams();
   return <Editor key={`${ns}/${plural}/${name ?? "_new"}`} plural={plural} />;
 }
 
-const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "gateways", "model-policies", "evals", "skill-sources"];
+/** Old namespaced links to kinds that moved to the admin console. */
+function ToAdmin({ plural }: { plural: string }) {
+  const { name } = useParams();
+  return <Navigate to={`/admin/${plural}${name ? `/${encodeURIComponent(name)}` : ""}`} replace />;
+}
 
-/** Namespaced: agents, skills, sandbox-profiles, gateways, model-policies, evals, blueprints, skill-sources, skill-marketplace. */
+const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "cloud-identities", "evals"];
+const admin: CatalogPlural[] = ["gateways", "model-policies", "skill-sources"];
+
+/** Tenant-wide kinds edited in the admin console: /admin/gateways, /admin/model-policies, /admin/skill-sources. */
+export const adminCatalogRoutes: RouteObject[] = admin.flatMap((plural): RouteObject[] => [
+  { path: plural, element: <Lazy><List plural={plural} /></Lazy> },
+  { path: `${plural}/new`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },
+  { path: `${plural}/:name`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },
+]);
+
+/** Namespaced: agents, skills, sandbox-profiles, cloud-identities, evals, blueprints, skill-marketplace. */
 export const catalogRoutes: RouteObject[] = [
+  ...admin.flatMap((plural): RouteObject[] => [
+    { path: plural, element: <ToAdmin plural={plural} /> },
+    { path: `${plural}/:name`, element: <ToAdmin plural={plural} /> },
+  ]),
   ...generic.flatMap((plural): RouteObject[] => [
     { path: plural, element: <Lazy><List plural={plural} /></Lazy> },
     { path: `${plural}/new`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },

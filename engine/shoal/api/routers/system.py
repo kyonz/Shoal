@@ -27,6 +27,16 @@ async def readyz(engine: EngineDep) -> dict[str, str]:
     return {"status": "ready"}
 
 
+@router.get("/.well-known/openid-configuration", tags=["system"], summary="OIDC discovery for workload identity tokens")
+async def openid_configuration(engine: EngineDep) -> dict[str, Any]:
+    return engine.workload.discovery()
+
+
+@router.get("/.well-known/jwks.json", tags=["system"], summary="Keys that verify workload identity tokens")
+async def jwks(engine: EngineDep) -> dict[str, Any]:
+    return engine.workload.jwks()
+
+
 @router.get("/v1/info", tags=["system"], summary="Server version, features and installed plugins")
 async def info(engine: EngineDep) -> dict[str, Any]:
     reg = engine.registry
@@ -36,8 +46,8 @@ async def info(engine: EngineDep) -> dict[str, Any]:
         "api_version": "v1",
         "public_url": engine.settings.public_url,
         "features": ["namespaces", "rbac", "oidc", "scim", "campaigns", "blueprints", "skill-sources", "evals", "decisions", "a2a",
-                     "assistant", "script-languages"],
-        "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "skill_sources", "steps")},
+                     "assistant", "script-languages", "cloud-identities"],
+        "plugins": {group: reg.names(group) for group in ("integrations", "sandboxes", "providers", "agent_runtimes", "decision_providers", "skill_sources", "steps", "credentials")},
     }
 
 
@@ -125,6 +135,19 @@ async def integrations(ctx: CtxDep) -> list[dict[str, Any]]:
 @router.get("/v1/integrations/{key}", tags=["catalog"])
 async def integration(key: str, ctx: CtxDep) -> dict[str, Any]:
     return type(ctx.engine.integrations.get(key)).catalog()
+
+
+@router.get("/v1/plugins", tags=["catalog"], summary="Installed plugins of every kind")
+async def plugins(ctx: CtxDep) -> list[dict[str, Any]]:
+    from shoal.sdk.plugins import PLUGIN_GROUPS
+
+    out = []
+    for group, info in PLUGIN_GROUPS.items():
+        for name, plugin in ctx.engine.registry.available(group).items():
+            cls = plugin if isinstance(plugin, type) else type(plugin)
+            doc = getattr(plugin, "description", "") or (cls.__doc__ or "").strip().split("\n")[0]
+            out.append({"group": group, "name": name, "description": doc, "module": cls.__module__, "kind": info.summary})
+    return out
 
 
 @router.get("/v1/sandbox-backends", tags=["catalog"])

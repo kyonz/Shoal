@@ -74,7 +74,11 @@ class RoleDef:
 
 
 READ_ALL = ("*:read",)
-WRITE_RESOURCES = tuple(f"{p}:write" for p in RESOURCE_PLURALS) + tuple(f"{p}:delete" for p in RESOURCE_PLURALS)
+# Registering a cloud role and granting workflows use of it is for namespace admins: an editor
+# who could do it could grant their own workflow access to the role.
+ADMIN_ONLY_PLURALS = ("cloud-identities",)
+EDITABLE_PLURALS = [p for p in RESOURCE_PLURALS if p not in ADMIN_ONLY_PLURALS]
+WRITE_RESOURCES = tuple(f"{p}:write" for p in EDITABLE_PLURALS) + tuple(f"{p}:delete" for p in EDITABLE_PLURALS)
 OPERATE = (
     "runs:create",
     "runs:cancel",

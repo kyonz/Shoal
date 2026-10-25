@@ -1,4 +1,4 @@
-import { Suspense, type ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useRouteError, type RouteObject } from "react-router";
 import { useAuth } from "@/lib/auth";
 import { lastNamespace } from "@/lib/ns";
@@ -10,6 +10,8 @@ import { catalogRoutes } from "@/pages/catalog/routes";
 import { connectRoutes } from "@/pages/connect/routes";
 import { docsRoutes } from "@/pages/docs/routes";
 import { workflowRoutes } from "@/pages/workflows/routes";
+
+const CredentialsPage = lazy(() => import("@/pages/settings/Credentials"));
 
 export function Splash() {
   return (
@@ -70,6 +72,7 @@ const routes: RouteObject[] = [
           },
           ...adminRoutes,
           ...docsRoutes,
+          { path: "settings/credentials", element: <Lazy><CredentialsPage /></Lazy> },
           { path: "*", element: <NotFound /> },
         ],
       },

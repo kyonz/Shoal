@@ -85,7 +85,7 @@ export function useRunEvents(runId: string | undefined, terminal: boolean) {
             try {
               const ev = JSON.parse(msg.data) as RunEvent;
               add([ev]);
-              if (/^(run|step|approval|signal)\./.test(ev.type)) refresh();
+              if (/^(run|step|approval|signal|credential)\./.test(ev.type)) refresh();
             } catch {
               /* ignore malformed */
             }

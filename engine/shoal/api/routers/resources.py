@@ -381,11 +381,24 @@ async def _connection(ctx: Ctx, namespace: str, name: str) -> Connection:
     return Connection.model_validate(row.document)
 
 
+@router.get("/namespaces/{namespace}/cloud-identities/{name}/trust-policy", tags=["cloud-identities"],
+            summary="The trust policy the cloud role needs so this identity can assume it")
+async def cloud_identity_trust_policy(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "cloud-identities:read")
+    return await ctx.engine.cloud.trust_policy(ctx.tenant_id, namespace, name)
+
+
+async def _caller(ctx: Ctx) -> dict[str, Any]:
+    """The person (or service account) calling, so per-user connections use their own credential."""
+    return await ctx.engine.identities.resolve(ctx.tenant_id, actor=ctx.actor, source="api", email=ctx.principal.email)
+
+
 @router.post("/namespaces/{namespace}/connections/{name}/test", tags=["connections"])
 async def test_connection(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:use")
+    initiator = await _caller(ctx)
     with use_namespace(namespace):
-        conn = await ctx.engine.integrations.connection(ctx.tenant_id, name)
+        conn = await ctx.engine.integrations.connection(ctx.tenant_id, name, initiator=initiator)
         try:
             return await conn.integration.test_connection(conn)
         except Exception as exc:
@@ -410,9 +423,10 @@ async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]
     conn = await _connection(ctx, namespace, name)
     integration = ctx.engine.integrations.get(conn.spec.integration)
     actions, resources = integration.actions, integration.resources
-    if not actions and not resources:  # dynamic: ask the connection (needs its secrets)
+    if not actions and not resources:  # dynamic: ask the connection (needs its secrets, or the caller's own)
+        initiator = await _caller(ctx)
         with use_namespace(namespace):
-            connection = await ctx.engine.integrations.connection(ctx.tenant_id, name)
+            connection = await ctx.engine.integrations.connection(ctx.tenant_id, name, initiator=initiator)
             actions, resources = await integration.actions_for(connection), await integration.resources_for(connection)
     return {"integration": conn.spec.integration, "actions": describe_actions(actions), "resources": describe_resources(resources)}
 
@@ -422,28 +436,33 @@ async def call_action(namespace: str, name: str, action: str, body: ActionCallIn
     await ctx.namespace(namespace, "connections:use")
     conn = await _connection(ctx, namespace, name)
     integration = ctx.engine.integrations.get(conn.spec.integration)
+    initiator = await _caller(ctx)
     actions = integration.actions
     if not actions:  # dynamic integrations (remote) list their actions per connection
         with use_namespace(namespace):
-            actions = await integration.actions_for(await ctx.engine.integrations.connection(ctx.tenant_id, name))
+            actions = await integration.actions_for(
+                await ctx.engine.integrations.connection(ctx.tenant_id, name, initiator=initiator)
+            )
     definition = actions.get(action)
     if definition is None:
         raise NotFound(f"{conn.spec.integration} has no action '{action}'")
-    initiator = await ctx.engine.identities.resolve(ctx.tenant_id, actor=ctx.actor, source="api", email=ctx.principal.email)
     with use_namespace(namespace):
         result = await ctx.engine.integrations.call(
             ctx.tenant_id, f"{conn.spec.integration}.{action}", body.params, connection=name, initiator=initiator
         )
     if definition.mutating:
-        await ctx.audit("connection.action", f"{namespace}/{name}", action=action)
+        await ctx.audit("connection.action", f"{namespace}/{name}", namespace=namespace, called=action)
     return result
 
 
 @router.post("/namespaces/{namespace}/connections/{name}/resources/{resource}/query", tags=["connections"])
 async def query_resource(namespace: str, name: str, resource: str, body: QueryIn, ctx: CtxDep) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:use")
+    initiator = await _caller(ctx)
     with use_namespace(namespace):
-        page = await ctx.engine.integrations.query(ctx.tenant_id, name, resource, body.filter, cursor=body.cursor, limit=body.limit)
+        page = await ctx.engine.integrations.query(
+            ctx.tenant_id, name, resource, body.filter, cursor=body.cursor, limit=body.limit, initiator=initiator
+        )
     return page.model_dump()
 
 

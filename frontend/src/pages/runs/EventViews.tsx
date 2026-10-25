@@ -6,6 +6,7 @@ import {
   Clock,
   Cpu,
   Hand,
+  KeyRound,
   Play,
   Radio,
   RotateCcw,
@@ -17,7 +18,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import type { RunEvent } from "@/api/client";
+import { connectPath } from "@/pages/connect/PersonalCredentials";
 import { cn } from "@/lib/cn";
 import { CodeEditor, JsonBlock } from "@/components/ui";
 
@@ -51,6 +54,19 @@ const LOOKS: Record<string, Look> = {
     icon: Radio,
     tone: "text-info",
     title: (e) => `Signal ${str(e.data.name)} received${e.data.source === "callback" ? " via callback URL" : e.data.source === "event" ? " from an integration event" : ""}${e.data.sender ? ` from ${str(e.data.sender)}` : ""}`,
+  },
+  "credential.required": {
+    icon: KeyRound,
+    tone: "text-warn",
+    title: (e) => `Waiting for ${str(e.data.owner).replace(/^user:/, "")} to connect ${str(e.data.namespace)}/${str(e.data.connection)}`,
+    body: (e) => (
+      <p className="text-xs text-muted">
+        {str(e.data.message)}{" "}
+        <Link to={connectPath(str(e.data.namespace), str(e.data.connection))} className="text-accent hover:underline">
+          Connected accounts
+        </Link>
+      </p>
+    ),
   },
   "action.called": { icon: Zap, tone: "text-accent", title: (e) => `Called ${str(e.data.action)}` },
   "script.started": { icon: SquareTerminal, tone: "text-muted", title: () => "Script started" },

@@ -159,6 +159,7 @@ def install_request_context(app: FastAPI) -> None:
 HUB_LOCAL_PREFIXES = (
     "/v1/federation", "/v1/auth", "/v1/tenants", "/v1/hooks", "/v1/users", "/v1/groups", "/v1/service-accounts",
     "/v1/api-keys", "/v1/oidc-providers", "/v1/openapi.json", "/v1/docs", "/v1/info",
+    "/.well-known",  # each deployment is its own workload identity issuer
 )
 
 

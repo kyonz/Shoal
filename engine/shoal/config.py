@@ -20,6 +20,10 @@ class Settings(BaseSettings):
         "sqlite+aiosqlite:///./shoal.db",
         description="SQLAlchemy async URL, e.g. postgresql+asyncpg://user:pass@host/shoal",
     )
+    secret_providers: list[str] = Field(
+        default_factory=lambda: ["db", "env"],
+        description="Secret backends (shoal.secrets plugins) in lookup order; the first writable one stores new secrets.",
+    )
     secret_key: SecretStr = Field(
         SecretStr("dev-insecure-secret-key-change-me"),
         description="Key used to encrypt stored secrets and sign run identity tokens.",
@@ -39,6 +43,28 @@ class Settings(BaseSettings):
     skill_source_allow_local: bool = Field(
         False, description="Let git skill sources read repositories from this server's disk (file:// URLs and paths)."
     )
+
+    oidc_issuer: str | None = Field(
+        None,
+        description="Issuer of Shoal's workload identity tokens (defaults to public_url). Cloud providers fetch "
+        "<issuer>/.well-known/openid-configuration; a private deployment can publish those two documents "
+        "on public HTTPS (e.g. an S3 bucket) and set the issuer to that URL.",
+    )
+    identity_signing_key: SecretStr | None = Field(
+        None, description="PEM EC P-256 private key for workload identity tokens; derived from secret_key when unset."
+    )
+    aws_ambient: bool = Field(
+        False,
+        description="Let CloudIdentities with trust 'ambient' assume roles with this deployment's own AWS identity "
+        "(env, IRSA, EKS Pod Identity, ECS or instance role).",
+    )
+    aws_deployment_role_arn: str | None = Field(
+        None, description="This deployment's own IAM role, shown in generated trust policies for 'ambient' identities."
+    )
+    aws_sts_endpoint: str | None = Field(
+        None, description="STS endpoint override (VPC endpoint, FIPS); defaults to https://sts.<region>.amazonaws.com."
+    )
+    aws_audience: str = Field("sts.amazonaws.com", description="Audience of web identity tokens presented to AWS STS.")
 
     worker_id: str | None = None
     worker_concurrency: int = Field(16, ge=1)

@@ -63,6 +63,7 @@ first release must satisfy.
 | **Blueprint** | A versioned, parameterised package of resources others install and wire up. |
 | **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
 | **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
+| **Cloud identity** | A cloud role a namespace brings (an AWS IAM role), granted to specific workflows and agents; steps get short-lived credentials for it. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
 
 All of these are pydantic models in `shoal.core.models` and are serialisable to
@@ -361,8 +362,8 @@ kept out of the model's reach.
     connection);
   - `github-app` — short-lived installation tokens, optionally narrowed to the
     target repository and permissions of the current step;
-  - `aws-sts`, `gcp-wif`, `azure-federated` — workload identity: Shoal presents
-    its run identity token and exchanges it for cloud credentials;
+  - `aws` (built), `gcp`, `azure` (later) — cloud workload identity through
+    `CloudIdentity` resources, below;
   - `vault` — dynamic secrets from HashiCorp Vault/OpenBao.
 - **Scoping and lifetime.** Credentials are resolved per step attempt, scoped
   to that step's connections, expire with the step, and are redacted from
@@ -377,6 +378,29 @@ kept out of the model's reach.
   (`iss` = Shoal, `sub` = `tenant/run/step/agent`, audience-restricted). It is
   used to call back into the Shoal API with least privilege, as the subject for
   workload-identity federation, and as the caller identity for A2A and MCP.
+- **Cloud identities** (built, AWS). A namespace admin registers a
+  `CloudIdentity` (`provider: aws`, `aws.role_arn`, region, duration, optional
+  session policy) and grants it with `allow.workflows` (name globs, deny by
+  default; `ns/name` for a `shared` identity) and optionally `allow.agents`.
+  Agents and script steps list `cloud_identities:`. Per step attempt Shoal
+  exchanges a credential that starts from its own deployment for an STS
+  session and injects `AWS_*` env (secret parts redacted). Two trust modes:
+  `web_identity` — Shoal is an OIDC issuer (`/.well-known/openid-configuration`,
+  `/.well-known/jwks.json`, ES256 key derived from `SHOAL_SECRET_KEY` or set
+  with `SHOAL_IDENTITY_SIGNING_KEY`), signs a five-minute token with
+  `sub = tenant:<id>:namespace:<ns>:cloud-identity:<name>` and calls
+  `AssumeRoleWithWebIdentity`, so Shoal holds no cloud credential; and
+  `ambient` (operator opt-in, `SHOAL_AWS_AMBIENT`) — `AssumeRole` signed with
+  the deployment's own identity (env, IRSA, EKS Pod Identity, ECS, IMDSv2)
+  with that subject as ExternalId, so tenants sharing a deployment role
+  cannot use each other's roles. Sessions carry the initiator as
+  SourceIdentity and `shoal:*` session tags (tenant, namespace, workflow, run,
+  step, agent, initiator); `GET …/cloud-identities/{name}/trust-policy`
+  generates the role's trust policy and setup commands. Issues, refusals and
+  failures go to run events and the audit log. Registering roles and changing
+  grants is `namespace-admin` only (editors cannot grant their own
+  workflows). Federated members mint on their own deployment. Guide:
+  `docs/cloud-identities.md`.
 - **Human identity.** When a run is started by a user, the user id is carried
   on the run for audit, and policy can require per-user OAuth connections
   ("act as the requester") instead of a shared service identity.

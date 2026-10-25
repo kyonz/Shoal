@@ -27,7 +27,7 @@ import {
   useConfirm,
 } from "@/components/ui";
 import { isMissingEndpoint } from "../evals/api";
-import { KINDS } from "../kinds";
+import { KINDS, kindPath } from "../kinds";
 import { useImports, useRollbackSkill, useSourceSkills, useVisibleSources, type CatalogSkill, type ImportedSkill } from "./api";
 import { NoSources, SkillDialog, UpgradeDialog } from "./components";
 
@@ -57,7 +57,7 @@ export default function SkillMarketplacePage() {
         description="Browse the skill sources your organisation has added and import skills into this namespace. Imports are ordinary skills, versioned and labelled with where they came from."
         actions={
           canManage && (
-            <Button icon={<Settings2 className="size-4" />} onClick={() => navigate(nsPath(ns, "skill-sources"))}>
+            <Button icon={<Settings2 className="size-4" />} onClick={() => navigate(kindPath("skill-sources", ns))}>
               Manage sources
             </Button>
           )

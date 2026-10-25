@@ -7,7 +7,7 @@ import { useCan } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { nsPath } from "@/lib/ns";
 import { Badge, Button, Dialog, EmptyState, ErrorNotice, Field, Input, Skeleton } from "@/components/ui";
-import { NAME_RE } from "../kinds";
+import { NAME_RE, kindPath } from "../kinds";
 import { Markdown } from "../widgets";
 import { readablePath, useImportSkill, useSourceSkill, useUpgradeSkill, type Change, type ImportResult } from "./api";
 
@@ -277,7 +277,7 @@ export function NoSources({ canManage, ns }: { canManage: boolean; ns: string })
           ? "Add a git repository in the Agent Skills layout or a skill registry, and teams can import its skills here."
           : "Ask a tenant admin to add a skill source (a git repository or a skill registry) to browse and import skills."
       }
-      action={canManage && <Button variant="primary" onClick={() => navigate(nsPath(ns, "skill-sources", "new"))}>Add a skill source</Button>}
+      action={canManage && <Button variant="primary" onClick={() => navigate(kindPath("skill-sources", ns, "new"))}>Add a skill source</Button>}
     />
   );
 }

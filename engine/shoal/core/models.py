@@ -193,6 +193,9 @@ class ScriptStep(StepBase):
     env: dict[str, str] = Field(default_factory=dict)
     workdir: str | None = None
     fail_on_error: bool = True
+    cloud_identities: list[str] = Field(
+        default_factory=list, description="CloudIdentity resources whose short-lived credentials the script gets (§7.1)."
+    )
 
     @model_validator(mode="after")
     def _one_source(self) -> ScriptStep:
@@ -457,6 +460,11 @@ class AgentSpec(Model):
         description="Integrations whose short-lived credentials are injected into the sandbox env, e.g. "
         "'github' or 'github:github-acme' (integration:connection).",
     )
+    cloud_identities: list[str] = Field(
+        default_factory=list,
+        description="CloudIdentity resources (e.g. an AWS IAM role) whose short-lived credentials are injected into "
+        "the sandbox env. Each identity must grant this agent and workflow.",
+    )
     sandbox: str | None = None
     env: dict[str, str] = Field(default_factory=dict, description="Sandbox env; values may use expressions.")
     limits: AgentLimits = Field(default_factory=AgentLimits)
@@ -530,6 +538,13 @@ class ConnectionSpec(Model):
         description="Connection fields each person supplies (default: the fields in `secrets`).",
     )
     oauth: OAuthSpec | None = Field(None, description="Lets people connect with OAuth instead of pasting a token.")
+
+    @model_validator(mode="after")
+    def _personal_fields(self) -> ConnectionSpec:
+        if self.credentials != "shared" and not (self.user_fields or self.secrets or self.oauth):
+            raise ValueError(f"credentials: {self.credentials} needs `user_fields` (or `secrets`, or `oauth`) "
+                             "to say which fields each person supplies")
+        return self
 
 
 class TriageSpec(Model):
@@ -621,6 +636,65 @@ class IdentitySpec(Model):
         default_factory=list, description="Shoal actors that are this person, e.g. 'user:dana@acme.com'."
     )
     github_token_secret: str | None = Field(None, description="Secret holding the user's linked GitHub OAuth token.")
+
+
+class CloudIdentityGrant(Model):
+    """Who may use a cloud identity. Nothing may use it until a workflow is listed."""
+
+    workflows: list[str] = Field(
+        default_factory=list,
+        description="Workflow name globs whose steps may use the identity ('deploy-*'). From another namespace "
+        "(an identity in `shared`), qualify with the namespace: 'team-a/deploy', '*/deploy'.",
+    )
+    agents: list[str] = Field(
+        default_factory=list,
+        description="If set, only agent steps running these agents (globs) may use it; script steps may not.",
+    )
+
+
+AWS_ROLE_ARN = r"^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@/-]+$"
+
+
+class AwsRoleConfig(Model):
+    role_arn: str = Field(pattern=AWS_ROLE_ARN, description="IAM role to assume, e.g. arn:aws:iam::123456789012:role/deploy.")
+    region: str = Field("us-east-1", pattern=r"^[a-z]{2}(-[a-z]+)+-[0-9]$", description="STS endpoint and AWS_REGION in the sandbox.")
+    duration: Duration = Field(timedelta(hours=1), description="Session length, 15m to 12h (within the role's maximum).")
+    session_policy: dict[str, Any] | None = Field(None, description="Inline IAM policy that narrows the role for these sessions.")
+    policy_arns: list[str] = Field(default_factory=list, max_length=10, description="Managed policies that narrow the role.")
+
+    @model_validator(mode="after")
+    def _duration_in_range(self) -> AwsRoleConfig:
+        if not timedelta(minutes=15) <= self.duration <= timedelta(hours=12):
+            raise ValueError("duration must be between 15m and 12h")
+        return self
+
+
+class CloudIdentitySpec(Model):
+    """A cloud role a namespace brings to Shoal, and which workflows and agents may use it (§7.1).
+
+    At run time Shoal exchanges a credential that starts from its own deployment for short-lived
+    credentials of the role, scoped to one step attempt and attributed to the run and its initiator.
+    """
+
+    description: str | None = None
+    provider: str = Field("aws", description="Credential provider plugin (shoal.credentials): aws.")
+    trust: Literal["web_identity", "ambient"] = Field(
+        "web_identity",
+        description="web_identity: the role trusts Shoal's OIDC issuer and Shoal presents a per-step token. "
+        "ambient: the role trusts the deployment's own cloud identity (IRSA, Pod Identity, instance role), "
+        "with a per-identity ExternalId; the operator must enable it.",
+    )
+    aws: AwsRoleConfig | None = None
+    config: dict[str, Any] = Field(default_factory=dict, description="Settings for other providers.")
+    allow: CloudIdentityGrant = Field(default_factory=CloudIdentityGrant)
+
+    @model_validator(mode="after")
+    def _provider_settings(self) -> CloudIdentitySpec:
+        if self.provider == "aws" and self.aws is None:
+            raise ValueError("provider 'aws' needs an 'aws' block with role_arn")
+        if bad := credential_fields(self.config):
+            raise ValueError(f"config {bad} look like credentials; cloud identities never hold secrets")
+        return self
 
 
 # Header and config names that carry credentials; they must come from secrets, never clear text.
@@ -947,6 +1021,12 @@ class Identity(ResourceBase):
     plural: ClassVar[str] = "identities"
 
 
+class CloudIdentity(ResourceBase):
+    kind: Literal["CloudIdentity"] = "CloudIdentity"
+    spec: CloudIdentitySpec
+    plural: ClassVar[str] = "cloud-identities"
+
+
 class Gateway(ResourceBase):
     kind: Literal["Gateway"] = "Gateway"
     spec: GatewaySpec
@@ -986,6 +1066,7 @@ AnyResource = Annotated[
     | Trigger
     | Campaign
     | Identity
+    | CloudIdentity
     | Gateway
     | ModelPolicy
     | Blueprint
@@ -998,7 +1079,7 @@ RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
         Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

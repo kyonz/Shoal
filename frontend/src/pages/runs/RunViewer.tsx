@@ -33,6 +33,7 @@ import { nodeTypes, type StepNodeType } from "@/features/workflow/StepNode";
 import { stepType } from "@/features/workflow/stepTypes";
 import { LAYOUT_ANNOTATION, type StepDoc } from "@/features/workflow/types";
 import { EventRow, Terminal, Transcript } from "./EventViews";
+import { CredentialBanner } from "./CredentialBanner";
 import { SignalBanner, SignalsTab, useSignals } from "./Signals";
 import { useRunEvents, type StreamState } from "./useRunEvents";
 
@@ -81,6 +82,7 @@ function RunViewer() {
       <RunHeader run={r} state={state} now={now} />
       <ApprovalBanner run={r} />
       <SignalBanner run={r} />
+      <CredentialBanner run={r} events={events} />
       <div className="flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
           <RunGraph run={r} selected={selected} onSelect={setSelected} />

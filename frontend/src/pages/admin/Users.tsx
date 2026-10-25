@@ -1,6 +1,9 @@
 import { MoreHorizontal, Plus, UserCheck, UserX, Trash2, Pencil, Users as UsersIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { client, unwrap } from "@/api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { ApiError, client, unwrap } from "@/api/client";
+import { credentialKeys } from "@/pages/connect/PersonalCredentials";
 import { useAuth } from "@/lib/auth";
 import { dateTime, relTime } from "@/lib/format";
 import {
@@ -368,6 +371,7 @@ function UserSheet({ user, onClose, canManage }: { user: User | "new" | null; on
                 </div>
               )}
             </div>
+            {canManage && <UserCredentials username={u.username} />}
             <div className="rounded-lg border border-border px-3 py-1">
               <KV label="ID">
                 <span className="font-mono text-xs">{u.id}</span>
@@ -392,5 +396,67 @@ function UserSheet({ user, onClose, canManage }: { user: User | "new" | null; on
         )}
       </div>
     </Sheet>
+  );
+}
+
+/** Which connections this person has connected their own account to (metadata only), with revoke. */
+function UserCredentials({ username }: { username: string }) {
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const list = useQuery({
+    queryKey: credentialKeys.user(username),
+    queryFn: () => unwrap(client.GET("/v1/users/{username}/credentials", { params: { path: { username } } })),
+  });
+  const revoke = useMutation({
+    mutationFn: ({ ns, connection }: { ns: string; connection: string }) =>
+      unwrap(client.DELETE("/v1/users/{username}/credentials/{namespace}/{connection}", { params: { path: { username, namespace: ns, connection } } })),
+    onSuccess: (_r, v) => {
+      toast.success(`Revoked ${username}'s credential for ${v.connection}`);
+      void qc.invalidateQueries({ queryKey: credentialKeys.user(username) });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+  });
+  const rows = list.data ?? [];
+  return (
+    <div>
+      <div className="mb-2 text-xs font-medium">Connected accounts</div>
+      {list.isLoading ? (
+        <Skeleton className="h-10" />
+      ) : !rows.length ? (
+        <p className="text-xs text-faint">No personal credentials. Connections that act as each person ask them to connect when a run needs it.</p>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {rows.map((c) => (
+            <div key={`${c.namespace}/${c.connection}`} className="flex items-center gap-2 px-3 py-2 text-[13px]">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">
+                  {c.connection} <span className="font-normal text-faint">in {c.namespace}</span>
+                </div>
+                <div className="text-[11px] text-faint">
+                  {c.kind === "oauth" ? "OAuth" : "Token"} · {c.fields.join(", ")} · updated {relTime(c.updated_at)}
+                  {c.expires_at ? ` · expires ${relTime(c.expires_at)}` : ""}
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={revoke.isPending && revoke.variables?.connection === c.connection && revoke.variables?.ns === c.namespace}
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: `Revoke ${username}'s credential for ${c.connection}?`,
+                    description: "Runs acting for them through this connection will wait until they connect again. The value is deleted, not shown.",
+                    confirmLabel: "Revoke",
+                    danger: true,
+                  });
+                  if (ok) revoke.mutate({ ns: c.namespace, connection: c.connection });
+                }}
+              >
+                Revoke
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

@@ -165,3 +165,30 @@ async def test_oauth_connect_and_refresh(world):
     assert (await engine.store.get_step(run_id, "call")).output["token"] == "at-2"
     assert issued == ["authorization_code", "refresh_token"]
     clock.reset()
+
+
+async def test_connection_endpoints_use_the_callers_credential(world):
+    """Listing a per-user MCP server's tools, testing it and calling a tool all act as the caller."""
+    from tests.test_mcp import FakeMcpServer
+
+    engine, tenant, admin, client = world
+    fake = FakeMcpServer()
+    engine.http_transport = httpx.MockTransport(fake)
+    await engine.store.apply_resource(tenant, doc("Connection", "tickets", {
+        "integration": "mcp", "config": {"url": "https://mcp.tickets.test/mcp"}, "credentials": "per_user", "user_fields": ["token"]}))
+    base = "/v1/namespaces/default/connections/tickets"
+
+    gil = client(await _person(engine, tenant, admin, "gil"))
+    r = await gil.get(f"{base}/actions")
+    assert r.status_code == 428 and r.json()["code"] == "credential_required", r.text
+
+    r = await gil.put("/v1/me/credentials/default/tickets", json={"values": {"token": "gil-token"}})
+    assert r.status_code == 200, r.text
+    r = await gil.get(f"{base}/actions")
+    assert r.status_code == 200, r.text
+    assert {a["name"] for a in r.json()["actions"]} >= {"create_issue", "search_issues"}
+    assert (await gil.post(f"{base}/test")).json()["ok"] is True
+    r = await gil.post(f"{base}/actions/create_issue", json={"params": {"title": "Mine"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == "created Mine as gil-token"
+    assert set(fake.tokens) == {"Bearer gil-token"}
