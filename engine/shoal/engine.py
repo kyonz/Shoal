@@ -43,6 +43,7 @@ from shoal.interactions import InteractionService
 from shoal.limits import GatewayLimiter, Quotas
 from shoal.llm.router import ModelRouter
 from shoal.plugins.registry import Registry, factory
+from shoal.runtime.dispatch import Dispatch
 from shoal.runtime.events import EventBus
 from shoal.runtime.executor import Executor
 from shoal.runtime.orchestrator import Orchestrator
@@ -106,6 +107,11 @@ def _builtin_steps(registry: Registry) -> None:
 
     registry.register("orchestrators", "builtin", BuiltinOrchestrator, replace=False)
     registry.register("orchestrators", "temporal", _temporal_orchestrator, replace=False)
+    from shoal.runtime.queues import DatabaseQueue
+    from shoal.runtime.queues.sqs import SQSQueue
+
+    registry.register("dispatch_queues", "database", DatabaseQueue, replace=False)
+    registry.register("dispatch_queues", "sqs", SQSQueue, replace=False)
 
 
 @factory
@@ -164,6 +170,7 @@ class Engine:
         self.evals = EvalService(self)
         self.orchestrators = Orchestrators(self)
         self.store.wake_hooks.append(self.orchestrators.wake)
+        self.dispatch = Dispatch(self)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._stopping = asyncio.Event()
 
@@ -183,6 +190,7 @@ class Engine:
 
     async def start(self) -> None:
         await self.store.create_all()
+        await self.dispatch.start()
         await self.orchestrators.start()
         for remote in self.settings.remote_integrations:
             try:
@@ -200,6 +208,7 @@ class Engine:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         await self.events.stop_listening()
         await self.orchestrators.close()
+        await self.dispatch.close()
         await self.store.close()
 
     # ------------------------------------------------------------------ hooks
@@ -262,15 +271,19 @@ class Engine:
 
     async def run_worker(self, *, scheduler: bool = True) -> None:
         """Long-running worker loop: claims built-in runs, serves the orchestrator and runs the scheduler."""
-        log.info("worker %s started (orchestrator: %s)", self.worker_id, self.orchestrator.name)
-        serving = asyncio.create_task(self.orchestrators.serve())
-        webhooks = asyncio.create_task(self._webhook_loop())
+        log.info("worker %s started (orchestrator: %s, dispatch queue: %s)", self.worker_id, self.orchestrator.name,
+                 self.dispatch.queue.name)
+        semaphore = asyncio.Semaphore(self.settings.worker_concurrency)
+        helpers = [asyncio.create_task(self.orchestrators.serve()), asyncio.create_task(self._webhook_loop())]
+        if self.dispatch.external:
+            helpers += [asyncio.create_task(self._queue_loop(group, semaphore))
+                        for group in self.dispatch.queue.groups(self.settings.worker_lanes)]
         try:
-            await self._claim_loop(scheduler=scheduler)
+            await self._claim_loop(semaphore, scheduler=scheduler)
         finally:
-            serving.cancel()
-            webhooks.cancel()
-            await asyncio.gather(serving, webhooks, return_exceptions=True)
+            for task in helpers:
+                task.cancel()
+            await asyncio.gather(*helpers, return_exceptions=True)
 
     async def _webhook_loop(self) -> None:
         """Process webhook deliveries the API queued."""
@@ -287,10 +300,11 @@ class Engine:
                 log.exception("webhook loop error")
                 await asyncio.sleep(2)
 
-    async def _claim_loop(self, *, scheduler: bool) -> None:
-        semaphore = asyncio.Semaphore(self.settings.worker_concurrency)
+    async def _claim_loop(self, semaphore: asyncio.Semaphore, *, scheduler: bool) -> None:
+        """Run the scheduler and claim due runs from the database: every poll with the database queue,
+        every sweep with an external one (runs whose wake-up was lost, or whose worker died)."""
         lease = timedelta(seconds=self.settings.lease_seconds)
-        last_tick = 0.0
+        last_tick = last_claim = float("-inf")
         loop = asyncio.get_running_loop()
         while not self._stopping.is_set():
             try:
@@ -299,16 +313,15 @@ class Engine:
                     await self.scheduler_tick()
                 free = semaphore._value  # noqa: SLF001 - cheap capacity check
                 claimed = []
-                if free:
+                # with a healthy external queue, only sweep now and then; while it fails, poll as without one
+                every = self.settings.dispatch_sweep_seconds if self.dispatch.external and not self.dispatch.failing else 0
+                if free and loop.time() - last_claim >= every:
+                    last_claim = loop.time()
                     claimed = await self.store.claim_runs(
                         self.worker_id, limit=free, lease=lease, tenant_limits=self.quotas.concurrency_limits,
                         lanes=self.settings.worker_lanes,
                     )
-                for run_id in claimed:
-                    await semaphore.acquire()
-                    task = asyncio.create_task(self._advance(run_id, semaphore))
-                    self._tasks.add(task)
-                    task.add_done_callback(self._tasks.discard)
+                await self._spawn(claimed, semaphore)
                 if not claimed:
                     await asyncio.wait_for(self._stopping.wait(), timeout=self.settings.poll_interval_seconds)
             except TimeoutError:
@@ -318,6 +331,33 @@ class Engine:
             except Exception:
                 log.exception("worker loop error")
                 await asyncio.sleep(2)
+
+    async def _queue_loop(self, lanes: tuple[str, ...], semaphore: asyncio.Semaphore) -> None:
+        """Receive wake-ups for some lanes from the dispatch queue and advance the runs they claim."""
+        while not self._stopping.is_set():
+            try:
+                async with semaphore:  # wait for room before taking messages off the queue
+                    pass
+                free = semaphore._value  # noqa: SLF001
+                if not free:
+                    continue
+                claimed = await self.dispatch.consume(
+                    self.worker_id, lanes, limit=free, wait=self.settings.dispatch_wait_seconds
+                )
+                self.dispatch.receiving(None)
+                await self._spawn(claimed, semaphore)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # the claim loop polls the database while the queue is unreachable
+                self.dispatch.receiving(exc)
+                await asyncio.sleep(5)
+
+    async def _spawn(self, run_ids: list[str], semaphore: asyncio.Semaphore) -> None:
+        for run_id in run_ids:
+            await semaphore.acquire()
+            task = asyncio.create_task(self._advance(run_id, semaphore))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     async def _advance(self, run_id: str, semaphore: asyncio.Semaphore) -> None:
         try:

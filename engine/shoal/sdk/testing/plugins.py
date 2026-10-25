@@ -10,15 +10,20 @@ your plugin's tests::
 
 from __future__ import annotations
 
+import uuid
+from datetime import timedelta
 from importlib.metadata import entry_points
 from typing import Any
 
+from shoal.core import clock
 from shoal.core.models import DecisionQuestion
 from shoal.sdk.plugins import (
     PLUGIN_GROUPS,
     DecisionProvider,
     DecisionRequest,
     DecisionResult,
+    Delivery,
+    DispatchQueue,
     EvalSink,
     ModelProvider,
     ModelRequest,
@@ -29,6 +34,7 @@ from shoal.sdk.plugins import (
     SkillSource,
     SkillSourceContext,
     ToolDef,
+    Wakeup,
 )
 from shoal.skills.base import SkillBundle, SkillSourceError
 
@@ -192,3 +198,44 @@ async def check_skill_source(source: SkillSource, ctx: SkillSourceContext) -> No
     else:
         raise AssertionError("fetching an unknown skill should raise SkillSourceError (status 404)")
 
+
+
+async def check_dispatch_queue(queue: DispatchQueue, *, lane: str = "standard", wait: float = 2.0) -> None:
+    """Publish, receive, hand back and ack wake-ups on a started queue (use a fresh, empty one).
+
+    Leaves one delayed message behind (the wake-up two minutes out).
+    """
+    assert queue.external, "only external queues carry messages (the database queue is the runs table)"
+    assert lane in sum((list(g) for g in queue.groups([lane])), []), "groups() must cover every lane it is given"
+    tag = uuid.uuid4().hex[:12]
+    now = clock.now()
+    due = Wakeup(f"run_contract_{tag}", "tenant_contract", lane, now)
+    later = Wakeup(f"run_contract_later_{tag}", "tenant_contract", lane, now + timedelta(minutes=2))
+    await queue.publish([due, later])
+
+    async def receive_due() -> Delivery:
+        seen: list[Delivery] = []
+        for _ in range(5):
+            batch = await queue.receive([lane], queue.batch_size, wait)
+            assert all(d.wakeup.run_id != later.run_id for d in batch), "a wake-up for later arrived straight away"
+            seen += batch
+            found = [d for d in seen if d.wakeup.run_id == due.run_id]
+            if found:
+                others = [d for d in seen if d.wakeup.run_id != due.run_id]
+                if others:
+                    await queue.retry(others, 0)
+                return found[0]
+        raise AssertionError("a wake-up that is due was not received")
+
+    first = await receive_due()
+    assert first.wakeup == due, f"wake-ups must round-trip unchanged: {first.wakeup} != {due}"
+    assert not [d for d in await queue.receive([lane], queue.batch_size, 0) if d.wakeup.run_id == due.run_id], \
+        "a received message must stay hidden until it is acked or handed back"
+    await queue.retry([first], 0)
+    again = await receive_due()
+    assert again.attempts >= first.attempts, "attempts never go down"
+    await queue.ack([again])
+    left = await queue.receive([lane], queue.batch_size, min(wait, 1.0))
+    assert all(d.wakeup.run_id != due.run_id for d in left), "an acked message came back"
+    if left:
+        await queue.retry(left, 0)

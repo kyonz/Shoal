@@ -325,6 +325,12 @@ leases.
   workflow calls models (`agent`, `decide`, `grade`) go to the **agent lane**,
   so a worker pool for long, I/O-bound agent runs can be scaled apart from the
   pool that runs short steps.
+- By default the runs table is the queue and workers poll it. With a
+  **dispatch queue** such as Amazon SQS (`SHOAL_DISPATCH_QUEUE=sqs`), every
+  write of a run's `next_wake_at` also sends a wake-up message, and workers
+  long-poll the queue and claim those runs with the same lease, fairness and
+  caps, sweeping the database only now and then for lost messages. See
+  [Dispatch queues](dispatch-queues.md).
 - A pass writes its step results, events, waits and the lease release in as few
   transactions as it can, and every event insert sends a Postgres `NOTIFY` so
   live views wake at once instead of polling. See

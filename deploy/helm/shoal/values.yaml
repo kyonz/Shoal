@@ -59,6 +59,25 @@ orchestrator:
       deploymentName: ""
       behavior: auto-upgrade
 
+# How workers hear that a run is due. "database" (default): they poll the runs
+# table about once a second. "sqs": they long-poll Amazon SQS and sweep the
+# database only every sweepSeconds; the database stays the source of truth.
+# Give the service account an AWS role that can send, receive, delete and
+# change visibility on the queues (deploy/terraform/sqs-dispatch). See
+# docs/dispatch-queues.md.
+dispatch:
+  queue: database
+  sweepSeconds: 15
+  sqs:
+    # Standard (not FIFO) queue for every lane, e.g. https://sqs.eu-west-1.amazonaws.com/123456789012/shoal-dispatch
+    queueUrl: ""
+    # Its own queue for the agent lane (recommended with worker.agentPool.enabled).
+    agentQueueUrl: ""
+    region: ""
+    # LocalStack or a VPC endpoint.
+    endpoint: ""
+    fairQueues: true
+
 # Instance-wide sign-in. People sign in once and switch between the tenants
 # they belong to; instance admins create and manage tenants. Leave oidc.issuer
 # empty to keep sign-in per tenant only.
