@@ -20,6 +20,8 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shoal.runtime.orchestrators import OrchestratorSetting
+
 NAME = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
 
 
@@ -617,3 +619,37 @@ class AuditOut(Out):
     user_agent: str | None = None
     data: dict[str, Any]
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- orchestrator (instance console)
+
+
+class OrchestratorEnvironment(BaseModel):
+    """What SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* say (used while nothing is saved in the console)."""
+
+    orchestrator: str
+    temporal_address: str
+    temporal_namespace: str
+    temporal_task_queue: str
+    temporal_tls: bool = Field(description="TLS, an API key or client certificates are configured.")
+
+
+class OrchestratorStatus(BaseModel):
+    source: Literal["environment", "console"] = Field(description="Where the orchestrator for new runs comes from.")
+    orchestrator: str = Field(description="What new runs start on.")
+    driving: list[str] = Field(description="Every orchestrator this server drives runs with.")
+    setting: OrchestratorSetting | None = Field(None, description="What the instance console saved.")
+    environment: OrchestratorEnvironment
+    runs: dict[str, int] = Field(description="Unfinished runs per orchestrator, across every tenant.")
+    temporal_installed: bool = Field(description="The temporal extra is installed on this server.")
+    error: str | None = Field(None, description="Why the saved setting could not be applied (e.g. a deleted secret).")
+    revision: int | None = None
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+
+
+class TemporalCheck(BaseModel):
+    ok: bool
+    detail: str
+    server_version: str | None = None
+    pollers: int | None = Field(None, description="Workers polling the task queue right now.")

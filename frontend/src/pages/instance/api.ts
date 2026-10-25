@@ -9,6 +9,10 @@ export type TenantMember = Schemas["TenantMemberOut"];
 export type Account = Schemas["AccountOut"];
 export type AccountDetail = Schemas["AccountDetail"];
 export type AuditEntry = Schemas["AuditOut"];
+export type OrchestratorStatus = Schemas["OrchestratorStatus"];
+export type OrchestratorSetting = Schemas["OrchestratorSetting"];
+export type TemporalSettings = Schemas["TemporalSettings"];
+export type TemporalCheck = Schemas["TemporalCheck"];
 
 export const instanceKeys = {
   myTenants: ["instance", "my-tenants"] as const,
@@ -17,6 +21,7 @@ export const instanceKeys = {
   accounts: (q: string) => ["instance", "accounts", q] as const,
   account: (id: string) => ["instance", "account", id] as const,
   audit: (action: string) => ["instance", "audit", action] as const,
+  orchestrator: ["instance", "orchestrator"] as const,
 };
 
 export const INSTANCE_ROLE_LABEL: Record<string, string> = { "instance-admin": "Instance admin", "instance-auditor": "Instance auditor" };
@@ -44,6 +49,10 @@ export function useAccounts(q: string) {
     queryKey: instanceKeys.accounts(q),
     queryFn: () => unwrap(client.GET("/v1/instance/accounts", { params: { query: { q: q || undefined } } })),
   });
+}
+
+export function useOrchestrator() {
+  return useQuery({ queryKey: instanceKeys.orchestrator, queryFn: () => unwrap(client.GET("/v1/instance/orchestrator")) });
 }
 
 export function useAccount(id: string | null) {

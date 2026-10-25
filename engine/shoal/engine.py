@@ -44,6 +44,7 @@ from shoal.plugins.registry import Registry, factory
 from shoal.runtime.events import EventBus
 from shoal.runtime.executor import Executor
 from shoal.runtime.orchestrator import Orchestrator
+from shoal.runtime.orchestrators import Orchestrators
 from shoal.runtime.signals import Signals
 from shoal.sandbox.manager import SandboxManager
 from shoal.secrets.providers import SecretManager
@@ -156,10 +157,15 @@ class Engine:
         self.federation = FederationHub(self)
         self.federation_member = FederationMember(self)
         self.evals = EvalService(self)
-        self.orchestrator: Orchestrator = self.plugin("orchestrators", self.settings.orchestrator)
-        self.store.wake_hooks.append(self.orchestrator.wake)
+        self.orchestrators = Orchestrators(self)
+        self.store.wake_hooks.append(self.orchestrators.wake)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._stopping = asyncio.Event()
+
+    @property
+    def orchestrator(self) -> Orchestrator:
+        """The orchestrator new runs start on (see ``shoal.runtime.orchestrators``)."""
+        return self.orchestrators.current
 
     def plugin(self, group: str, name: str) -> Any:
         instance = self.registry.get(group, name)
@@ -172,7 +178,7 @@ class Engine:
 
     async def start(self) -> None:
         await self.store.create_all()
-        await self.orchestrator.start()
+        await self.orchestrators.start()
         for remote in self.settings.remote_integrations:
             try:
                 await register_remote_integration(
@@ -187,7 +193,7 @@ class Engine:
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        await self.orchestrator.close()
+        await self.orchestrators.close()
         await self.store.close()
 
     # ------------------------------------------------------------------ hooks
@@ -214,7 +220,7 @@ class Engine:
         await self.triggers.tick_schedules()
         await self.campaigns.tick_due()
         await self.evals.tick_due()
-        await self.orchestrator.tick()
+        await self.orchestrators.tick()
         await self._prune_audit()
 
     async def _prune_audit(self) -> None:
@@ -238,12 +244,12 @@ class Engine:
         raise RuntimeError("run_until_idle did not settle")
 
     async def _process_all_due(self) -> int:
-        return await self.process_due() + await self.orchestrator.drain()
+        return await self.process_due() + await self.orchestrators.drain()
 
     async def run_worker(self, *, scheduler: bool = True) -> None:
         """Long-running worker loop: claims built-in runs, serves the orchestrator and runs the scheduler."""
         log.info("worker %s started (orchestrator: %s)", self.worker_id, self.orchestrator.name)
-        serving = asyncio.create_task(self.orchestrator.serve())
+        serving = asyncio.create_task(self.orchestrators.serve())
         try:
             await self._claim_loop(scheduler=scheduler)
         finally:

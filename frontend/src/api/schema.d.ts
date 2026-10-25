@@ -133,7 +133,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Integrations */
+        /** Installed integrations and the ones the organisation registered */
         get: operations["integrations_v1_integrations_get"];
         put?: never;
         post?: never;
@@ -377,6 +377,42 @@ export interface paths {
         get: operations["instance_audit_v1_instance_audit_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/orchestrator": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What drives runs: the built-in orchestrator or Temporal, and where that is set */
+        get: operations["get_orchestrator_v1_instance_orchestrator_get"];
+        /** Save a Temporal connection and choose what new runs start on (overrides SHOAL_ORCHESTRATOR) */
+        put: operations["put_orchestrator_v1_instance_orchestrator_put"];
+        post?: never;
+        /** Forget the console setting and go back to SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* */
+        delete: operations["reset_orchestrator_v1_instance_orchestrator_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instance/orchestrator/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Try a Temporal connection without saving it */
+        post: operations["test_orchestrator_v1_instance_orchestrator_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1692,6 +1728,27 @@ export interface paths {
         post?: never;
         /** Remove an adoption and the resources it created */
         delete: operations["remove_adoption_v1_namespaces__namespace__blueprint_adoptions__adoption_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/blueprints/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add the blueprints that ship with Shoal to the catalogue
+         * @description Creates the bundled blueprints the catalogue lacks and upgrades older bundled copies. Blueprints the
+         *     tenant wrote itself are never touched, and an upgraded copy keeps its status.
+         */
+        post: operations["install_defaults_v1_blueprints_defaults_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3500,6 +3557,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/custom-integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Custom-Integrations */
+        get: operations["list_custom_integrations_v1_custom_integrations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Custom-Integrations */
+        get: operations["get_custom_integrations_v1_custom_integrations__name__get"];
+        /** Put Custom-Integrations */
+        put: operations["put_custom_integrations_v1_custom_integrations__name__put"];
+        post?: never;
+        /** Delete Custom-Integrations */
+        delete: operations["delete_custom_integrations_v1_custom_integrations__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions Custom-Integrations */
+        get: operations["versions_custom_integrations_v1_custom_integrations__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Custom-Integrations */
+        get: operations["version_custom_integrations_v1_custom_integrations__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Diff Custom-Integrations */
+        get: operations["diff_custom_integrations_v1_custom_integrations__name__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Custom-Integrations */
+        post: operations["rollback_custom_integrations_v1_custom_integrations__name__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/apply": {
         parameters: {
             query?: never;
@@ -3553,6 +3714,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/org-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Organisation connections (in `shared`) this namespace may use */
+        get: operations["org_connections_v1_namespaces__namespace__org_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/custom-integrations/{name}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pull a registered integration's manifest again (settings schema, actions, events) */
+        post: operations["refresh_custom_integration_v1_custom_integrations__name__refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/cloud-identities/{name}/trust-policy": {
         parameters: {
             query?: never;
@@ -3598,6 +3793,40 @@ export interface paths {
         get: operations["connection_webhook_v1_namespaces__namespace__connections__name__webhook_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/connections/{name}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Guided app setup: features with the permissions they need, the generated manifest, progress */
+        get: operations["connection_setup_v1_namespaces__namespace__connections__name__setup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/connections/{name}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start an app install (e.g. Add to Slack); returns the URL to send the admin to */
+        post: operations["install_connection_v1_namespaces__namespace__connections__name__install_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4272,6 +4501,26 @@ export interface components {
             approve: boolean;
             /** Note */
             note?: string | null;
+        };
+        /** DefaultBlueprint */
+        DefaultBlueprint: {
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            /**
+             * Outcome
+             * @description created, updated (an older bundled copy), unchanged, or kept (the tenant's own blueprint has the name, or its copy is newer).
+             */
+            outcome: string;
+        };
+        /** DefaultsIn */
+        DefaultsIn: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
         };
         /** DeliveryOut */
         DeliveryOut: {
@@ -5089,6 +5338,81 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * OrchestratorEnvironment
+         * @description What SHOAL_ORCHESTRATOR and SHOAL_TEMPORAL_* say (used while nothing is saved in the console).
+         */
+        OrchestratorEnvironment: {
+            /** Orchestrator */
+            orchestrator: string;
+            /** Temporal Address */
+            temporal_address: string;
+            /** Temporal Namespace */
+            temporal_namespace: string;
+            /** Temporal Task Queue */
+            temporal_task_queue: string;
+            /**
+             * Temporal Tls
+             * @description TLS, an API key or client certificates are configured.
+             */
+            temporal_tls: boolean;
+        };
+        /** OrchestratorSetting */
+        OrchestratorSetting: {
+            /**
+             * Orchestrator
+             * @default builtin
+             * @enum {string}
+             */
+            orchestrator: "builtin" | "temporal";
+            /** @description Saved Temporal connection. Kept when switching back, so Temporal finishes its runs. */
+            temporal?: components["schemas"]["TemporalSettings"] | null;
+        };
+        /** OrchestratorStatus */
+        OrchestratorStatus: {
+            /**
+             * Source
+             * @description Where the orchestrator for new runs comes from.
+             * @enum {string}
+             */
+            source: "environment" | "console";
+            /**
+             * Orchestrator
+             * @description What new runs start on.
+             */
+            orchestrator: string;
+            /**
+             * Driving
+             * @description Every orchestrator this server drives runs with.
+             */
+            driving: string[];
+            /** @description What the instance console saved. */
+            setting?: components["schemas"]["OrchestratorSetting"] | null;
+            environment: components["schemas"]["OrchestratorEnvironment"];
+            /**
+             * Runs
+             * @description Unfinished runs per orchestrator, across every tenant.
+             */
+            runs: {
+                [key: string]: number;
+            };
+            /**
+             * Temporal Installed
+             * @description The temporal extra is installed on this server.
+             */
+            temporal_installed: boolean;
+            /**
+             * Error
+             * @description Why the saved setting could not be applied (e.g. a deleted secret).
+             */
+            error?: string | null;
+            /** Revision */
+            revision?: number | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** Page[AuditOut] */
         Page_AuditOut_: {
             /** Items */
@@ -5808,6 +6132,73 @@ export interface components {
             /** Finished At */
             finished_at: string | null;
         };
+        /** TemporalCheck */
+        TemporalCheck: {
+            /** Ok */
+            ok: boolean;
+            /** Detail */
+            detail: string;
+            /** Server Version */
+            server_version?: string | null;
+            /**
+             * Pollers
+             * @description Workers polling the task queue right now.
+             */
+            pollers?: number | null;
+        };
+        /**
+         * TemporalSettings
+         * @description A Temporal connection as the instance console saves it: secrets by name, never their values.
+         */
+        TemporalSettings: {
+            /**
+             * Address
+             * @description Frontend host:port.
+             */
+            address: string;
+            /**
+             * Namespace
+             * @default default
+             */
+            namespace: string;
+            /**
+             * Task Queue
+             * @description One per Shoal installation sharing a namespace.
+             * @default shoal
+             */
+            task_queue: string;
+            /**
+             * Tls
+             * @description TLS without client certificates (implied by an API key or certificates).
+             * @default false
+             */
+            tls: boolean;
+            /**
+             * Secrets Tenant
+             * @description Tenant whose shared namespace holds the secrets below.
+             */
+            secrets_tenant?: string | null;
+            /**
+             * Api Key Secret
+             * @description Secret holding a Temporal Cloud API key.
+             */
+            api_key_secret?: string | null;
+            /**
+             * Tls Cert Secret
+             * @description Secret holding the mTLS client certificate (PEM).
+             */
+            tls_cert_secret?: string | null;
+            /**
+             * Tls Key Secret
+             * @description Secret holding the mTLS client key (PEM).
+             */
+            tls_key_secret?: string | null;
+            /**
+             * Tls Ca Secret
+             * @description Secret holding the CA for the server certificate (PEM).
+             */
+            tls_ca_secret?: string | null;
+        };
         /** TenantCreated */
         TenantCreated: {
             tenant: components["schemas"]["TenantOut"];
@@ -6337,7 +6728,10 @@ export interface operations {
     };
     integrations_v1_integrations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the registered integrations this namespace may use (default: all of them). */
+                namespace?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6353,6 +6747,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6792,6 +7195,112 @@ export interface operations {
             };
         };
     };
+    get_orchestrator_v1_instance_orchestrator_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+        };
+    };
+    put_orchestrator_v1_instance_orchestrator_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrchestratorSetting"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_orchestrator_v1_instance_orchestrator_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrchestratorStatus"];
+                };
+            };
+        };
+    };
+    test_orchestrator_v1_instance_orchestrator_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemporalSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemporalCheck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     providers_v1_auth_providers_get: {
         parameters: {
             query?: {
@@ -6958,9 +7467,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -10217,6 +10724,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RemoveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    install_defaults_v1_blueprints_defaults_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultBlueprint"][];
                 };
             };
             /** @description Validation Error */
@@ -14733,6 +15273,256 @@ export interface operations {
             };
         };
     };
+    list_custom_integrations_v1_custom_integrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+        };
+    };
+    get_custom_integrations_v1_custom_integrations__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_custom_integrations_v1_custom_integrations__name__put: {
+        parameters: {
+            query?: {
+                /** @description Change note stored with the new version. */
+                message?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_custom_integrations_v1_custom_integrations__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_custom_integrations_v1_custom_integrations__name__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_custom_integrations_v1_custom_integrations__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_custom_integrations_v1_custom_integrations__name__diff_get: {
+        parameters: {
+            query: {
+                from: number;
+                to?: number | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_custom_integrations_v1_custom_integrations__name__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"] | components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     apply_v1_apply_post: {
         parameters: {
             query?: {
@@ -14896,6 +15686,70 @@ export interface operations {
             };
         };
     };
+    org_connections_v1_namespaces__namespace__org_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_custom_integration_v1_custom_integrations__name__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cloud_identity_trust_policy_v1_namespaces__namespace__cloud_identities__name__trust_policy_get: {
         parameters: {
             query?: never;
@@ -14967,6 +15821,80 @@ export interface operations {
     connection_webhook_v1_namespaces__namespace__connections__name__webhook_get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connection_setup_v1_namespaces__namespace__connections__name__setup_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated features to preview instead of the connection's */
+                features?: string | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    install_connection_v1_namespaces__namespace__connections__name__install_post: {
+        parameters: {
+            query?: {
+                /** @description Come back to the guided setup instead of the connection */
+                then?: string | null;
+            };
             header?: never;
             path: {
                 namespace: string;

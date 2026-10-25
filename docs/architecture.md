@@ -110,8 +110,8 @@ because self-hosters should be able to run Shoal with just Postgres. Scheduling
 sits behind the `Orchestrator` protocol (`shoal.runtime.orchestrator`): it decides
 when and where a run is advanced, the executor decides what advancing means.
 Each run records the orchestrator that drives it. Besides the built-in one,
-Shoal ships an optional Temporal orchestrator (`SHOAL_ORCHESTRATOR=temporal`, the
-`temporal` extra) for operators who already run Temporal: each run is a Temporal
+Shoal ships an optional Temporal orchestrator (`SHOAL_ORCHESTRATOR=temporal` or the
+instance console, and the `temporal` extra) for operators who already run Temporal: each run is a Temporal
 workflow whose passes are activities, while the store stays the source of truth
 ([guide](temporal.md)). Other backends plug in through the `shoal.orchestrators`
 entry point group.
