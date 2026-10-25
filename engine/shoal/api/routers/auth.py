@@ -8,8 +8,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, Response
 
-from shoal.api.deps import SESSION_COOKIE, EngineDep
+from shoal.api.deps import SESSION_COOKIE, EngineDep, _bearer
 from shoal.api.schemas import LoginProvider
+from shoal.auth.sessions import SESSION_PREFIX, revoke_session, verify_session
 from shoal.core.errors import NotFound, ShoalError
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -69,8 +70,18 @@ async def callback(request: Request, engine: EngineDep, state: str | None = None
     return response
 
 
-@router.post("/logout", status_code=204, summary="Clear the session cookie")
-async def logout() -> Response:
+@router.post("/logout", status_code=204, summary="Sign out: end the session and clear its cookie")
+async def logout(request: Request, engine: EngineDep) -> Response:
+    token = _bearer(request)
+    if token and token.startswith(SESSION_PREFIX):
+        try:
+            claims = verify_session(engine.settings, token)
+            user = await engine.directory.get_user(claims["tid"], claims["sub"])
+        except (ShoalError, KeyError):
+            pass  # expired or unknown: nothing left to end
+        else:
+            await revoke_session(engine.directory, user, claims)
+            await engine.store.audit(user.tenant_id, f"user:{user.username}", "auth.logout", None, user_id=user.id)
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

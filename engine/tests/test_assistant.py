@@ -201,3 +201,13 @@ async def test_policy_and_disable(api, engine):
     engine.settings.assistant_enabled = False
     r = await api.post("/v1/assistant/chat", json={"message": "hi"})
     assert r.status_code == 503 and r.json()["code"] == "assistant_unavailable"
+
+
+@pytest.mark.parametrize("path", ["/v1/assistant", "/v1/%61ssistant/chat", "/v1/%2561ssistant", "/v1/auth/logout",
+                                  "/v1//assistant", "/v1/namespaces/../assistant", "/scim/v2/Users", "v1/runs"])
+def test_blocked_paths_cannot_be_disguised(path):
+    from shoal.assistant.chat import _check_path
+
+    with pytest.raises(ValueError):
+        _check_path(path)
+    assert _check_path("/v1/namespaces/default/workflows") == "/v1/namespaces/default/workflows"

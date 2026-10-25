@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 import yaml
@@ -157,6 +158,56 @@ def test_failed_run_exits_nonzero(cli, tenant_key):
     result = cli(*auth, "run", "broken", "--wait")
     assert result.exit_code == 1
     assert "failed" in result.output
+
+
+GATED = """
+apiVersion: shoal.dev/v1
+kind: Workflow
+metadata: {name: gated}
+spec:
+  steps:
+    - {id: review, type: approval, message: "Ship it?"}
+    - {id: done, type: set, needs: [review], if: "{{ steps.review.output.approved }}", values: {ok: true}}
+"""
+
+
+def _wait_for(cli, auth, run_id, *statuses):
+    for _ in range(200):
+        run = json.loads(cli(*auth, "get", "run", run_id, "-o", "json").stdout)
+        if run["status"] in statuses:
+            return run
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} stayed {run['status']}")
+
+
+def test_approve_and_reject(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=GATED).exit_code == 0
+
+    approved_id = json.loads(cli(*auth, "run", "gated", "-o", "json").stdout)["id"]
+    _wait_for(cli, auth, approved_id, "waiting")
+    result = cli(*auth, "approve", approved_id, "-m", "lgtm")
+    assert result.exit_code == 0, result.output
+    assert "step review approved" in result.output
+    assert _wait_for(cli, auth, approved_id, "succeeded", "failed")["status"] == "succeeded"
+    assert cli(*auth, "approve", approved_id).exit_code == 2  # nothing left to approve
+
+    rejected_id = json.loads(cli(*auth, "run", "gated", "-o", "json").stdout)["id"]
+    _wait_for(cli, auth, rejected_id, "waiting")
+    result = cli(*auth, "approve", rejected_id, "review", "--reject")
+    assert result.exit_code == 0, result.output
+    assert "step review rejected" in result.output
+    run = _wait_for(cli, auth, rejected_id, "succeeded", "failed")
+    steps = {s["step_id"]: s for s in run["steps"]}
+    assert steps["review"]["output"]["approved"] is False
+    assert steps["done"]["status"] == "skipped"
+
+
+def test_delete_names_the_kind(cli, tenant_key):
+    auth = ("--token", tenant_key)
+    assert cli(*auth, "apply", "-f", "-", input=HELLO).exit_code == 0
+    result = cli(*auth, "delete", "wf", "hello")
+    assert result.exit_code == 0 and "workflow/hello deleted" in result.output
 
 
 def test_apply_reports_invalid_documents(cli, tenant_key):

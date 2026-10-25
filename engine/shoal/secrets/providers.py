@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from shoal.config import Settings
+
 if TYPE_CHECKING:
     from shoal.engine import Engine
 
@@ -64,6 +66,10 @@ class DatabaseSecretProvider:
         await self.store.delete_secret(tenant_id, name)
 
 
+# Shoal's own configuration (SHOAL_SECRET_KEY, ...), which the env provider never hands out.
+_SETTINGS_VARS = frozenset(f"SHOAL_{field.upper()}" for field in Settings.model_fields)
+
+
 def _env_name(part: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "_", part).upper()
 
@@ -72,7 +78,12 @@ class EnvSecretProvider:
     """Read-only secrets from the environment.
 
     Looks up ``SHOAL_SECRET_<TENANT>__<NAME>`` and then ``SHOAL_SECRET_<NAME>``
-    (shared by all tenants; intended for single-tenant installs).
+    (shared by all tenants, unless ``SHOAL_SECRET_ENV_SHARED=false``). Variables that
+    configure Shoal itself (``SHOAL_SECRET_KEY``, ``SHOAL_SECRET_PROVIDERS``) are
+    never secrets: a workflow asking for ``key`` must not get the master key.
+    Names that would contain ``__`` (from ``__``, ``--`` or ``-_``) are not
+    looked up, so no tenant can reach another's variables. Env secrets are
+    tenant-wide: every namespace of the tenant can read them.
     """
 
     name = "env"
@@ -80,12 +91,20 @@ class EnvSecretProvider:
 
     def setup(self, engine: Engine) -> None:
         self.store = engine.store
+        self.settings = engine.settings
 
     async def get(self, tenant_id: str, name: str) -> str | None:
+        if "__" in _env_name(name):
+            # `__` separates the tenant from the name: tenant `acme` asking for `ops--token`
+            # would otherwise read tenant `acme--ops`'s SHOAL_SECRET_ACME__OPS__TOKEN.
+            return None
         tenant = await self.store.get_tenant(tenant_id)
-        return os.environ.get(f"SHOAL_SECRET_{_env_name(tenant.slug)}__{_env_name(name)}") or os.environ.get(
-            f"SHOAL_SECRET_{_env_name(name)}"
-        )
+        value = os.environ.get(f"SHOAL_SECRET_{_env_name(tenant.slug)}__{_env_name(name)}")
+        if value is not None or not self.settings.secret_env_shared:
+            return value
+        shared = f"SHOAL_SECRET_{_env_name(name)}"
+        return None if shared in _SETTINGS_VARS else os.environ.get(shared)
+
 
 
 class SecretManager:

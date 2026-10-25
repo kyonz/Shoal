@@ -165,7 +165,8 @@ class StarterIntegration(Integration):
                 type=f"ticket.{payload.get('action', 'updated')}",
                 id=headers.get("x-starter-delivery"),
                 data=payload,
-                # Runs waiting on this ticket (wait step `keys: ["starter:ticket:OPS-1"]`) wake up.
+                # Wakes runs waiting on this ticket (wait step `signal: {event: "starter:ticket:OPS-1"}`
+                # or a condition wait with `wake_on: ["starter:ticket:OPS-1"]`).
                 wake_keys=[f"starter:ticket:{ticket['id']}"] if ticket.get("id") else [],
                 actor=actor(email=user.get("email"), display_name=user.get("name"), starter=user.get("id")),
             )

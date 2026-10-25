@@ -74,6 +74,8 @@ export interface EditorContext {
   dirty: boolean;
   /** Save errors by top-level spec property. */
   errors: Record<string, string>;
+  /** Load a version the server saved outside the editor (e.g. an import) as the new baseline. */
+  replaceFrom: (r: Resource) => void;
 }
 
 export interface EditorExtension {
@@ -330,7 +332,12 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
   }
 
   const setSpec = (spec: Record<string, unknown>) => setDraft((d) => (d ? { ...d, spec } : d));
-  const ctx: EditorContext = { ns, plural, name, isNew, draft, spec: draft.spec, setSpec, resource: resource.data, canWrite, dirty, errors: errors.byField };
+  const replaceFrom = (r: Resource) => {
+    const d = fromResource(r, specSchema);
+    setDraft(d);
+    setBaseline(JSON.stringify(d));
+  };
+  const ctx: EditorContext = { ns, plural, name, isNew, draft, spec: draft.spec, setSpec, resource: resource.data, canWrite, dirty, errors: errors.byField, replaceFrom };
   const extraTabs = isNew ? [] : ext.tabs?.(ctx) ?? [];
   const meta = resource.data?.metadata;
 

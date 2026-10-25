@@ -19,7 +19,7 @@ import re
 from datetime import timedelta
 from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from shoal.core.duration import Duration
 
@@ -130,6 +130,18 @@ class RetryPolicy(Model):
         """Delay before ``attempt`` (2 = first retry)."""
         seconds = self.backoff.total_seconds() * (self.backoff_factor ** max(0, attempt - 2))
         return timedelta(seconds=min(seconds, self.max_backoff.total_seconds()))
+
+
+def _no_clear_text_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """Decision provider settings name secrets (``api_key_secret``); they never hold a credential literally."""
+    bad = [k for k in credential_fields(config)
+           if not k.endswith("_secret") and isinstance(config[k], str) and "{{" not in config[k]]
+    if bad:
+        raise ValueError(f"provider_config {bad} look like credentials; name a secret instead, e.g. api_key_secret")
+    return config
+
+
+DecisionConfig = Annotated[dict[str, Any], AfterValidator(_no_clear_text_keys)]
 
 
 class StepBase(Model):
@@ -314,7 +326,7 @@ class DecideStep(StepBase):
 
     type: Literal["decide"] = "decide"  # type: ignore[misc]
     provider: str | None = Field(None, description="Decision provider plugin (jev, llm); defaults to settings.")
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field(description="Text or JSON (expressions allowed) the questions are about.")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     min_confidence: float | None = Field(None, ge=0, le=1)
@@ -328,7 +340,7 @@ class GradeStep(StepBase):
 
     type: Literal["grade"] = "grade"  # type: ignore[misc]
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     subject: Any = Field(description="What to grade (expression).")
     instructions: str
     levels: list[str] = Field(min_length=2, description="Ordered rubric levels, worst first.")
@@ -432,7 +444,7 @@ class ToolGuardSpec(Model):
     """Screen mutating tool calls with a decision model before they run (§7.5)."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "write_file", "edit_file", "*__*"],
         description="Glob patterns of tool names to screen.",
@@ -447,12 +459,13 @@ class AgentSpec(Model):
     description: str | None = None
     provider: str = "anthropic"
     model: str = "claude-opus-5-5"
-    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop or cli.")
+    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop, cli (a coding agent CLI in the sandbox) or a2a.")
     instructions: str = Field("", description="System prompt.")
     skills: list[str] = Field(default_factory=list)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "read_file", "write_file", "list_files"],
-        description="Built-in tools, integration actions ('github.create_pull_request', 'github.*').",
+        description="Built-in tools (shell, read_file, ...), integration actions ('github.create_pull_request', 'github.*') "
+        "and MCP servers ('mcp:<connection>' for all its tools, 'mcp:<connection>.<tool>' for one).",
     )
     subagents: list[str] = Field(default_factory=list, description="Agents this agent may delegate to.")
     credentials: list[str] = Field(
@@ -489,8 +502,12 @@ class SkillSpec(Model):
 
 
 class NetworkPolicy(Model):
-    egress: Literal["allow", "deny"] = "allow"
-    allow_hosts: list[str] = Field(default_factory=list)
+    """Enforced by the sandbox backend; a backend that cannot enforce a policy refuses to start the sandbox."""
+
+    egress: Literal["allow", "deny"] = Field("allow", description="'deny' blocks all outbound traffic.")
+    allow_hosts: list[str] = Field(
+        default_factory=list, description="Only these hosts may be reached (needs a backend that supports it, e.g. remote)."
+    )
 
 
 class SandboxProfileSpec(Model):
@@ -551,7 +568,7 @@ class TriageSpec(Model):
     """Semantic trigger filter: ask a decision model about the event before starting a run."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field("{{ event }}", description="What the questions are about (expressions allowed).")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")

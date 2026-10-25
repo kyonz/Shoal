@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Key spaces the engine itself waits on (signals, approvals, child runs, credentials); never set by an event.
+INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
+
 
 class IntegrationManager:
     def __init__(self, engine: Engine):
@@ -27,7 +30,13 @@ class IntegrationManager:
         return [type(i).catalog() for i in self.engine.registry.available("integrations").values()]
 
     async def connection(
-        self, tenant_id: str, name: str, *, initiator: dict[str, Any] | None = None, run_id: str | None = None
+        self,
+        tenant_id: str,
+        name: str,
+        *,
+        initiator: dict[str, Any] | None = None,
+        run_id: str | None = None,
+        step_id: str | None = None,
     ) -> ConnectionContext:
         row = await self.engine.store.get_resource_row(tenant_id, "Connection", name)
         resource = Connection.model_validate(row.document)
@@ -60,6 +69,7 @@ class IntegrationManager:
             integration=integration,
             initiator=initiator,
             run_id=run_id,
+            step_id=step_id,
             acting_as=acting_as,
         )
 
@@ -112,10 +122,11 @@ class IntegrationManager:
         connection: str | None = None,
         initiator: dict[str, Any] | None = None,
         run_id: str | None = None,
+        step_id: str | None = None,
     ) -> dict[str, Any]:
         integration_key, _, action_name = action.partition(".")
         name = await self.resolve_name(tenant_id, integration_key, connection)
-        ctx = await self.connection(tenant_id, name, initiator=initiator, run_id=run_id)
+        ctx = await self.connection(tenant_id, name, initiator=initiator, run_id=run_id, step_id=step_id)
         if ctx.integration.key != integration_key:
             raise InvalidRequest(f"connection '{name}' is a {ctx.integration.key} connection, not {integration_key}")
         return await ctx.integration.call_action(ctx, action_name, params)
@@ -167,6 +178,8 @@ class IntegrationManager:
             if not await ctx.integration.verify_webhook(ctx, headers, body):
                 raise InvalidRequest("webhook signature verification failed")
             events = await ctx.integration.parse_webhook(ctx, headers, body)
+        for event in events:
+            event.wake_keys = self.own_wake_keys(ctx.integration.key, event.wake_keys)
         woken: list[str] = []
         fired: list[dict[str, Any]] = []
         for event in events:
@@ -176,6 +189,19 @@ class IntegrationManager:
                 endpoint.tenant_id, endpoint.connection_name, event, connection_namespace=endpoint.namespace
             )
         return {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
+
+    def own_wake_keys(self, integration_key: str, keys: list[str]) -> list[str]:
+        """Drop wake keys an integration may not claim, so a delivery cannot steer runs waiting on another system.
+
+        Wake keys are tenant-wide (``github:pr:acme/api#12``) and a waiting step trusts the event it receives,
+        so a key whose prefix names a *different* registered integration (a generic webhook sending
+        ``X-Shoal-Wake-Key: github:pr:...``) or one of the engine's own key spaces is ignored.
+        """
+        reserved = (set(self.engine.registry.names("integrations")) | INTERNAL_WAKE_PREFIXES) - {integration_key}
+        kept = [k for k in keys if k.partition(":")[0] not in reserved]
+        if len(kept) != len(keys):
+            log.warning("ignored wake keys %s from a %s webhook", sorted(set(keys) - set(kept)), integration_key)
+        return kept
 
     async def _handle_registered(self, endpoint: Any, registration_id: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
         """A delivery to the URL of a webhook Shoal registered for one trigger: checked with that registration's secret."""
@@ -203,6 +229,7 @@ class IntegrationManager:
         woken: list[str] = []
         fired: list[dict[str, Any]] = []
         for event in events:
+            event.wake_keys = self.own_wake_keys(ctx.integration.key, event.wake_keys)
             woken += await self.engine.store.wake_by_keys(row.tenant_id, event.wake_keys)
             woken += await self.engine.signals.deliver_event(row.tenant_id, event)
             matches = ctx.integration.registered_event_matches(registration, event)

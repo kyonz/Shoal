@@ -42,8 +42,11 @@ interface BuilderState extends Snapshot {
   lastAt: number;
   /** Snapshot of what is saved on the server, for the dirty check. */
   saved: string;
+  /** The user may only view this workflow: edits (and so undo history) are ignored. */
+  readOnly: boolean;
 
   load: (s: Snapshot) => void;
+  setReadOnly: (readOnly: boolean) => void;
   markSaved: () => void;
   commit: (next: Partial<Snapshot>, key?: string) => void;
   select: (id: string | null) => void;
@@ -81,6 +84,9 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   lastKey: null,
   lastAt: 0,
   saved: "",
+  readOnly: false,
+
+  setReadOnly: (readOnly) => set({ readOnly }),
 
   load: (s) => {
     const layout = autoLayout(s.spec.steps, pruneLayout(s.layout, s.spec.steps));
@@ -91,6 +97,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
 
   commit: (next, key) => {
     const st = get();
+    if (st.readOnly) return;
     const now = Date.now();
     const coalesce = !!key && key === st.lastKey && now - st.lastAt < COALESCE_MS;
     const prev: Snapshot = { spec: st.spec, layout: st.layout, meta: st.meta };
@@ -221,6 +228,10 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   },
 }));
 
+export function isDirty(s: Pick<BuilderState, "spec" | "layout" | "meta" | "saved">): boolean {
+  return snapshotKey(s) !== s.saved;
+}
+
 export function useDirty(): boolean {
-  return useBuilder((s) => snapshotKey(s) !== s.saved);
+  return useBuilder(isDirty);
 }

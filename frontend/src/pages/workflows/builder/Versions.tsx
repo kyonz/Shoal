@@ -6,9 +6,19 @@ import { useResourceVersions } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/format";
 import { Badge, Button, Dialog, EmptyState, Spinner } from "@/components/ui";
-import { normalizeForDiff, toYaml } from "@/features/workflow/document";
+import { alignKeys, stripServerDefaults, toDocument, toYaml } from "@/features/workflow/document";
+import type { Schemas } from "@/api/client";
 import type { WorkflowSpecDoc } from "@/features/workflow/types";
 import { useBuilder } from "./store";
+
+type Version = Schemas["ResourceVersionOut"];
+
+/** A version as its author wrote it: the kept source, else the stored document minus server-filled step defaults. */
+function asWritten(v: Version) {
+  const doc = v.document as { metadata?: { description?: string | null; labels?: Record<string, string> }; spec?: WorkflowSpecDoc };
+  const spec = (v.source as WorkflowSpecDoc | null | undefined) ?? stripServerDefaults(doc.spec ?? { steps: [] });
+  return { spec, description: doc.metadata?.description ?? "", labels: doc.metadata?.labels ?? {} };
+}
 
 /** Version history with a line diff against the current editor state, and restore. */
 export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
@@ -25,17 +35,16 @@ export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
 
   const parts = useMemo(() => {
     if (!active) return [];
-    const doc = active.document as { metadata?: Record<string, unknown>; spec?: unknown };
-    const left = toYaml(normalizeForDiff({ ...doc, metadata: { name: doc.metadata?.name, description: doc.metadata?.description, labels: doc.metadata?.labels } }));
+    const v = asWritten(active);
     let current: unknown = {};
     try {
       current = parse(currentYaml);
     } catch {
       /* keep empty */
     }
-    const right = toYaml(normalizeForDiff(current));
-    return diffLines(left, right);
-  }, [active, currentYaml]);
+    const left = toYaml(alignKeys(toDocument(name, v.description, v.labels, v.spec), current));
+    return diffLines(left, toYaml(current));
+  }, [active, currentYaml, name]);
 
   const added = parts.filter((p) => p.added).reduce((n, p) => n + (p.count ?? 0), 0);
   const removed = parts.filter((p) => p.removed).reduce((n, p) => n + (p.count ?? 0), 0);
@@ -67,6 +76,7 @@ export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
                 <div className="mt-0.5 truncate text-[11px] text-faint">
                   {v.created_by ?? "unknown"} · {relTime(v.created_at)}
                 </div>
+                {v.message && <div className="mt-0.5 line-clamp-2 text-[11.5px] text-muted">{v.message}</div>}
               </button>
             ))}
           </div>
@@ -81,8 +91,12 @@ export function VersionsDialog({ open, onOpenChange, ns, name, currentYaml }: {
                 size="sm"
                 icon={<RotateCcw className="size-3.5" />}
                 onClick={() => {
-                  const spec = (active?.document as { spec?: WorkflowSpecDoc }).spec;
-                  if (spec) useBuilder.getState().setSpec(normalizeForDiff(spec) as WorkflowSpecDoc, "restore");
+                  if (active) {
+                    const v = asWritten(active);
+                    // One undo step: commits with the same key close together are merged.
+                    useBuilder.getState().setSpec(structuredClone(v.spec), "restore");
+                    useBuilder.getState().setMeta({ description: v.description, labels: v.labels }, "restore");
+                  }
                   onOpenChange(false);
                 }}
               >

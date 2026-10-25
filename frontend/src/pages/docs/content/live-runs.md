@@ -38,7 +38,7 @@ An `approval` step pauses the run and asks a person to decide:
   on_timeout: reject
 ```
 
-While it waits, the run viewer shows a banner with the message and **Approve** / **Reject** buttons, with an optional comment. Deciding needs the `runs:approve` permission in the run's namespace. The same decision can be made through the API:
+While it waits, the run viewer shows a banner with the message and **Approve** / **Reject** buttons, with an optional comment. Deciding needs the `runs:approve` permission in the run's namespace. When the step lists `approvers`, only they can decide: an entry is an email (optionally written `user:dana@acme.com`), an actor such as `sa:release-bot`, or `group:<name>` for members of a Shoal group. Instance admins can always decide. The same decision can be made through the API:
 
 ```bash
 curl -X POST "$SHOAL_URL/v1/runs/$RUN_ID/steps/review/approval" \
@@ -46,6 +46,10 @@ curl -X POST "$SHOAL_URL/v1/runs/$RUN_ID/steps/review/approval" \
   -H "Content-Type: application/json" \
   -d '{"approved": true, "comment": "Looks good"}'
 ```
+
+From the CLI, `shoal approve <run id>` approves the run's waiting approval step (`--reject` to reject, `-m` for a comment).
+
+A rejection (or a timeout with `on_timeout: reject`) does not stop the run. The step succeeds with `approved: false` in its output, so put `if: "{{ steps.review.output.approved }}"` on the steps that should only run once someone approves.
 
 `decide` steps with `on_low_confidence: approval` also hold the run for a person when the decision model is unsure.
 

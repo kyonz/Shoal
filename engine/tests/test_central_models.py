@@ -86,3 +86,17 @@ async def test_migration_moves_namespaced_gateways_to_shared(engine, admin):
         await conn.run_sync(lambda c: migrate.stamp(c, "head"))
     names = {(r.namespace, r.name) for r in await engine.store.list_resources(tenant, "Gateway", all_namespaces=True)}
     assert names == {("shared", "llm"), ("shared", "team-a-llm"), ("shared", "other")}
+
+
+async def test_decision_provider_settings_never_hold_keys(admin):
+    def step(config):
+        return {"spec": {"steps": [{"id": "d", "type": "decide", "provider": "jev", "provider_config": config, "state": "x",
+                                    "questions": {"q": {"type": "boolean", "instructions": "?"}}}]}}
+
+    r = await admin.put("/v1/namespaces/default/workflows/w", json=step({"api_key": "ts-live-123"}))
+    assert r.status_code == 422 and "api_key_secret" in r.text
+    for ok in ({"api_key_secret": "jev-key"}, {"api_key": "{{ secrets.jev }}"}, {"model": "jev-1"}):
+        assert (await admin.put("/v1/namespaces/default/workflows/w", json=step(ok))).status_code in (200, 201), ok
+    described = {p["name"]: p["description"] for p in (await admin.get("/v1/decision-providers")).json()}
+    assert described["jev"] and described["llm"]
+    assert all(p["description"] for p in (await admin.get("/v1/providers")).json())

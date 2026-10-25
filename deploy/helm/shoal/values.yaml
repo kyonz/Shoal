@@ -189,6 +189,8 @@ ingress:
 
 # Let workers run sandboxes as pods ('kubernetes' sandbox backend).
 kubernetesSandboxes:
+  # Profiles with network.egress: deny get a NetworkPolicy per sandbox pod, so the
+  # cluster's CNI must enforce NetworkPolicies (Calico, Cilium, ...).
   enabled: false
   # Namespaces sandboxes run in (the profile's 'namespace'). Roles are created in each.
   namespaces: [shoal-sandboxes]

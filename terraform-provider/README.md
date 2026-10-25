@@ -1,7 +1,7 @@
 # Terraform provider for Shoal
 
-Manage Shoal namespaces, workflows, agents, skills, connections, triggers, campaigns, sandbox profiles, gateways,
-model policies, evals, blueprints, secrets and access (users, groups, service accounts, roles, role bindings, API
+Manage Shoal namespaces, workflows, agents, skills, connections, triggers, campaigns, sandbox profiles, cloud
+identities, gateways, model policies, evals, blueprints, secrets and access (users, groups, service accounts, roles, role bindings, API
 keys, OIDC) as code. Reference docs are in [`docs/`](docs/index.md); examples in [`examples/`](examples/).
 
 ```terraform

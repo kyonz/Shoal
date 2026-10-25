@@ -70,6 +70,12 @@ class JiraConnection(BaseModel):
     webhook_secret: SecretStr | None = Field(
         None, description="Secret for webhooks sent to the connection's URL (registered trigger webhooks have their own)."
     )
+    requested_by_trailer: bool = Field(
+        True, description="End comments and new issue descriptions with 'Requested by: <person>' (who drove the work)."
+    )
+    provenance_label: str | None = Field(
+        "shoal-automated", description="Label added to issues Shoal creates (empty: none).", pattern=r"^[^\s]*$"
+    )
 
     @model_validator(mode="after")
     def _auth(self) -> JiraConnection:
@@ -368,8 +374,29 @@ class JiraIntegration(Integration):
     def _v3(self, ctx: ConnectionContext) -> bool:
         return ctx.config.api_version == "3"
 
-    def _rich(self, ctx: ConnectionContext, text: str) -> Any:
-        return text_to_adf(text) if self._v3(ctx) else text
+    def _rich(self, ctx: ConnectionContext, text: str, *, attributed: bool = False) -> Any:
+        """Text as ADF (Cloud) or wiki text (Server/DC); ``attributed`` adds the Requested-by line."""
+        who = self._requested_by(ctx) if attributed else None
+        if not self._v3(ctx):
+            return f"{text.rstrip()}\n\nRequested by: {who[0]}" if who else text
+        doc = text_to_adf(text)
+        if who:
+            name, account_id = who
+            person = (
+                {"type": "mention", "attrs": {"id": account_id, "text": f"@{name}"}} if account_id else {"type": "text", "text": name}
+            )
+            doc["content"].append({"type": "paragraph", "content": [{"type": "text", "text": "Requested by: "}, person]})
+        return doc
+
+    def _requested_by(self, ctx: ConnectionContext) -> tuple[str, str | None] | None:
+        """(name, Jira account id) of the person the work is for, when the connection adds attribution."""
+        initiator = ctx.initiator or {}
+        if not ctx.config.requested_by_trailer or not initiator:
+            return None
+        name = initiator.get("display_name") or initiator.get("email") or initiator.get("actor")
+        if not name:
+            return None
+        return str(name), initiator.get("jira_account_id")
 
     async def test_connection(self, ctx: ConnectionContext) -> dict[str, Any]:
         me = await self._request(ctx, "GET", "/rest/api/{v}/myself")
@@ -404,7 +431,7 @@ class JiraIntegration(Integration):
 
     @action(description="Add a comment to an issue.", input=AddJiraComment, output=JiraComment)
     async def add_comment(self, ctx: ConnectionContext, p: AddJiraComment) -> JiraComment:
-        data = await self._request(ctx, "POST", f"/rest/api/{{v}}/issue/{p.key}/comment", json={"body": self._rich(ctx, p.body)})
+        data = await self._request(ctx, "POST", f"/rest/api/{{v}}/issue/{p.key}/comment", json={"body": self._rich(ctx, p.body, attributed=True)})
         return JiraComment(id=str(data.get("id")), url=f"{ctx.config.base_url}/browse/{p.key}?focusedCommentId={data.get('id')}")
 
     @action(description="Move an issue to a status (by status or transition name).", input=TransitionIssue, output=TransitionResult)
@@ -424,7 +451,7 @@ class JiraIntegration(Integration):
             raise IntegrationError(f"no transition from '{current}' to '{p.to}' (available: {names})")
         body: dict[str, Any] = {"transition": {"id": match["id"]}}
         if p.comment:
-            body["update"] = {"comment": [{"add": {"body": self._rich(ctx, p.comment)}}]}
+            body["update"] = {"comment": [{"add": {"body": self._rich(ctx, p.comment, attributed=True)}}]}
         await self._request(ctx, "POST", f"/rest/api/{{v}}/issue/{p.key}/transitions", json=body)
         return TransitionResult(transitioned=True, status=(match.get("to") or {}).get("name", p.to))
 
@@ -443,8 +470,8 @@ class JiraIntegration(Integration):
             "project": {"key": p.project},
             "summary": p.summary,
             "issuetype": {"name": p.issue_type},
-            "description": self._rich(ctx, p.description),
-            "labels": p.labels,
+            "description": self._rich(ctx, p.description, attributed=True),
+            "labels": list(dict.fromkeys([*p.labels, *([ctx.config.provenance_label] if ctx.config.provenance_label else [])])),
         }
         data = await self._request(ctx, "POST", "/rest/api/{v}/issue", json={"fields": fields})
         return Ok(key=data.get("key"))
