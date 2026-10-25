@@ -11,6 +11,7 @@ export type Plural =
   | "connections"
   | "triggers"
   | "campaigns"
+  | "target-lists"
   | "gateways"
   | "model-policies"
   | "evals"

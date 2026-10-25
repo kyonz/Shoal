@@ -82,6 +82,10 @@ kind: Campaign           # fan a workflow out over targets with a policy
 spec: {workflow: ..., targets: {connection: ..., resource: repository, filter: {...}, key: "{{ target.full_name }}"},
        inputs: {...}, policy: {concurrency: 10, max_failures: 10, budget_usd: 100}}
 ---
+kind: TargetList         # a named set of targets (e.g. a team's repos); campaigns use targets: {list: name},
+spec: {items: [{full_name: acme/api}], key: "{{ target.full_name }}", connection: ..., resource: repository}
+#     trigger filters check it: "{{ event.repository.full_name in lists['core-repos'] }}"
+---
 kind: Agent
 spec: {provider: anthropic, model: claude-opus-5-5, instructions: ..., tools: [shell, read_file, write_file, edit_file]}
 ```

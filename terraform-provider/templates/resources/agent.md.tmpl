@@ -25,10 +25,10 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `description` | string | optional |  |
 | `provider` | string | optional |  Default: `anthropic`. |
 | `model` | string | optional |  Default: `claude-opus-5-5`. |
-| `runtime` | string | optional | Agent runtime plugin: tool-loop or cli. Default: `tool-loop`. |
+| `runtime` | string | optional | Agent runtime plugin: tool-loop, cli (a coding agent CLI in the sandbox) or a2a. Default: `tool-loop`. |
 | `instructions` | string | optional | System prompt. Default: ``. |
 | `skills` | list of string | optional |  |
-| `tools` | list of string | optional | Built-in tools, integration actions ('github.create_pull_request', 'github.*'). |
+| `tools` | list of string | optional | Built-in tools (shell, read_file, ...), integration actions ('github.create_pull_request', 'github.*') and MCP servers ('mcp:<connection>' for all its tools, 'mcp:<connection>.<tool>' for one). |
 | `subagents` | list of string | optional | Agents this agent may delegate to. |
 | `credentials` | list of string | optional | Integrations whose short-lived credentials are injected into the sandbox env, e.g. 'github' or 'github:github-acme' (integration:connection). |
 | `cloud_identities` | list of string | optional | CloudIdentity resources (e.g. an AWS IAM role) whose short-lived credentials are injected into the sandbox env. Each identity must grant this agent and workflow. |

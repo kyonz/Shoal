@@ -150,6 +150,7 @@ export const PLURAL_BY_KIND: Record<string, string> = {
   Connection: "connections",
   Trigger: "triggers",
   Campaign: "campaigns",
+  TargetList: "target-lists",
   Gateway: "gateways",
   ModelPolicy: "model-policies",
   Eval: "evals",

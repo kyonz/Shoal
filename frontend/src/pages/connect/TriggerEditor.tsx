@@ -320,7 +320,18 @@ export default function TriggerEditor() {
                   <CardHeader title="3 · Conditions" description={<>Expressions over <code className="font-mono">event</code>. Leave the filter empty to fire on every event.</>} />
                   <div className="space-y-3.5 p-4">
                     {source === "event" && (
-                      <Field label="Filter" description={<>e.g. <code className="font-mono">{"{{ event.status_change.to == 'Ready for AI' }}"}</code></>}>
+                      <Field
+                        label="Filter"
+                        description={
+                          <>
+                            e.g. <code className="font-mono">{"{{ event.status_change.to == 'Ready for AI' }}"}</code>. To limit it to a{" "}
+                            <Link to={nsPath(ns, "target-lists")} className="text-accent hover:underline">
+                              target list
+                            </Link>
+                            : <code className="font-mono">{"{{ event.repository.full_name in lists['core-repos'] }}"}</code>
+                          </>
+                        }
+                      >
                         <ExprInput value={spec.filter ?? ""} onChange={(v) => set({ filter: v || undefined })} placeholder="{{ event... }}" />
                       </Field>
                     )}

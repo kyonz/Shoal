@@ -6,11 +6,12 @@ import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from shoal.campaigns.target_lists import Resolved, _keyed
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest
 from shoal.core.expressions import render
 from shoal.core.ids import new_id
-from shoal.core.models import Campaign, CampaignSpec, CampaignStatus, RunStatus, TargetStatus
+from shoal.core.models import Campaign, CampaignSpec, CampaignStatus, RunStatus, TargetList, TargetStatus
 from shoal.core.scope import current_namespace, use_namespace
 from shoal.store import tables as t
 
@@ -78,27 +79,32 @@ class CampaignService:
             await self.start(tenant_id, row.id)
         return await self.store.get_campaign(tenant_id, row.id)
 
-    async def resolve_targets(self, tenant_id: str, spec: CampaignSpec) -> dict[str, dict[str, Any]]:
-        """The target set, keyed and de-duplicated."""
+    async def resolve_targets(self, tenant_id: str, spec: CampaignSpec) -> Resolved:
+        """The target set, keyed and de-duplicated; ``missing`` names listed targets a list's lookup did not find."""
         sel = spec.targets
-        if sel.items is not None:
-            items = list(sel.items)
+        if sel.list_:
+            resolved = await self.engine.target_lists.resolve(tenant_id, sel.list_)
+        elif sel.items is not None:
+            resolved = Resolved(targets=_keyed(list(sel.items), sel.key))
         else:
             items = await self.engine.integrations.query_all(tenant_id, sel.connection, sel.resource, sel.filter)
+            resolved = Resolved(targets=_keyed(items, sel.key))
         if sel.limit:
-            items = items[: sel.limit]
-        targets: dict[str, dict[str, Any]] = {}
-        for item in items:
-            key = str(render(sel.key, {"target": item}))
-            if key and key not in targets:
-                targets[key] = item
-        return targets
+            resolved.targets = dict(list(resolved.targets.items())[: sel.limit])
+        return resolved
 
-    async def plan(self, row: t.CampaignRow, items: dict[str, dict[str, Any]]) -> int:
-        """Snapshot resolved targets."""
+    async def plan(self, row: t.CampaignRow, items: Resolved) -> int:
+        """Snapshot resolved targets; listed targets that could not be found are recorded as skipped."""
+        now = clock.now()
         targets = [
             t.CampaignTarget(id=new_id("tgt"), campaign_id=row.id, tenant_id=row.tenant_id, key=key, data=item)
-            for key, item in items.items()
+            for key, item in items.targets.items()
+        ] + [
+            t.CampaignTarget(
+                id=new_id("tgt"), campaign_id=row.id, tenant_id=row.tenant_id, key=key, data={},
+                status=TargetStatus.skipped, result={"error": "not found by the target list's lookup"}, finished_at=now,
+            )
+            for key in items.missing
         ]
         added = await self.store.add_targets(targets)
         await self.refresh_stats(row.id)
@@ -156,12 +162,17 @@ class CampaignService:
     async def add_targets(self, tenant_id: str, campaign_id: str, items: list[dict[str, Any]]) -> int:
         row = await self.store.get_campaign(tenant_id, campaign_id)
         spec = CampaignSpec.model_validate(row.spec)
+        key = spec.targets.key
+        if spec.targets.list_:  # keyed the way the list keys its targets
+            key = TargetList.model_validate(
+                (await self.store.get_resource_row(tenant_id, "TargetList", spec.targets.list_)).document
+            ).spec.key
         targets = [
             t.CampaignTarget(
                 id=new_id("tgt"),
                 campaign_id=row.id,
                 tenant_id=tenant_id,
-                key=str(render(spec.targets.key, {"target": item})),
+                key=str(render(key, {"target": item})),
                 data=item,
             )
             for item in items
