@@ -1,4 +1,4 @@
-"""The AWM integration contract: schemas, naming, secrets and webhook signing."""
+"""The Shoal integration contract: schemas, naming, secrets and webhook signing."""
 
 from awm.sdk.testing import IntegrationContract, signed_webhook
 

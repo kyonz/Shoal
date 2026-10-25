@@ -57,7 +57,7 @@ postgresql:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 1Gi}
 
-# Extra environment for every AWM pod (model provider keys, sandbox services, ...).
+# Extra environment for every Shoal pod (model provider keys, sandbox services, ...).
 extraEnv: []
 #  - name: ANTHROPIC_API_KEY
 #    valueFrom: {secretKeyRef: {name: llm-keys, key: anthropic}}

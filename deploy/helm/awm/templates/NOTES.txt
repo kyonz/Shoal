@@ -1,4 +1,4 @@
-AWM {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}".
+Shoal {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}".
 
 {{- if .Values.ingress.enabled }}
 URL: http{{ if .Values.ingress.tls }}s{{ end }}://{{ (index .Values.ingress.hosts 0).host }}

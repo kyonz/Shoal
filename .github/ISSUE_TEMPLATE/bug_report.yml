@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in Shoal does not work as documented.
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For a security problem, please use the private
+        [vulnerability report](https://github.com/kyonz/ai-workflow-manager/security/advisories/new) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it?
+      description: Minimal workflow or agent YAML, CLI commands or API calls. Remove secrets.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Engine / runtime
+        - API
+        - CLI
+        - Web UI
+        - Integrations
+        - Sandboxes
+        - Terraform provider
+        - Helm chart / docker compose
+        - Docs
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `awm version`, the image tag, or a commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How do you run Shoal?
+      options:
+        - awm serve (local)
+        - docker compose
+        - Helm / Kubernetes
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and run events
+      description: Relevant server or worker logs, or `awm logs <run-id>` output.
+      render: text

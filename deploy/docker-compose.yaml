@@ -1,4 +1,4 @@
-# AWM with Postgres: the API server, one worker and the database.
+# Shoal with Postgres: the API server, one worker and the database.
 #
 #   cp deploy/.env.example deploy/.env    # then set real secrets
 #   docker compose -f deploy/docker-compose.yaml up -d --build

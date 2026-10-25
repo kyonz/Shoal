@@ -210,6 +210,6 @@ The manifest:
 }
 ```
 
-AWM caches a manifest for 60 seconds per connection and refreshes it on
-"Test connection". Action input is validated by the service; AWM checks only
+Shoal caches a manifest for 60 seconds per connection and refreshes it on
+"Test connection". Action input is validated by the service; Shoal checks only
 the schema's `required` keys before calling, for a clearer error.

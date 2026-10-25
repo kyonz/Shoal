@@ -66,7 +66,7 @@ spec:
       with:
         key: "{{ inputs.issue_key }}"
         body: |
-          AI Workflow Manager opened a fix: {{ steps.pr.output.url }}
+          Shoal opened a fix: {{ steps.pr.output.url }}
 
           Root cause: {{ steps.fix.output.root_cause }}
           Tests: {{ steps.fix.output.test_summary }}
@@ -86,7 +86,7 @@ spec:
       with:
         key: "{{ inputs.issue_key }}"
         body: |
-          AI Workflow Manager could not produce a passing fix automatically.
+          Shoal could not produce a passing fix automatically.
 
           {{ steps.fix.output.summary or steps.fix.error.message }}
 

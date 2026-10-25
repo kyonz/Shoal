@@ -9,7 +9,7 @@ metadata:
 spec:
   integration: github
   config:
-    # Attribution and governance (architecture §11.1). In "app" mode AWM acts with
+    # Attribution and governance (architecture §11.1). In "app" mode Shoal acts with
     # this connection's credentials but keeps the initiator's authority visible
     # (labels, Requested-by trailer) and enforced (merge gating).
     attribution:

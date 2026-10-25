@@ -1,6 +1,6 @@
 # awm-starter
 
-A Starter integration for [AI Workflow Manager](https://github.com/kyonz/ai-workflow-manager).
+A Starter integration for [Shoal](https://github.com/kyonz/ai-workflow-manager).
 
 | Capability | What it gives you |
 | --- | --- |
@@ -15,10 +15,10 @@ uv sync
 uv run pytest
 ```
 
-`tests/test_contract.py` runs the AWM integration contract (naming, schemas,
+`tests/test_contract.py` runs the Shoal integration contract (naming, schemas,
 secret handling, webhook signing). Keep it passing; the catalogue relies on it.
 
-## Install into AWM
+## Install into Shoal
 
 Install the package next to the engine. The `awm.integrations` entry point in
 `pyproject.toml` registers it, and `starter` appears in **Integrations** with a
@@ -36,7 +36,7 @@ Any integration can run out of process and be connected over HTTP:
 AWM_INTEGRATION_TOKEN=change-me python -m awm.sdk.server awm_starter:StarterIntegration --host 0.0.0.0 --port 8080
 ```
 
-Then create a `remote` connection in AWM with `url` set to the service and
+Then create a `remote` connection in Shoal with `url` set to the service and
 `token` to the same value (or have an operator register it under its own key).
 The `Dockerfile` builds that service.
 
