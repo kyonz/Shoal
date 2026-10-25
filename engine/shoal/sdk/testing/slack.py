@@ -65,6 +65,7 @@ class SlackMessage:
     blocks: list[dict[str, Any]] = field(default_factory=list)
     thread_ts: str | None = None
     updates: list[dict[str, Any]] = field(default_factory=list)
+    user: str | None = None  # None: posted by the app
 
     def buttons(self) -> list[dict[str, Any]]:
         return [e for b in self.blocks if b.get("type") == "actions" for e in b.get("elements", []) if e.get("type") == "button"]
@@ -101,6 +102,7 @@ class MockSlack(MockHTTP):
         self.signing_secret = signing_secret
         self.bot_token = bot_token
         self.team = team
+        self.bot_user = "U0BOT"
         self.messages: list[SlackMessage] = []
         self.ephemeral: list[dict[str, Any]] = []
         self.reactions: list[dict[str, Any]] = []
@@ -118,6 +120,7 @@ class MockSlack(MockHTTP):
             self.post(f"/api/{method}", handler=handler, host=api)
         for method, handler in {
             "users.info": self._user_info, "users.lookupByEmail": self._lookup, "conversations.list": self._channels,
+            "conversations.history": self._history, "conversations.replies": self._replies,
         }.items():
             self.get(f"/api/{method}", handler=handler, host=api)
         self.post("/api/oauth.v2.access", handler=self._oauth, host=api)
@@ -161,13 +164,53 @@ class MockSlack(MockHTTP):
     ) -> tuple[dict[str, str], bytes]:
         """A ``block_actions`` delivery for clicking a button of a posted message."""
         button = message.button(action)
+        return self.use(message, button, user=user, response_url=response_url)
+
+    def element(self, message: SlackMessage, action_id: str) -> dict[str, Any]:
+        """An interactive element of a posted message by its original action id (bound ids keep it as ``k``)."""
+        for block in message.blocks:
+            for e in [*block.get("elements", []), *([block["accessory"]] if block.get("accessory") else [])]:
+                aid = str(e.get("action_id", ""))
+                original = json.loads(aid[6:]).get("k") if aid.startswith("shoal:") else aid
+                if action_id in (aid, original):
+                    return e
+        raise AssertionError(f"no element {action_id!r} in message {message.ts}")
+
+    def select(
+        self, message: SlackMessage, action_id: str, value: Any, *, user: str,
+        response_url: str = "https://hooks.slack.com/actions/T/1/x",
+    ) -> tuple[dict[str, str], bytes]:
+        """Use a non-button element (select, date picker, checkboxes, ...) with ``value`` (an option value or a list)."""
+        element = self.element(message, action_id)
+        kind = element["type"]
+        options = {o["value"]: o for o in [*element.get("options", []),
+                                           *[o for g in element.get("option_groups", []) for o in g.get("options", [])]]}
+        used: dict[str, Any] = {"type": kind}
+        if kind in ("static_select", "external_select", "overflow", "radio_buttons"):
+            used["selected_option"] = options.get(value, {"value": value, "text": {"type": "plain_text", "text": str(value)}})
+        elif kind in ("multi_static_select", "multi_external_select", "checkboxes"):
+            used["selected_options"] = [options.get(v, {"value": v, "text": {"type": "plain_text", "text": str(v)}}) for v in value]
+        else:
+            key = {"users_select": "selected_user", "conversations_select": "selected_conversation",
+                   "channels_select": "selected_channel", "datepicker": "selected_date", "timepicker": "selected_time",
+                   "datetimepicker": "selected_date_time", "multi_users_select": "selected_users",
+                   "multi_conversations_select": "selected_conversations",
+                   "multi_channels_select": "selected_channels"}.get(kind, "value")
+            used[key] = value
+        return self.use(message, {**element, **used}, user=user, response_url=response_url)
+
+    def use(
+        self, message: SlackMessage, element: dict[str, Any], *, user: str,
+        response_url: str = "https://hooks.slack.com/actions/T/1/x",
+    ) -> tuple[dict[str, str], bytes]:
+        """A ``block_actions`` delivery for using ``element`` (with its selection fields filled in)."""
+        act = {k: v for k, v in element.items() if k not in ("options", "option_groups", "placeholder", "style", "confirm", "url")}
         payload = {
             "type": "block_actions", "user": self._user_ref(user), "team": {"id": self.team},
             "trigger_id": f"trig-{next(self._ts)}", "response_url": response_url,
             "channel": {"id": message.channel}, "container": {"type": "message", "message_ts": message.ts},
             "message": {"ts": message.ts, "text": message.text, "blocks": message.blocks},
-            "actions": [{"action_id": button["action_id"], "block_id": "b", "type": "button",
-                         "value": button.get("value"), "action_ts": "1"}],
+            "actions": [{"block_id": "b", "action_ts": "1", **act}],
         }
         return slack_request(self.signing_secret, {"payload": payload}, form=True)
 
@@ -194,6 +237,7 @@ class MockSlack(MockHTTP):
         """An Events API ``event_callback`` delivery."""
         return slack_request(self.signing_secret, {
             "type": "event_callback", "team_id": self.team, "event_id": event_id or f"Ev{next(self._ts)}", "event": event,
+            "authorizations": [{"team_id": self.team, "user_id": self.bot_user, "is_bot": True}],
         })
 
     def command(self, text: str, *, user: str, command: str = "/shoal", channel: str = "C0GENERAL") -> tuple[dict[str, str], bytes]:
@@ -203,6 +247,24 @@ class MockSlack(MockHTTP):
             "channel_id": channel, "team_id": self.team, "trigger_id": f"trig-{next(self._ts)}",
             "response_url": "https://hooks.slack.com/commands/T/1/x",
         }, form=True)
+
+    def say(
+        self, channel: str, text: str, *, user: str, thread_ts: str | None = None, channel_type: str = "channel",
+        files: list[dict[str, Any]] | None = None, bot_id: str | None = None,
+    ) -> tuple[dict[str, str], bytes]:
+        """Someone posts a message: it is kept (conversations.history sees it) and delivered as a ``message`` event."""
+        channel_id = self._channel_id(channel)
+        ts = self._new_ts()
+        self.messages.append(SlackMessage(channel=channel_id, ts=ts, text=text, thread_ts=thread_ts, user=user))
+        event: dict[str, Any] = {"type": "message", "channel": channel_id, "user": user, "text": text, "ts": ts,
+                                 "channel_type": channel_type}
+        if thread_ts:
+            event["thread_ts"] = thread_ts
+        if files:
+            event["files"], event["subtype"] = files, "file_share"
+        if bot_id:
+            event["bot_id"] = bot_id
+        return self.event(event)
 
     def url_verification(self, challenge: str = "challenge-token") -> tuple[dict[str, str], bytes]:
         return slack_request(self.signing_secret, {"type": "url_verification", "challenge": challenge, "token": "x"})
@@ -290,6 +352,29 @@ class MockSlack(MockHTTP):
         if token is None:
             return {"ok": False, "error": "invalid_code"}
         return {"ok": True, "access_token": token, "token_type": "bot", "team": {"id": self.team, "name": "Acme"}}
+
+    def _as_api(self, m: SlackMessage) -> dict[str, Any]:
+        out: dict[str, Any] = {"type": "message", "ts": m.ts, "text": m.text}
+        if m.user:
+            out["user"] = m.user
+        else:
+            out.update({"user": self.bot_user, "bot_id": "B0SHOAL"})
+        if m.thread_ts:
+            out["thread_ts"] = m.thread_ts
+        return out
+
+    def _history(self, request: httpx.Request) -> Any:
+        channel = request.url.params.get("channel", "")
+        limit = int(request.url.params.get("limit", 100))
+        top = [m for m in self.messages if m.channel == channel and (not m.thread_ts or m.thread_ts == m.ts)]
+        return {"ok": True, "messages": [self._as_api(m) for m in reversed(top)][:limit]}
+
+    def _replies(self, request: httpx.Request) -> Any:
+        channel, ts = request.url.params.get("channel", ""), request.url.params.get("ts", "")
+        thread = [m for m in self.messages if m.channel == channel and (m.ts == ts or m.thread_ts == ts)]
+        if not thread:
+            return {"ok": False, "error": "thread_not_found"}
+        return {"ok": True, "messages": [self._as_api(m) for m in thread]}
 
     def _response_url(self, request: httpx.Request, path: str) -> Any:
         self.responses.append(self._body(request))

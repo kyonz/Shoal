@@ -256,6 +256,19 @@ class Integration:
         """An app manifest for the service with Shoal's URLs filled in (Slack app manifests), if it has one."""
         return None
 
+    # --- trigger filters --------------------------------------------------------
+
+    trigger_filter_model: ClassVar[type[BaseModel] | None] = None  # the shape of `Trigger.spec.match`
+
+    async def trigger_matches(self, ctx: ConnectionContext, event: IntegrationEvent, options: BaseModel | None) -> str | None:
+        """Apply a trigger's structured ``match`` filters (parsed with ``trigger_filter_model``; None when the
+        integration has none). Return None to fire, or why the event does not match.
+
+        Called for every trigger on the connection, also those without ``match``, so defaults apply
+        (Slack ignores other bots unless asked).
+        """
+        return None
+
     # --- approvals -----------------------------------------------------------
 
     supports_approvals: ClassVar[bool] = False
@@ -328,6 +341,7 @@ class Integration:
             "resources": describe_resources(cls.resources),
             "events": [{"name": e.name, "description": e.description, "example": e.example} for e in cls.events],
             "approvals": cls.supports_approvals,
+            "trigger_filter_schema": cls.trigger_filter_model.model_json_schema() if cls.trigger_filter_model else None,
             "install": bool(cls.install_fields),
         }
 

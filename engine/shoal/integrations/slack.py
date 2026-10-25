@@ -11,8 +11,12 @@ the bot token as the connection's secret.
   message with Approve / Reject buttons. A click resolves the step only when the
   Slack user maps to a Shoal user (``Identity.slack_id`` or a matching email)
   allowed to approve; the message then shows the outcome.
-* ``post_message`` buttons and ``request_input`` (a button opening a modal form)
-  send signals to the run; a ``wait`` step with ``signal: {name: ...}`` takes them.
+* Custom Block Kit messages hook back into the run: any interactive element
+  (buttons, selects, date and time pickers, checkboxes, overflow menus) marked
+  ``shoal: {signal: <name>}`` (or every element, with the message's ``signal``)
+  sends the run that signal with the chosen value, and a button can open a custom
+  modal whose answers are sent instead. ``request_input`` is a ready-made form. A
+  ``wait`` step with ``signal: {name: ...}`` takes them; branch on its output.
 * Mentions, messages, reactions, slash commands, shortcuts and other button
   clicks are trigger events. Thread replies wake ``wait`` steps waiting on
   ``slack:thread:<channel>:<ts>`` (``thread_key`` in ``post_message``'s output).
@@ -20,15 +24,17 @@ the bot token as the connection's secret.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
 import re
+import zlib
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlencode
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from shoal.core import clock
 from shoal.integrations.base import (
@@ -55,6 +61,8 @@ BOT_SCOPES = [
     "chat:write",
     "chat:write.public",
     "commands",
+    "files:read",
+    "groups:history",
     "groups:read",
     "im:history",
     "im:write",
@@ -63,10 +71,21 @@ BOT_SCOPES = [
     "users:read",
     "users:read.email",
 ]
-BOT_EVENTS = ["app_mention", "message.channels", "message.im", "reaction_added"]
+BOT_EVENTS = ["app_mention", "message.channels", "message.groups", "message.im", "reaction_added"]
+SKIPPED_SUBTYPES = {"message_changed", "message_deleted", "message_replied", "channel_join", "channel_leave",
+                    "channel_topic", "channel_purpose", "channel_name", "group_join", "group_leave", "pinned_item",
+                    "unpinned_item", "ekm_access_denied"}
+CHANNEL_CACHE_SECONDS = 300
+_channel_names: dict[tuple[str, str], tuple[float, dict[str, str]]] = {}
 MAX_SKEW = 300  # seconds a signed request may be old (Slack's replay window)
 RETRYABLE_ERRORS = {"ratelimited", "service_unavailable", "internal_error", "fatal_error", "request_timeout"}
-APPROVE, REJECT, OPEN, INPUT, SIGNAL = "shoal_approve", "shoal_reject", "shoal_open", "shoal_input", "shoal_signal"
+APPROVE, REJECT, OPEN, INPUT = "shoal_approve", "shoal_reject", "shoal_open", "shoal_input"
+HOOK = "shoal:"  # action_id prefix of elements bound to a run (see bind_blocks)
+INTERACTIVE = {
+    "button", "static_select", "external_select", "users_select", "conversations_select", "channels_select",
+    "multi_static_select", "multi_external_select", "multi_users_select", "multi_conversations_select",
+    "multi_channels_select", "overflow", "datepicker", "timepicker", "datetimepicker", "checkboxes", "radio_buttons",
+}
 COMMENT_VIEW, INPUT_VIEW = "shoal_approval_comment", "shoal_input"
 MENTION = re.compile(r"^\s*<@[A-Z0-9]+(?:\|[^>]*)?>\s*")
 
@@ -92,12 +111,32 @@ class SignalButton(BaseModel):
     style: Literal["primary", "danger"] | None = None
 
 
+AfterClick = Literal["disable", "keep"]
+
+BLOCKS_HELP = (
+    "Block Kit blocks (a list, or the JSON Block Kit Builder gives you), with expressions. Interactive elements can "
+    "carry a Shoal-only `shoal:` key: {signal: <name>} sends this run the signal with the chosen value, "
+    "{signal: <name>, modal: <view>} opens that modal and sends its answers, {event: true} leaves the element to "
+    "triggers (block_actions); add `after: keep` to leave the message as it is after a click."
+)
+SIGNAL_NAME = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$"
+
+
 class PostMessage(BaseModel):
     channel: str | None = Field(None, description="Channel id or #name, a user id, or an email (sent as a DM).")
     text: str = Field(description="Message text (mrkdwn); also the notification fallback when blocks are given.")
-    blocks: list[dict[str, Any]] = Field(default_factory=list, description="Block Kit blocks.")
+    blocks: list[dict[str, Any]] | str = Field(default_factory=list, description=BLOCKS_HELP)
+    signal: str | None = Field(
+        None, pattern=SIGNAL_NAME,
+        description="Send this signal to the run when someone uses any interactive element without its own `shoal:` "
+        "key. The payload is {action_id, value, label, user, channel, message_ts}.",
+    )
+    after_click: AfterClick = Field(
+        "disable", description="After a click that signals the run: replace the message's controls with who chose what "
+        "(disable), or leave the message alone (keep).",
+    )
     buttons: list[SignalButton] = Field(
-        default_factory=list, description="Buttons that send a signal to this run (only from a workflow run)."
+        default_factory=list, description="Shorthand for buttons that send a signal to this run (only from a workflow run)."
     )
     thread_ts: str | None = Field(None, description="Reply in this thread.")
     reply_broadcast: bool = False
@@ -115,14 +154,16 @@ class UpdateMessage(BaseModel):
     channel: str
     ts: str
     text: str
-    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    blocks: list[dict[str, Any]] | str = Field(default_factory=list, description=BLOCKS_HELP)
+    signal: str | None = Field(None, pattern=SIGNAL_NAME)
+    after_click: AfterClick = "disable"
 
 
 class PostEphemeral(BaseModel):
     channel: str
     user: str = Field(description="Slack user id who sees the message.")
     text: str
-    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    blocks: list[dict[str, Any]] | str = Field(default_factory=list, description="Block Kit blocks (not bound to the run).")
 
 
 class AddReaction(BaseModel):
@@ -153,6 +194,60 @@ class RequestInput(BaseModel):
     button: str = Field("Respond", max_length=75)
     title: str = Field("Shoal", max_length=24, description="Modal title.")
     thread_ts: str | None = None
+
+
+class Reply(BaseModel):
+    channel: str = Field(description="The channel of the message to answer (`event.channel`).")
+    ts: str = Field(description="The message to answer (`event.reply_ts` keeps a thread together).")
+    text: str
+    blocks: list[dict[str, Any]] | str = Field(default_factory=list, description=BLOCKS_HELP)
+    signal: str | None = Field(None, pattern=SIGNAL_NAME)
+    after_click: AfterClick = "disable"
+    broadcast: bool = Field(False, description="Also send the reply to the channel.")
+
+
+class GetConversation(BaseModel):
+    channel: str
+    thread_ts: str | None = Field(None, description="A thread's root ts: its messages; omitted, the channel's latest.")
+    limit: int = Field(20, ge=1, le=200)
+    names: bool = Field(True, description="Add each author's name (one users.info per person).")
+
+
+class ConversationMessage(BaseModel):
+    ts: str
+    user: str | None = None
+    name: str | None = None
+    text: str
+    bot: bool = False
+    thread_ts: str | None = None
+
+
+class Conversation(BaseModel):
+    channel: str
+    messages: list[ConversationMessage]
+    transcript: str = Field(description="The messages as 'name: text' lines, oldest first, for prompts.")
+
+
+class SlackTriggerFilter(BaseModel):
+    """Which Slack messages fire a trigger (``match:``). Every condition set must hold."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channels: list[str] = Field(default_factory=list, description="Channel ids or #names; empty: any channel the app is in.")
+    mentioned: bool | None = Field(None, description="True: only messages mentioning the app; False: only without.")
+    direct_messages: bool | None = Field(None, description="True: only DMs to the app; False: never DMs.")
+    contains: list[str] = Field(default_factory=list, description="Fire when the text contains any of these.")
+    contains_all: list[str] = Field(default_factory=list, description="Fire only when the text contains all of these.")
+    excludes: list[str] = Field(default_factory=list, description="Never fire when the text contains any of these.")
+    regex: str | None = Field(None, description="Fire when the text matches (search); named groups land in `event.match`.")
+    case_sensitive: bool = False
+    users: list[str] = Field(default_factory=list, description="Only from these Slack user ids.")
+    exclude_users: list[str] = Field(default_factory=list)
+    groups: list[str] = Field(default_factory=list, description="Only from people in these Shoal groups (or identities).")
+    threads: Literal["any", "top_level", "replies"] = "any"
+    include_bots: bool = Field(False, description="Also fire on other bots' messages (never on the app's own).")
+    has_files: bool | None = None
+    reactions: list[str] = Field(default_factory=list, description="reaction_added: only these emoji names.")
 
 
 class LookupUser(BaseModel):
@@ -190,6 +285,22 @@ def _context(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text[:3000]}]}
 
 
+def _without_controls(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A message's blocks with its bound controls removed (actions blocks and bound accessories)."""
+    out = []
+    for block in blocks:
+        if block.get("type") == "actions":
+            kept = [e for e in block.get("elements", []) if not str(e.get("action_id", "")).startswith(HOOK)]
+            if kept:
+                out.append({**block, "elements": kept})
+            continue
+        accessory = block.get("accessory") or {}
+        if str(accessory.get("action_id", "")).startswith(HOOK):
+            block = {k: v for k, v in block.items() if k != "accessory"}
+        out.append(block)
+    return out
+
+
 def _value(data: dict[str, Any]) -> str:
     value = json.dumps(data, separators=(",", ":"))
     if len(value) > 2000:
@@ -203,6 +314,120 @@ def _decode(value: str | None) -> dict[str, Any]:
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _blocks(value: list[dict[str, Any]] | str) -> list[dict[str, Any]]:
+    """Blocks as given, or parsed from JSON (``{"blocks": [...]}`` as Block Kit Builder copies it, or a list)."""
+    if not isinstance(value, str):
+        return [dict(b) for b in value]
+    if not value.strip():
+        return []
+    try:
+        data = json.loads(value)
+    except ValueError as exc:
+        raise IntegrationError(f"blocks is not valid JSON: {exc}") from exc
+    data = data.get("blocks", []) if isinstance(data, dict) else data
+    if not isinstance(data, list):
+        raise IntegrationError("blocks must be a list of Block Kit blocks")
+    return data
+
+
+def _pack(data: dict[str, Any]) -> str:
+    """A compact, compressed encoding for data carried in a button's value (Slack allows 2000 characters)."""
+    raw = zlib.compress(json.dumps(data, separators=(",", ":")).encode(), 9)
+    value = "z:" + base64.urlsafe_b64encode(raw).decode()
+    if len(value) > 2000:
+        raise IntegrationError("a modal bound to a button must stay under about 4 KB of Block Kit JSON")
+    return value
+
+
+def _unpack(value: str | None) -> dict[str, Any]:
+    if not value or not value.startswith("z:"):
+        return _decode(value)
+    try:
+        return json.loads(zlib.decompress(base64.urlsafe_b64decode(value[2:].encode())))
+    except (ValueError, zlib.error):
+        return {}
+
+
+def _elements(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every interactive element of a message: in actions blocks and as section accessories."""
+    out = []
+    for block in blocks:
+        if block.get("type") == "actions":
+            out += [e for e in block.get("elements", []) if isinstance(e, dict)]
+        elif block.get("type") == "section" and isinstance(block.get("accessory"), dict):
+            out.append(block["accessory"])
+    return [e for e in out if e.get("type") in INTERACTIVE]
+
+
+def bind_blocks(blocks: list[dict[str, Any]], run_id: str | None, *, signal: str | None, after: str) -> list[dict[str, Any]]:
+    """Wire interactive elements to a run: a bound element's action_id carries ``shoal:{run, signal, ...}``.
+
+    The Shoal-only ``shoal:`` key is removed before the blocks go to Slack. Elements left unbound
+    (no ``shoal:`` key and no message ``signal``, or ``shoal: {event: true}``) reach triggers as
+    ``block_actions`` events.
+    """
+    blocks = json.loads(json.dumps(blocks))  # never change the caller's (rendered) blocks
+    for index, element in enumerate(_elements(blocks)):
+        hook = element.pop("shoal", None)
+        if hook is None and (not signal or element.get("url")):
+            continue
+        hook = {"signal": hook} if isinstance(hook, str) else dict(hook or {})
+        if hook.get("event"):
+            continue
+        name = hook.get("signal") or signal
+        if not name or not re.match(SIGNAL_NAME, str(name)):
+            raise IntegrationError(f"element {element.get('action_id') or index}: `shoal:` needs a valid `signal` name")
+        if not run_id:
+            raise IntegrationError("elements bound to a signal need a workflow run, so post them from a workflow")
+        bound: dict[str, Any] = {"r": run_id, "n": name, "k": element.get("action_id") or str(index)}
+        if (hook.get("after") or after) == "keep":
+            bound["a"] = "k"
+        modal = hook.get("modal")
+        if modal is not None:
+            if element.get("type") != "button":
+                raise IntegrationError("only buttons can open a modal")
+            element["value"] = _pack({"v": modal, "t": element.get("text", {}).get("text")})
+            bound["m"] = 1
+        action_id = HOOK + json.dumps(bound, separators=(",", ":"))
+        if len(action_id) > 255:
+            raise IntegrationError(f"action_id {bound['k']!r} is too long to bind (keep action ids and signal names short)")
+        element["action_id"] = action_id
+    return blocks
+
+
+def _hook(action_id: str | None) -> dict[str, Any] | None:
+    if not action_id or not action_id.startswith(HOOK):
+        return None
+    return _decode(action_id[len(HOOK):]) or None
+
+
+def _option(option: dict[str, Any] | None) -> tuple[Any, Any]:
+    option = option or {}
+    return option.get("value"), (option.get("text") or {}).get("text")
+
+
+def action_value(act: dict[str, Any]) -> tuple[Any, Any]:
+    """(value, label) of a used element, for every interactive element type."""
+    kind = act.get("type")
+    if kind == "button":
+        return act.get("value"), (act.get("text") or {}).get("text")
+    if kind in ("static_select", "external_select", "overflow", "radio_buttons"):
+        return _option(act.get("selected_option"))
+    if kind in ("multi_static_select", "multi_external_select", "checkboxes"):
+        options = act.get("selected_options") or []
+        return [o.get("value") for o in options], ", ".join(str((o.get("text") or {}).get("text")) for o in options)
+    single = {"users_select": "selected_user", "conversations_select": "selected_conversation",
+              "channels_select": "selected_channel", "datepicker": "selected_date", "timepicker": "selected_time",
+              "datetimepicker": "selected_date_time"}
+    if kind in single:
+        return act.get(single[kind]), act.get(single[kind])
+    multi = {"multi_users_select": "selected_users", "multi_conversations_select": "selected_conversations",
+             "multi_channels_select": "selected_channels"}
+    if kind in multi:
+        return act.get(multi[kind]) or [], None
+    return act.get("value"), None
 
 
 def _form(body: bytes) -> dict[str, str]:
@@ -232,22 +457,13 @@ def _view_values(view: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for block in (view.get("state") or {}).get("values", {}).values():
         for action_id, element in block.items():
-            kind = element.get("type")
-            if kind == "static_select":
-                out[action_id] = (element.get("selected_option") or {}).get("value")
-            elif kind == "number_input":
+            if element.get("type") == "number_input":
                 raw = element.get("value")
                 out[action_id] = None if raw in (None, "") else float(raw) if "." in raw else int(raw)
-            elif kind in ("multi_static_select",):
-                out[action_id] = [o.get("value") for o in element.get("selected_options") or []]
-            elif kind == "users_select":
-                out[action_id] = element.get("selected_user")
-            elif kind == "conversations_select":
-                out[action_id] = element.get("selected_conversation")
-            elif kind == "datepicker":
-                out[action_id] = element.get("selected_date")
-            else:
+            elif element.get("type") in ("plain_text_input", "email_text_input", "url_text_input", "rich_text_input"):
                 out[action_id] = element.get("value")
+            else:
+                out[action_id] = action_value(element)[0]
     return out
 
 
@@ -277,12 +493,16 @@ class SlackIntegration(Integration):
     title = "Slack"
     description = "Messages with buttons and forms, interactive approvals, mentions, slash commands and reactions."
     connection_model = SlackConnection
+    trigger_filter_model = SlackTriggerFilter
     supports_approvals = True
     install_fields = ["bot_token"]
     events = [
         EventDef("app_mention", "Someone mentioned the app (`event.command_text` is the text after the mention).",
                  {"channel": "C0123", "user": "U0123", "text": "<@U0BOT> deploy api", "command_text": "deploy api"}),
-        EventDef("message", "A message in a channel the app is in, or a DM to the app (bot messages are skipped)."),
+        EventDef("message", "A message in a channel the app is in, or a DM to the app. Wire a channel to a workflow "
+                 "with `match:` filters; `event.reply_ts` answers in the thread.",
+                 {"channel": "C0123", "user": "U0123", "text": "<@U0BOT> what broke?", "command_text": "what broke?",
+                  "mentioned": True, "is_dm": False, "reply_ts": "1700000000.000100"}),
         EventDef("reaction_added", "Someone added an emoji reaction (`event.reaction`, `event.item`)."),
         EventDef("slash_command", "The app's slash command (`event.command`, `event.text`, `event.args`).",
                  {"command": "/shoal", "text": "deploy api", "args": ["deploy", "api"], "user_id": "U0123"}),
@@ -353,18 +573,17 @@ class SlackIntegration(Integration):
     @action(description="Post a message (text and optional Block Kit blocks, optionally buttons that signal this run).",
             input=PostMessage, output=MessageRef)
     async def post_message(self, ctx: ConnectionContext, p: PostMessage) -> MessageRef:
-        blocks = list(p.blocks)
+        blocks = _blocks(p.blocks)
         if p.buttons:
-            if not ctx.run_id:
-                raise IntegrationError("buttons signal a workflow run, so post_message with buttons only works in a run")
             if not blocks:
                 blocks.append(_section(p.text))
-            blocks.append({"type": "actions", "block_id": "shoal_signal", "elements": [
-                {"type": "button", "action_id": f"{SIGNAL}:{i}", "text": _plain(b.label, 75),
-                 "value": _value({"r": ctx.run_id, "n": b.signal, "p": b.payload, "l": b.label}),
-                 **({"style": b.style} if b.style else {})}
+            blocks.append({"type": "actions", "elements": [
+                {"type": "button", "action_id": f"b{i}", "text": _plain(b.label, 75),
+                 "value": (b.payload if isinstance(b.payload, str) else json.dumps(b.payload)) if b.payload is not None else b.label,
+                 "shoal": {"signal": b.signal}, **({"style": b.style} if b.style else {})}
                 for i, b in enumerate(p.buttons)
             ]})
+        blocks = bind_blocks(blocks, ctx.run_id, signal=p.signal, after=p.after_click)
         body: dict[str, Any] = {"channel": await self._channel(ctx, p.channel), "text": p.text,
                                 "unfurl_links": p.unfurl_links}
         if blocks:
@@ -373,11 +592,13 @@ class SlackIntegration(Integration):
             body["thread_ts"], body["reply_broadcast"] = p.thread_ts, p.reply_broadcast
         return await self._post(ctx, body)
 
-    @action(description="Replace a message's text and blocks.", input=UpdateMessage, output=MessageRef)
+    @action(description="Replace a message's text and blocks (blocks can be bound to the run like post_message's).",
+            input=UpdateMessage, output=MessageRef)
     async def update_message(self, ctx: ConnectionContext, p: UpdateMessage) -> MessageRef:
         body: dict[str, Any] = {"channel": p.channel, "ts": p.ts, "text": p.text}
-        if p.blocks:
-            body["blocks"] = p.blocks
+        blocks = bind_blocks(_blocks(p.blocks), ctx.run_id, signal=p.signal, after=p.after_click)
+        if blocks:
+            body["blocks"] = blocks
         data = await self._api(ctx, "chat.update", body)
         return MessageRef(channel=data["channel"], ts=data["ts"], thread_key=thread_key(data["channel"], data["ts"]))
 
@@ -385,7 +606,7 @@ class SlackIntegration(Integration):
     async def post_ephemeral(self, ctx: ConnectionContext, p: PostEphemeral) -> Ok:
         body: dict[str, Any] = {"channel": p.channel, "user": p.user, "text": p.text}
         if p.blocks:
-            body["blocks"] = p.blocks
+            body["blocks"] = _blocks(p.blocks)
         await self._api(ctx, "chat.postEphemeral", body)
         return Ok()
 
@@ -411,6 +632,39 @@ class SlackIntegration(Integration):
         if p.thread_ts:
             body["thread_ts"] = p.thread_ts
         return await self._post(ctx, body)
+
+    @action(description="Reply to a message in its thread (bots: `ts: \"{{ event.reply_ts }}\"`).", input=Reply, output=MessageRef)
+    async def reply(self, ctx: ConnectionContext, p: Reply) -> MessageRef:
+        return await self.post_message(ctx, PostMessage(
+            channel=p.channel, text=p.text, blocks=p.blocks, signal=p.signal, after_click=p.after_click,
+            thread_ts=p.ts, reply_broadcast=p.broadcast,
+        ))
+
+    @action(description="Read a thread or a channel's latest messages, oldest first, as context for an agent.",
+            input=GetConversation, output=Conversation, mutating=False)
+    async def get_conversation(self, ctx: ConnectionContext, p: GetConversation) -> Conversation:
+        if p.thread_ts:
+            data = await self._api(ctx, "conversations.replies", params={"channel": p.channel, "ts": p.thread_ts, "limit": p.limit})
+            raw = data.get("messages", [])[-p.limit:]
+        else:
+            data = await self._api(ctx, "conversations.history", params={"channel": p.channel, "limit": p.limit})
+            raw = list(reversed(data.get("messages", [])))
+        names: dict[str, str | None] = {}
+        messages = []
+        for m in raw:
+            user = m.get("user")
+            if p.names and user and user not in names:
+                try:
+                    info = self._user((await self._api(ctx, "users.info", params={"user": user}))["user"])
+                    names[user] = info.real_name or info.name
+                except IntegrationError:
+                    names[user] = None
+            messages.append(ConversationMessage(
+                ts=m.get("ts", ""), user=user, name=names.get(user) or (m.get("bot_profile") or {}).get("name") or m.get("username"),
+                text=m.get("text") or "", bot=bool(m.get("bot_id")), thread_ts=m.get("thread_ts"),
+            ))
+        transcript = "\n".join(f"{m.name or m.user or 'unknown'}: {m.text}" for m in messages)
+        return Conversation(channel=p.channel, messages=messages, transcript=transcript)
 
     @action(description="Find a Slack user by email.", input=LookupUser, output=SlackUser, mutating=False)
     async def lookup_user(self, ctx: ConnectionContext, p: LookupUser) -> SlackUser:
@@ -581,25 +835,129 @@ class SlackIntegration(Integration):
             return []  # url_verification is answered in webhook_reply
         event = data.get("event") or {}
         kind = event.get("type")
-        if kind == "message" and (event.get("bot_id") or event.get("subtype")):
-            return []  # bot messages (ours included), edits and deletions
         if kind not in ("app_mention", "message", "reaction_added"):
             return []
+        bot_user = next((a.get("user_id") for a in data.get("authorizations") or [] if a.get("is_bot")), None)
+        if kind == "message" and (event.get("subtype") in SKIPPED_SUBTYPES or event.get("hidden")):
+            return []  # edits, deletions and channel housekeeping
+        if bot_user and event.get("user") == bot_user:
+            return []  # the app's own messages and reactions never come back as events
         channel = event.get("channel") or (event.get("item") or {}).get("channel")
-        out = {**event, "team_id": data.get("team_id"), "event_id": data.get("event_id"), "channel": channel}
+        out = {**event, "team_id": data.get("team_id"), "event_id": data.get("event_id"), "channel": channel,
+               "bot_user_id": bot_user}
         keys = []
         if kind == "reaction_added":
             item = event.get("item") or {}
             if channel and item.get("ts"):
                 keys.append(f"slack:message:{channel}:{item['ts']}")
         else:
-            out["command_text"] = MENTION.sub("", event.get("text") or "").strip()
-            if channel and event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
-                keys.append(thread_key(channel, event["thread_ts"]))
+            text = event.get("text") or ""
+            thread_ts = event.get("thread_ts")
+            out.update({
+                "command_text": MENTION.sub("", text).strip(),
+                "mentioned": kind == "app_mention" or bool(bot_user and f"<@{bot_user}" in text),
+                "is_dm": event.get("channel_type") == "im",
+                "is_reply": bool(thread_ts and thread_ts != event.get("ts")),
+                "reply_ts": thread_ts or event.get("ts"),
+                "from_bot": bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
+                "has_files": bool(event.get("files")),
+                "files": [{"name": f.get("name"), "mimetype": f.get("mimetype"), "url": f.get("url_private")}
+                          for f in event.get("files") or []],
+            })
+            if channel and out["is_reply"]:
+                keys.append(thread_key(channel, thread_ts))
             if channel:
                 keys.append(f"slack:channel:{channel}")
         return [IntegrationEvent(type=kind, id=data.get("event_id"), data=out, wake_keys=keys,
                                  actor={"slack_id": event["user"]} if event.get("user") else {})]
+
+    # ------------------------------------------------------------------ trigger filters
+
+    async def _channel_ids(self, ctx: ConnectionContext, wanted: list[str]) -> set[str]:
+        """Channel ids for ids and #names (names resolved with conversations.list, cached for five minutes)."""
+        ids = {c for c in wanted if not c.startswith("#")}
+        names = [c[1:] for c in wanted if c.startswith("#")]
+        if names:
+            key = (ctx.tenant_id, ctx.name)
+            cached = _channel_names.get(key)
+            if cached is None or clock.now().timestamp() - cached[0] > CHANNEL_CACHE_SECONDS:
+                found: dict[str, str] = {}
+                cursor = None
+                for _ in range(20):
+                    page = await self.list_channels(ctx, ChannelFilter(), cursor, 200)
+                    found.update({c["name"]: c["id"] for c in page.items if c.get("name")})
+                    if not page.next_cursor:
+                        break
+                    cursor = page.next_cursor
+                cached = (clock.now().timestamp(), found)
+                _channel_names[key] = cached
+            ids |= {cached[1][n] for n in names if n in cached[1]}
+        return ids
+
+    async def trigger_matches(self, ctx: ConnectionContext, event: IntegrationEvent, options: BaseModel | None) -> str | None:
+        f = options if isinstance(options, SlackTriggerFilter) else SlackTriggerFilter()
+        d = event.data
+        if event.type not in ("message", "app_mention", "reaction_added"):
+            return None  # commands, clicks and forms: only the trigger's own filter applies
+        if d.get("from_bot") and not f.include_bots:
+            return "message from a bot"
+        if f.channels and d.get("channel") not in await self._channel_ids(ctx, f.channels):
+            return "another channel"
+        user = d.get("user")
+        if f.users and user not in f.users:
+            return "from someone not in `users`"
+        if user and user in f.exclude_users:
+            return "from someone in `exclude_users`"
+        if event.type == "reaction_added":
+            if f.reactions and d.get("reaction") not in f.reactions:
+                return "another reaction"
+            return await self._group_check(ctx, event, f)
+        if f.mentioned is not None and bool(d.get("mentioned")) != f.mentioned:
+            return "the app is not mentioned" if f.mentioned else "the app is mentioned"
+        if f.direct_messages is not None and bool(d.get("is_dm")) != f.direct_messages:
+            return "not a direct message" if f.direct_messages else "a direct message"
+        if f.threads == "top_level" and d.get("is_reply"):
+            return "a thread reply"
+        if f.threads == "replies" and not d.get("is_reply"):
+            return "not a thread reply"
+        if f.has_files is not None and bool(d.get("has_files")) != f.has_files:
+            return "files do not match `has_files`"
+        text = d.get("text") or ""
+        folded = text if f.case_sensitive else text.lower()
+        fold = (lambda w: w) if f.case_sensitive else (lambda w: w.lower())
+        if f.contains and not any(fold(w) in folded for w in f.contains):
+            return "text contains none of `contains`"
+        if f.contains_all and not all(fold(w) in folded for w in f.contains_all):
+            return "text lacks some of `contains_all`"
+        if any(fold(w) in folded for w in f.excludes):
+            return "text contains one of `excludes`"
+        if f.regex:
+            try:
+                found = re.search(f.regex, d.get("command_text") or text, 0 if f.case_sensitive else re.IGNORECASE)
+            except re.error as exc:
+                return f"invalid match: regex: {exc}"
+            if not found:
+                return "text does not match `regex`"
+            d["match"] = {"text": found.group(0), "groups": list(found.groups()), **found.groupdict()}
+        return await self._group_check(ctx, event, f)
+
+    async def _group_check(self, ctx: ConnectionContext, event: IntegrationEvent, f: SlackTriggerFilter) -> str | None:
+        if not f.groups:
+            return None
+        interactions = getattr(ctx.engine, "interactions", None)
+        if interactions is None:
+            return "groups need the Shoal engine"
+        initiator, principal = await interactions.person(ctx.tenant_id, event.actor, source=self.key)
+        names = {str(initiator.get("identity") or "").lower()}
+        if principal is not None and principal.user_id:
+            for group_id in await ctx.engine.directory.groups_of(principal.user_id):
+                try:
+                    names.add((await ctx.engine.directory.get_group(ctx.tenant_id, group_id)).display_name.lower())
+                except Exception:  # a group deleted meanwhile
+                    continue
+        if names & {g.lower() for g in f.groups}:
+            return None
+        return "from someone outside `groups`"
 
     async def _parse_interactive(self, ctx: ConnectionContext, data: dict[str, Any]) -> list[IntegrationEvent]:
         kind = data.get("type")
@@ -617,9 +975,17 @@ class SlackIntegration(Integration):
                                          actor=await self._actor(ctx, user))]
             if action_id in (OPEN, INPUT):
                 return []  # a link, or a form that opens in webhook_reply
-            if action_id.startswith(SIGNAL):
-                interaction = Interaction(kind="signal", run_id=value.get("r", ""), signal=value.get("n"),
-                                          payload={"value": value.get("p"), "label": value.get("l"), "user": self._who(user)})
+            hook = _hook(action_id)
+            if hook is not None:
+                if hook.get("m"):
+                    return []  # the bound modal opens in webhook_reply; its submission signals the run
+                chosen, label = action_value(act)
+                message = data.get("message") or {}
+                interaction = Interaction(kind="signal", run_id=hook.get("r", ""), signal=hook.get("n"), payload={
+                    "action_id": hook.get("k"), "block_id": act.get("block_id"), "value": chosen, "label": label,
+                    "user": self._who(user), "channel": (data.get("channel") or {}).get("id"),
+                    "message_ts": message.get("ts"),
+                })
                 return [IntegrationEvent(type="block_actions", id=data.get("trigger_id"), interaction=interaction,
                                          actor=await self._actor(ctx, user))]
             return [self._generic_action(data, act)]
@@ -631,8 +997,10 @@ class SlackIntegration(Integration):
                 interaction = Interaction(kind="approval", run_id=meta.get("r", ""), step_id=meta.get("s"),
                                           approved=bool(meta.get("a")), comment=values.get("comment") or None)
             elif view.get("callback_id") == INPUT_VIEW:
-                interaction = Interaction(kind="signal", run_id=meta.get("r", ""), signal=meta.get("n"),
-                                          payload={"values": values, "user": self._who(user)})
+                payload: dict[str, Any] = {"values": values, "user": self._who(user)}
+                if meta.get("k"):
+                    payload["action_id"] = meta["k"]
+                interaction = Interaction(kind="signal", run_id=meta.get("r", ""), signal=meta.get("n"), payload=payload)
             else:
                 return [IntegrationEvent(type="view_submission", id=view.get("id"), data={
                     "callback_id": view.get("callback_id"), "private_metadata": view.get("private_metadata"),
@@ -660,8 +1028,8 @@ class SlackIntegration(Integration):
             type="block_actions",
             id=data.get("trigger_id"),
             data={
-                "action_id": act.get("action_id"), "block_id": act.get("block_id"), "value": act.get("value"),
-                "selected": (act.get("selected_option") or {}).get("value"), "user": self._who(data.get("user") or {}),
+                "action_id": act.get("action_id"), "block_id": act.get("block_id"), "value": action_value(act)[0],
+                "label": action_value(act)[1], "user": self._who(data.get("user") or {}),
                 "channel": channel, "message_ts": message.get("ts"), "thread_ts": message.get("thread_ts"),
                 "trigger_id": data.get("trigger_id"), "response_url": data.get("response_url"),
             },
@@ -715,21 +1083,35 @@ class SlackIntegration(Integration):
         act = (data.get("actions") or [{}])[0]
         action_id = act.get("action_id") or ""
         value = _decode(act.get("value"))
+        hook = _hook(action_id)
         try:
             if action_id == INPUT:
                 await self._open_input(ctx, data, value)
             elif action_id in (APPROVE, REJECT) and value.get("c"):
                 await self._open_comment(ctx, data, value, approved=action_id == APPROVE)
+            elif hook is not None and hook.get("m"):
+                await self._open_bound_modal(ctx, data, hook, _unpack(act.get("value")))
             elif outcome is not None and not outcome.get("ok"):
                 await self._respond(ctx, data, {"response_type": "ephemeral", "replace_original": False,
                                                 "text": f":no_entry: {outcome.get('error', 'not allowed')}"})
-            elif outcome is not None and action_id.startswith(SIGNAL):
-                blocks = [b for b in (data.get("message") or {}).get("blocks", []) if b.get("block_id") != "shoal_signal"]
-                blocks.append(_context(f"*{outcome.get('by') or 'Someone'}* chose *{value.get('l')}*"))
-                await self._respond(ctx, data, {"replace_original": True, "blocks": blocks,
-                                                "text": (data.get("message") or {}).get("text") or value.get("l") or ""})
+            elif outcome is not None and hook is not None and hook.get("a") != "k":
+                message = data.get("message") or {}
+                label = action_value(act)[1] or action_value(act)[0]
+                blocks = _without_controls(message.get("blocks") or [])
+                blocks.append(_context(f"*{outcome.get('by') or 'Someone'}* chose *{label}*"))
+                await self._respond(ctx, data, {"replace_original": True, "blocks": blocks, "text": message.get("text") or str(label)})
         except Exception as exc:  # Slack only needs the 200; a failed follow-up is logged
             log.warning("slack follow-up for %s failed: %s", action_id, exc)
+
+    async def _open_bound_modal(self, ctx: ConnectionContext, data: dict[str, Any], hook: dict[str, Any], packed: dict[str, Any]) -> None:
+        view = dict(packed.get("v") or {})
+        view.setdefault("type", "modal")
+        view.setdefault("title", _plain(packed.get("t") or "Shoal", 24))
+        if any(b.get("type") == "input" for b in view.get("blocks", [])):
+            view.setdefault("submit", _plain("Submit", 24))
+        view["callback_id"] = INPUT_VIEW
+        view["private_metadata"] = json.dumps({"r": hook.get("r"), "n": hook.get("n"), "k": hook.get("k")})
+        await self._api(ctx, "views.open", {"trigger_id": data.get("trigger_id"), "view": view})
 
     async def _respond(self, ctx: ConnectionContext, data: dict[str, Any], message: dict[str, Any]) -> None:
         url = data.get("response_url")

@@ -89,7 +89,7 @@ async def test_post_message_dm_by_email_and_signal_buttons_need_a_run(slack):
     out = await harness.call("post_message", {"channel": "fox@acme.test", "text": "hello"})
     assert out["channel"] == "D_FOX" and out["thread_key"] == f"slack:thread:D_FOX:{out['ts']}"
     assert slack.last_message("D_FOX").text == "hello"
-    with pytest.raises(IntegrationError, match="only works in a run"):
+    with pytest.raises(IntegrationError, match="need a workflow run"):
         await harness.call("post_message", {"channel": "#deploys", "text": "pick", "buttons": [{"label": "Go", "signal": "go"}]})
     with pytest.raises(IntegrationError, match="no bot token"):
         await IntegrationHarness(SlackIntegration, config={}, http=slack).call("post_message", {"channel": "C1", "text": "x"})
@@ -245,6 +245,7 @@ async def test_buttons_that_signal_the_run(world, slack):
     assert (await engine.store.get_step(run.id, "wait")).output["payload"]["value"] == "rollback"
     replaced = slack.responses[-1]
     assert replaced["replace_original"] and "chose *Roll back*" in json.dumps(replaced["blocks"])
+    assert "actions" not in json.dumps(replaced["blocks"])
 
 
 # --------------------------------------------------------------------------- events and commands
@@ -267,7 +268,7 @@ async def test_mentions_and_slash_commands_fire_triggers(world, slack):
     assert run.inputs == {"text": "ship it"} and run.initiator["identity"] == "dana"
 
     # the app's own messages never trigger anything
-    assert (await deliver(engine, tenant, slack.event({"type": "message", "bot_id": "B1", "channel": "C1", "text": "x", "ts": "6"})))["events"] == 0
+    assert (await deliver(engine, tenant, slack.event({"type": "message", "user": "U0BOT", "channel": "C1", "text": "x", "ts": "6"})))["events"] == 0
 
     result = await deliver(engine, tenant, slack.command("echo hello there", user="U_FOX"))
     reply = result["reply"].body
@@ -362,3 +363,169 @@ async def test_example_ship_workflow(world, slack):
     assert (await engine.store.get_run(tenant.id, run_id)).status == "succeeded"
     assert slack.last_message("#deploys").text == ":rocket: api 2.0.1 approved by Dana Scully"
     assert "Approved by Dana Scully: go" in approval.all_text()
+
+
+# --------------------------------------------------------------------------- custom messages that hook back
+
+
+CUSTOM = [
+    {"type": "header", "text": {"type": "plain_text", "text": "Release {{ inputs.version }}"}},
+    {"type": "section", "text": {"type": "mrkdwn", "text": "Pick an environment"},
+     "accessory": {"type": "static_select", "action_id": "env", "shoal": {"signal": "env"},
+                   "options": [{"text": {"type": "plain_text", "text": "Staging"}, "value": "staging"},
+                               {"text": {"type": "plain_text", "text": "Production"}, "value": "prod"}]}},
+    {"type": "actions", "elements": [
+        {"type": "datepicker", "action_id": "when", "shoal": {"signal": "when", "after": "keep"}},
+        {"type": "button", "action_id": "notes", "text": {"type": "plain_text", "text": "Add notes"},
+         "shoal": {"signal": "notes", "modal": {"title": {"type": "plain_text", "text": "Notes"}, "blocks": [
+             {"type": "input", "block_id": "n", "label": {"type": "plain_text", "text": "Notes"},
+              "element": {"type": "plain_text_input", "action_id": "notes", "multiline": True}}]}}},
+        {"type": "button", "action_id": "docs", "text": {"type": "plain_text", "text": "Docs"}, "url": "https://example.com"},
+        {"type": "button", "action_id": "page_oncall", "text": {"type": "plain_text", "text": "Page"}, "shoal": {"event": True}},
+    ]},
+]
+
+
+async def test_custom_blocks_hook_back_into_the_run(world, slack):
+    engine, tenant = world
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "page", {"steps": [{"id": "s", "type": "set", "values": {}}]}))
+    await engine.store.apply_resource(tenant.id, doc("Trigger", "pager", {
+        "connection": "slack", "event": "block_actions", "filter": "{{ event.action_id == 'page_oncall' }}", "workflow": "page"}))
+    run = await start(engine, tenant, [
+        {"id": "post", "type": "action", "action": "slack.post_message", "with": {"text": "Release", "blocks": CUSTOM}},
+        {"id": "env", "type": "wait", "signal": {"name": "env"}},
+        {"id": "prod", "type": "set", "if": "{{ steps.env.output.payload.value == 'prod' }}", "values": {"careful": True}},
+        {"id": "when", "type": "wait", "signal": {"name": "when"}},
+        {"id": "notes", "type": "wait", "signal": {"name": "notes"}},
+    ], inputs={})
+    message = slack.last_message("#deploys")
+    assert "\"shoal\":" not in json.dumps(message.blocks)  # the Shoal-only keys never reach Slack
+    assert slack.element(message, "docs")["action_id"] == "docs"  # links and event elements stay unbound
+    assert slack.element(message, "page_oncall")["action_id"] == "page_oncall"
+
+    await deliver(engine, tenant, slack.select(message, "env", "prod", user="U_DANA"))
+    await engine.run_until_idle()
+    env = (await engine.store.get_step(run.id, "env")).output["payload"]
+    assert env["value"] == "prod" and env["label"] == "Production" and env["action_id"] == "env"
+    assert (await engine.store.get_step(run.id, "prod")).output == {"careful": True}
+    assert "chose *Production*" in json.dumps(slack.responses[-1]["blocks"])
+
+    await deliver(engine, tenant, slack.select(message, "when", "2026-11-02", user="U_DANA"))
+    await engine.run_until_idle()
+    assert (await engine.store.get_step(run.id, "when")).output["payload"]["value"] == "2026-11-02"
+    assert len(slack.responses) == 1  # after: keep leaves the message alone
+
+    await deliver(engine, tenant, slack.click(message, "Add notes", user="U_DANA"))
+    view = slack.views[-1]
+    assert view["title"]["text"] == "Notes" and view["callback_id"] == "shoal_input"
+    await deliver(engine, tenant, slack.submit(view, {"notes": "ship it"}, user="U_DANA"))
+    await engine.run_until_idle()
+    notes = (await engine.store.get_step(run.id, "notes")).output["payload"]
+    assert notes["values"] == {"notes": "ship it"} and notes["action_id"] == "notes"
+    assert (await engine.store.get_run(tenant.id, run.id)).status == "succeeded"
+
+    result = await deliver(engine, tenant, slack.click(message, "Page", user="U_FOX"))
+    assert result["triggers"][0]["status"] == "fired"
+
+
+async def test_blocks_as_json_and_message_level_signal(world, slack):
+    engine, tenant = world
+    builder_json = json.dumps({"blocks": [{"type": "actions", "elements": [
+        {"type": "button", "text": {"type": "plain_text", "text": "Yes"}, "value": "yes"},
+        {"type": "button", "text": {"type": "plain_text", "text": "No"}, "value": "no"}]}]})
+    run = await start(engine, tenant, [
+        {"id": "post", "type": "action", "action": "slack.post_message",
+         "with": {"text": "Ok?", "blocks": builder_json, "signal": "answer"}},
+        {"id": "answer", "type": "wait", "signal": {"name": "answer"}},
+    ])
+    await deliver(engine, tenant, slack.click(slack.last_message("#deploys"), "No", user="U_DANA"))
+    await engine.run_until_idle()
+    assert (await engine.store.get_step(run.id, "answer")).output["payload"]["value"] == "no"
+    harness = IntegrationHarness(SlackIntegration, config={"bot_token": slack.bot_token}, http=slack)
+    with pytest.raises(IntegrationError, match="not valid JSON"):
+        await harness.call("post_message", {"channel": "C1", "text": "x", "blocks": "{nope"})
+
+
+# --------------------------------------------------------------------------- channel bots
+
+
+async def bot_world(engine, tenant, match: dict, **extra) -> None:
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "bot", {
+        "inputs": {"text": {"type": "string"}}, "steps": [{"id": "s", "type": "set", "values": {"text": "{{ inputs.text }}"}}]}))
+    await engine.store.apply_resource(tenant.id, doc("Trigger", "bot", {
+        "connection": "slack", "event": "message", "workflow": "bot", "match": match,
+        "inputs": {"text": "{{ event.command_text }}"}, **extra}))
+
+
+async def fired(engine, tenant, delivery) -> bool:
+    result = await deliver(engine, tenant, delivery)
+    return any(t["status"] == "fired" for t in result["triggers"])
+
+
+async def test_channel_bot_filters(world, slack):
+    engine, tenant = world
+    slack.channel("#help", "C_HELP")
+    await bot_world(engine, tenant, {"channels": ["#help"], "contains": ["deploy", "rollback"], "excludes": ["ignore"],
+                                     "threads": "top_level"})
+    assert await fired(engine, tenant, slack.say("#help", "Can someone DEPLOY api?", user="U_FOX"))
+    assert not await fired(engine, tenant, slack.say("#deploys", "deploy api", user="U_FOX"))  # another channel
+    assert not await fired(engine, tenant, slack.say("#help", "hello", user="U_FOX"))
+    assert not await fired(engine, tenant, slack.say("#help", "deploy, ignore me", user="U_FOX"))
+    assert not await fired(engine, tenant, slack.say("#help", "deploy", user="U_FOX", thread_ts="1700000000.000001"))
+    assert not await fired(engine, tenant, slack.say("#help", "deploy", user="U_OTHERBOT", bot_id="B9"))  # bots skipped
+
+    await bot_world(engine, tenant, {"mentioned": True, "regex": r"^deploy (?P<service>[\w-]+)$", "groups": ["release-managers"]})
+    assert not await fired(engine, tenant, slack.say("#help", "deploy api", user="U_DANA"))  # not mentioned
+    assert not await fired(engine, tenant, slack.say("#help", "<@U0BOT> deploy api", user="U_DANA"))  # not in the group
+    group = await engine.directory.create_group(tenant.id, "release-managers")
+    await engine.directory.add_group_members(tenant.id, group.id, [(await engine.directory.find_user(tenant.id, username="dana")).id])
+    result = await deliver(engine, tenant, slack.say("#help", "<@U0BOT> deploy api", user="U_DANA"))
+    run = await engine.store.get_run(tenant.id, result["triggers"][0]["run_id"])
+    assert run.inputs == {"text": "deploy api"} and run.context["event"]["match"]["service"] == "api"
+
+    await bot_world(engine, tenant, {"direct_messages": True, "has_files": True})
+    assert await fired(engine, tenant, slack.say("D_FOX", "logs attached", user="U_FOX", channel_type="im", files=[{"name": "a.log"}]))
+    assert not await fired(engine, tenant, slack.say("D_FOX", "no files", user="U_FOX", channel_type="im"))
+
+    await bot_world(engine, tenant, {"regex": "("})
+    result = await deliver(engine, tenant, slack.say("#help", "x", user="U_FOX"))
+    assert result["triggers"][0]["status"] == "error" and "regex" in result["triggers"][0]["reason"]
+    await bot_world(engine, tenant, {"no_such_filter": 1})
+    result = await deliver(engine, tenant, slack.say("#help", "x", user="U_FOX"))
+    assert "invalid match" in result["triggers"][0]["reason"]
+
+
+async def test_channel_bot_rate_limit_per_user(world, slack):
+    engine, tenant = world
+    await bot_world(engine, tenant, {}, rate_limit={"max": 2, "per": "1m", "key": "{{ event.user }}"})
+    outcomes = [await fired(engine, tenant, slack.say("#deploys", f"m{i}", user="U_FOX")) for i in range(3)]
+    assert outcomes == [True, True, False]
+    assert await fired(engine, tenant, slack.say("#deploys", "other person", user="U_DANA"))
+    clock.advance(timedelta(minutes=1, seconds=1))
+    assert await fired(engine, tenant, slack.say("#deploys", "later", user="U_FOX"))
+
+
+async def test_bot_replies_in_thread_with_conversation_context(world, slack):
+    engine, tenant = world
+    await engine.store.apply_resource(tenant.id, doc("Workflow", "answer", {
+        "inputs": {"channel": {"type": "string"}, "ts": {"type": "string"}},
+        "steps": [
+            {"id": "ctx", "type": "action", "action": "slack.get_conversation",
+             "with": {"channel": "{{ inputs.channel }}", "thread_ts": "{{ inputs.ts }}"}},
+            {"id": "say", "type": "action", "action": "slack.reply", "with": {
+                "channel": "{{ inputs.channel }}", "ts": "{{ inputs.ts }}",
+                "text": "I read {{ steps.ctx.output.messages | length }} messages"}},
+        ]}))
+    await engine.store.apply_resource(tenant.id, doc("Trigger", "answer", {
+        "connection": "slack", "event": "message", "workflow": "answer", "match": {"mentioned": True},
+        "inputs": {"channel": "{{ event.channel }}", "ts": "{{ event.reply_ts }}"}}))
+    root = slack.say("#deploys", "the build is red", user="U_FOX")
+    await deliver(engine, tenant, root)
+    root_ts = slack.last_message("#deploys").ts
+    await deliver(engine, tenant, slack.say("#deploys", "<@U0BOT> what happened?", user="U_DANA", thread_ts=root_ts))
+    await engine.run_until_idle()
+    reply = slack.last_message("#deploys")
+    assert reply.thread_ts == root_ts and reply.text == "I read 2 messages"
+    runs = await engine.store.list_runs(tenant.id)
+    ctx = (await engine.store.get_step(runs[0].id, "ctx")).output
+    assert ctx["transcript"] == "fox: the build is red\nDana Scully: <@U0BOT> what happened?"

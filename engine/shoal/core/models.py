@@ -578,6 +578,14 @@ class TriageSpec(Model):
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
 
 
+class TriggerRateLimit(Model):
+    """Fire at most ``max`` times per ``per``, overall or per ``key`` (e.g. per Slack user or channel)."""
+
+    max: int = Field(ge=1)
+    per: Duration
+    key: str | None = Field(None, description="Expression over `event`, e.g. '{{ event.user }}'; omitted, the whole trigger.")
+
+
 class TriggerSpec(Model):
     description: str | None = None
     workflow: str | None = Field(None, description="Workflow to start.")
@@ -593,6 +601,12 @@ class TriggerSpec(Model):
         "allow", description="'skip' does not fire while a run started by this trigger is still active."
     )
     filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
+    match: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured filters the connection's integration understands (Slack: channels, mentioned, "
+        "contains, regex, users, groups, threads, ...). See the integration's `trigger_filter_schema`.",
+    )
+    rate_limit: TriggerRateLimit | None = None
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
     triage: TriageSpec | None = None

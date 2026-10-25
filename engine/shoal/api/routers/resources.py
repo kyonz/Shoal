@@ -494,6 +494,11 @@ async def test_trigger(namespace: str, name: str, body: TriggerTestIn, ctx: CtxD
     trigger = await _trigger(ctx, namespace, name)
     event = IntegrationEvent(type=body.event_type or trigger.spec.event.replace("*", "test"), id=new_id("evt"), data=body.data)
     outcome = ctx.engine.triggers.evaluate(trigger, event)
+    if outcome["matched"] and trigger.spec.connection:
+        with use_namespace(namespace):
+            reason = await ctx.engine.triggers.integration_match(ctx.tenant_id, trigger, event)
+        if reason is not None:
+            outcome = {"matched": False, "reason": reason}
     if outcome["matched"] and trigger.spec.triage is not None:
         with use_namespace(namespace):
             outcome["triage"] = await ctx.engine.triggers.triage(ctx.tenant_id, trigger, event)
