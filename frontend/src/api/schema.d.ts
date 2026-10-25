@@ -1524,6 +1524,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/me/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My connection credentials */
+        get: operations["my_credentials_v1_me_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/credentials/{namespace}/{connection}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set my credential for a connection */
+        put: operations["put_credential_v1_me_credentials__namespace___connection__put"];
+        post?: never;
+        /** Remove my credential */
+        delete: operations["delete_credential_v1_me_credentials__namespace___connection__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/credentials/{namespace}/{connection}/oauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect my account with OAuth */
+        post: operations["start_oauth_v1_me_credentials__namespace___connection__oauth_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/users/{username}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who connected what (admins) */
+        get: operations["user_credentials_v1_users__username__credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/users/{username}/credentials/{namespace}/{connection}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke a person's credential */
+        delete: operations["revoke_credential_v1_users__username__credentials__namespace___connection__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/workflows": {
         parameters: {
             query?: never;
@@ -3401,6 +3487,42 @@ export interface components {
              */
             stopped?: string | null;
         };
+        /** CredentialIn */
+        CredentialIn: {
+            /**
+             * Values
+             * @description Connection field -> value, for the connection's user fields.
+             */
+            values: {
+                [key: string]: string;
+            };
+        };
+        /** CredentialOut */
+        CredentialOut: {
+            /** Owner */
+            owner: string;
+            /** Namespace */
+            namespace: string;
+            /** Connection */
+            connection: string;
+            /**
+             * Kind
+             * @description token or oauth.
+             */
+            kind: string;
+            /**
+             * Fields
+             * @description Fields held (values are never returned).
+             */
+            fields: string[];
+            /** Expires At */
+            expires_at: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** DatasetImportIn */
         DatasetImportIn: {
             /**
@@ -3998,6 +4120,11 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string | null;
+        };
+        /** OAuthStart */
+        OAuthStart: {
+            /** Authorize Url */
+            authorize_url: string;
         };
         /** OIDCProviderIn */
         OIDCProviderIn: {
@@ -8589,6 +8716,186 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChatOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_credentials_v1_me_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialOut"][];
+                };
+            };
+        };
+    };
+    put_credential_v1_me_credentials__namespace___connection__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                connection: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_credential_v1_me_credentials__namespace___connection__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                connection: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_oauth_v1_me_credentials__namespace___connection__oauth_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                connection: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStart"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    user_credentials_v1_users__username__credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_credential_v1_users__username__credentials__namespace___connection__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+                namespace: string;
+                connection: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
