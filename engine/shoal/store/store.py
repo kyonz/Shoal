@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -40,6 +40,10 @@ EVENTS_CHANNEL = "shoal_run_events"
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+# Taking a lease that is still owned means the last worker never released it: it died mid-pass.
+_LOST_LEASE = case((t.Run.lease_owner.is_not(None), t.Run.lease_losses + 1), else_=t.Run.lease_losses)
 
 
 class Store:
@@ -677,7 +681,7 @@ class Store:
                         t.Run.id == run_id,
                         or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now),
                     )
-                    .values(lease_owner=worker_id, lease_expires_at=now + lease)
+                    .values(lease_owner=worker_id, lease_expires_at=now + lease, lease_losses=_LOST_LEASE)
                 )
                 if result.rowcount:
                     claimed.append(run_id)
@@ -719,7 +723,7 @@ class Store:
                     t.Run.id == run_id,
                     or_(t.Run.lease_expires_at.is_(None), t.Run.lease_expires_at < now, t.Run.lease_owner == worker_id),
                 )
-                .values(lease_owner=worker_id, lease_expires_at=now + lease)
+                .values(lease_owner=worker_id, lease_expires_at=now + lease, lease_losses=_LOST_LEASE)
             )
             return bool(result.rowcount)
 
@@ -737,7 +741,7 @@ class Store:
             await s.execute(
                 update(t.Run)
                 .where(t.Run.id == run_id, t.Run.lease_owner == worker_id)
-                .values(lease_owner=None, lease_expires_at=None)
+                .values(lease_owner=None, lease_expires_at=None, lease_losses=0)
             )
 
     # ------------------------------------------------------------------ steps
@@ -798,7 +802,7 @@ class Store:
             if release_lease is not None:
                 await s.execute(
                     update(t.Run).where(t.Run.id == run_id, t.Run.lease_owner == release_lease)
-                    .values(lease_owner=None, lease_expires_at=None)
+                    .values(lease_owner=None, lease_expires_at=None, lease_losses=0)
                 )
             if values:
                 await s.execute(update(t.Run).where(t.Run.id == run_id).values(**values, updated_at=now))

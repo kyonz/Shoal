@@ -391,3 +391,40 @@ async def test_a_pass_over_a_simple_run_uses_few_transactions(engine, tenant):
     # claim, read run + steps, run.started, 2 x (started + succeeded), refreshes, finish (with the lease release)
     assert commits <= 14, commits
     assert (await engine.store.get_run(tenant.id, run.id)).lease_owner is None
+
+
+async def test_a_run_whose_workers_keep_dying_fails_instead_of_looping(engine, tenant):
+    from shoal.core.models import parse_resource
+
+    await engine.store.apply_resource(tenant.id, parse_resource({
+        "apiVersion": "shoal.dev/v1", "kind": "Workflow", "metadata": {"name": "w"},
+        "spec": {"steps": [{"id": "a", "type": "set", "values": {"x": 1}}]},
+    }))
+    lease = timedelta(minutes=1)
+    engine.settings.max_lost_leases = 3
+
+    async def die_mid_pass(worker: str, run_id: str) -> None:
+        """A worker takes the run and is killed before it releases the lease, which then expires."""
+        assert await engine.store.claim_runs(worker, limit=1, lease=lease) == [run_id]
+        await engine.store.update_run(run_id, lease_expires_at=clock.now() - timedelta(seconds=1))
+
+    rid = (await engine.executor.start_run(tenant.id, "w")).id
+    for worker in ("w0", "w1", "w2"):
+        await die_mid_pass(worker, rid)
+    assert (await engine.store.get_run(tenant.id, rid)).lease_losses == 2  # the first claim lost nothing
+
+    assert await engine.store.claim_runs("w3", limit=1, lease=lease) == [rid]
+    assert (await engine.store.get_run(tenant.id, rid)).lease_losses == 3
+    await engine.executor.advance(rid, "w3")
+    run = await engine.store.get_run(tenant.id, rid)
+    assert run.status == "failed" and "3 times in a row" in run.error["message"]
+    assert run.lease_owner is None
+
+    # A pass that finishes normally forgets earlier losses.
+    other = await engine.executor.start_run(tenant.id, "w")
+    assert await engine.store.claim_runs("x1", limit=1, lease=lease) == [other.id]
+    await engine.store.update_run(other.id, lease_expires_at=clock.now() - timedelta(seconds=1))
+    assert await engine.store.claim_runs("x2", limit=1, lease=lease) == [other.id]
+    await engine.executor.advance(other.id, "x2")
+    done = await engine.store.get_run(tenant.id, other.id)
+    assert done.status == "succeeded" and done.lease_losses == 0

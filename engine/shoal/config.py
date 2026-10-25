@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     )
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
+    max_lost_leases: int = Field(
+        5, ge=0, description="Fail a run after this many passes in a row ended with its worker dying (0: never)."
+    )
     orchestrator: str = Field(
         "builtin", description="What drives runs: builtin (the database) or temporal (needs the temporal extra)."
     )

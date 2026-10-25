@@ -205,6 +205,13 @@ class Executor:
         if RunStatus(run.status).terminal:
             await self.store.update_run(run.id, next_wake_at=None)
             return
+        limit = self.engine.settings.max_lost_leases
+        if limit and run.lease_losses >= limit:
+            # every recent pass killed its worker (out of memory, a crash): stop before it takes down another
+            message = f"the worker advancing this run stopped without finishing, {run.lease_losses} times in a row"
+            with use_namespace(run.namespace):
+                await self._finish(run, WorkflowSpec.model_validate(run.workflow), RunStatus.failed, {"message": message})
+            return
         failing = "_advance_errors" in (run.state or {})
         with use_namespace(run.namespace):
             await self._advance_run(run)
