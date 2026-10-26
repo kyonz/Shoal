@@ -78,7 +78,10 @@ export function AppShell() {
           collapsed ? "w-14" : "w-60",
         )}
       >
-        <div className={cn("flex h-12 items-center gap-2 border-b border-border", collapsed ? "justify-center px-0" : "px-3")}>
+        <div className={cn("flex h-12 shrink-0 items-center border-b border-border", collapsed ? "justify-center px-0" : "px-3")}>
+          {collapsed ? <ShoalMark className="h-5" /> : <ShoalLogo className="h-7" />}
+        </div>
+        <div className={cn("flex items-center border-b border-border py-2", collapsed ? "justify-center px-0" : "px-3")}>
           <TenantSwitcher collapsed={collapsed} />
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-2">

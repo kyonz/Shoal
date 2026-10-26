@@ -9,7 +9,6 @@ import { cn } from "@/lib/cn";
 import { Badge, Popover, Spinner } from "@/components/ui";
 import { useMyTenants, useSwitchTenant, useTenantSummaries, type MyTenant } from "@/pages/instance/api";
 import { TenantMark } from "@/pages/instance/shared";
-import { ShoalMark } from "./AppShell";
 
 /**
  * The tenants this person can open. Signed-in people get theirs from `/v1/me/tenants` (instance admins and
@@ -50,11 +49,11 @@ export function TenantSwitcher({ collapsed }: { collapsed: boolean }) {
 
   const header = (
     <>
-      {current ? <TenantMark name={current.name} className={collapsed ? "size-7" : ""} /> : <ShoalMark className={cn("shrink-0", collapsed ? "h-5" : "h-6")} />}
+      {current ? <TenantMark name={current.name} className={collapsed ? "size-7" : ""} /> : <span aria-hidden className={cn("flex size-6 shrink-0 items-center justify-center rounded-md bg-subtle text-muted", collapsed && "size-7")}><Building2 className="size-3.5" /></span>}
       {!collapsed && (
         <div className="min-w-0 flex-1 text-left">
           <div className="truncate text-[13px] leading-tight font-semibold tracking-tight">{label}</div>
-          <div className="truncate text-[11px] leading-tight text-faint">{sub || "Shoal"}</div>
+          <div className="truncate text-[11px] leading-tight text-faint">{sub}</div>
         </div>
       )}
     </>
