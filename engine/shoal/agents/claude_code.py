@@ -39,12 +39,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import time
 from typing import Any
 
-from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse
+from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
 from shoal.agents.runtime import AgentInvocation, AgentResult, AgentRuntime, install_skills
 from shoal.core.errors import CredentialRequired, StepError
+from shoal.core.ids import new_id
 from shoal.core.models import ParamValidationError, validate_params
 from shoal.core.scope import SHARED_NAMESPACE
 from shoal.sandbox.base import shell_quote
@@ -68,15 +71,179 @@ Do not ask questions; no human is watching this session.
 
 
 class ClaudeCodeGatewayProvider(ModelProvider):
-    """Claude Code CLI (claude -p): a gateway for agents with runtime claude-code, not for direct model calls."""
+    """Claude Code CLI (claude -p): agents with runtime claude-code, or any model call, on an API key or a person's own plan.
+
+    As a model gateway (the assistant, tool-loop agents) each call runs the
+    unmodified CLI once on the Shoal server, with Claude Code's own tools turned
+    off: the conversation and the caller's tool definitions go into the prompt,
+    and the next turn (text and tool calls) comes back as structured output.
+    In subscription mode the caller signs the call in with the token of the
+    person it acts for (:func:`sign_in`); calls that act for nobody fail.
+    """
 
     name = GATEWAY_TYPE
 
+    def __init__(self) -> None:
+        self.cli = "claude"
+
+    def setup(self, engine: Any) -> None:
+        self.cli = engine.settings.claude_code_cli
+
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        raise StepError(
-            "claude-code gateways run the Claude Code CLI; use them from agents with `runtime: claude-code`, "
-            "or pick an anthropic gateway for direct model calls"
+        config = request.config
+        # The server's own environment minus any Anthropic credentials it has: only the gateway's or the person's sign in.
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "CLAUDE_CODE_", "SHOAL_"))}
+        if config.get("oauth_token"):
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = config["oauth_token"]
+            mode = "subscription"
+        elif config.get("api_key"):
+            env["ANTHROPIC_API_KEY"] = config["api_key"]
+            mode = "api_key"
+        else:
+            raise StepError(
+                "this claude-code gateway runs on each person's own Claude plan, and this call acts for nobody "
+                "(decisions, graders and service accounts need an API key gateway)"
+            )
+        if config.get("base_url"):
+            env["ANTHROPIC_BASE_URL"] = config["base_url"]
+        if config.get("headers"):
+            env["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(f"{k}: {v}" for k, v in config["headers"].items())
+        tools = [t.name for t in request.tools]
+        schema = turn_schema(tools)
+        system = (request.system + "\n\n" if request.system else "") + TURN_INSTRUCTIONS + describe_tools(request.tools)
+        args = [
+            self.cli, "-p", "--output-format", "json", "--model", request.model, "--tools", "",
+            "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence",
+            "--max-turns", str(int(config.get("max_turns", 4))), "--system-prompt", system, "--json-schema", json.dumps(schema),
+        ]
+        with tempfile.TemporaryDirectory(prefix="shoal-claude-") as home:  # no settings, history or project files
+            env.update({"HOME": home, "IS_SANDBOX": "1", "DISABLE_AUTOUPDATER": "1"})
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *args, cwd=home, env=env, stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+            except FileNotFoundError as exc:
+                raise StepError(f"the Claude Code CLI ('{self.cli}') is not installed on this Shoal server (SHOAL_CLAUDE_CODE_CLI)") from exc
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(transcript(request.messages).encode()), float(config.get("timeout", 600)))
+            except TimeoutError as exc:
+                proc.kill()
+                raise ProviderUnavailable("Claude Code timed out") from exc
+        try:
+            result = json.loads(out.decode().strip().splitlines()[-1])
+        except (ValueError, IndexError) as exc:
+            stderr = err.decode(errors="replace")[-2000:]
+            raise StepError(f"Claude Code failed (exit {proc.returncode}): {stderr or 'no output'}") from exc
+        if result.get("is_error"):
+            text = str(result.get("result") or result.get("subtype") or "error")
+            if any(s in text.lower() for s in ("rate limit", "overloaded", "usage limit", "529", "429")):
+                raise ProviderUnavailable(f"Claude Code: {text[:500]}")
+            raise StepError(f"Claude Code: {text[:1000]}")
+        return to_response(result, tools, mode, request.model)
+
+
+TURN_INSTRUCTIONS = """You are the model behind another application's agent loop. You have no tools of your own here.
+The conversation so far is given as a transcript. Reply with the assistant's next turn as structured output:
+`text` is what you say, and `tool_calls` lists the application's tools you want to call now (empty when you are done).
+Tool results come back in the next transcript as <tool_result> blocks.
+"""
+
+
+def describe_tools(tools: list[Any]) -> str:
+    if not tools:
+        return "\nThere are no application tools in this conversation: answer with text only.\n"
+    lines = ["\nApplication tools (name, description and JSON Schema of the input):"]
+    for tool in tools:
+        lines.append(f"\n## {tool.name}\n{tool.description}\nInput schema: {json.dumps(tool.input_schema)}")
+    return "\n".join(lines) + "\n"
+
+
+def turn_schema(tools: list[str]) -> dict[str, Any]:
+    call: dict[str, Any] = {
+        "type": "object",
+        "properties": {"name": {"type": "string", **({"enum": tools} if tools else {})}, "input": {"type": "object"}},
+        "required": ["name", "input"],
+    }
+    return {
+        "type": "object",
+        "properties": {"text": {"type": "string"}, "tool_calls": {"type": "array", "items": call, "maxItems": 0 if not tools else 32}},
+        "required": ["text", "tool_calls"],
+    }
+
+
+def transcript(messages: list[dict[str, Any]]) -> str:
+    """Anthropic-shaped messages as a plain-text transcript for the prompt."""
+    parts = []
+    for message in messages:
+        content = message["content"]
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+        body = []
+        for block in blocks:
+            kind = block.get("type")
+            if kind == "text":
+                body.append(block.get("text", ""))
+            elif kind == "tool_use":
+                body.append(f'<tool_call id="{block.get("id")}" name="{block.get("name")}">{json.dumps(block.get("input"))}</tool_call>')
+            elif kind == "tool_result":
+                result = block.get("content")
+                if isinstance(result, list):
+                    result = "".join(c.get("text", "") for c in result if isinstance(c, dict))
+                error = ' is_error="true"' if block.get("is_error") else ""
+                body.append(f'<tool_result id="{block.get("tool_use_id")}"{error}>{result}</tool_result>')
+            elif kind in ("image", "document"):
+                body.append(f"[{kind} omitted]")
+        parts.append(f"<{message['role']}>\n" + "\n".join(body) + f"\n</{message['role']}>")
+    return "\n\n".join(parts) + "\n\nWrite the assistant's next turn."
+
+
+def to_response(result: dict[str, Any], tools: list[str], mode: str, model: str) -> ModelResponse:
+    turn = result.get("structured_output")
+    if not isinstance(turn, dict):
+        try:
+            turn = json.loads(str(result.get("result", "")))
+        except ValueError:
+            turn = {"text": str(result.get("result", "")), "tool_calls": []}
+    content: list[dict[str, Any]] = []
+    if text := str(turn.get("text") or "").strip():
+        content.append({"type": "text", "text": text})
+    for call in turn.get("tool_calls") or []:
+        if isinstance(call, dict) and call.get("name") in tools:
+            content.append({"type": "tool_use", "id": new_id("toolu"), "name": call["name"], "input": call.get("input") or {}})
+    usage = usage_of(result, mode)
+    usage.pop("model_calls", None)
+    return ModelResponse(content=content, stop_reason="tool_use" if any(b["type"] == "tool_use" for b in content) else "end_turn",
+                         usage=usage, model=model)
+
+
+async def personal_token(engine: Any, tenant_id: str, gateway: str, owner: str | None, who: str | None) -> str:
+    """The Claude Code token `owner` linked for `gateway`; raises CredentialRequired when there is none."""
+    values = await engine.user_credentials.get(tenant_id, owner, SHARED_NAMESPACE, gateway) if owner else None
+    if not values or not values.get(TOKEN_FIELD):
+        raise CredentialRequired(
+            f"gateway '{gateway}' runs Claude Code on each person's own Claude subscription and "
+            f"{who or owner or 'the person this acts for'} has not linked one"
+            + ("" if owner else " (service accounts and schedules cannot use subscription mode)"),
+            tenant_id=tenant_id, owner=owner, namespace=SHARED_NAMESPACE, connection=gateway, fields=[TOKEN_FIELD],
         )
+    return str(values[TOKEN_FIELD])
+
+
+async def sign_in(engine: Any, tenant_id: str, target: Any, owner: str | None, *, who: str | None = None, redactor: Any = None) -> None:
+    """Sign a claude-code model target in for the person a call acts for (subscription mode). Others are left alone."""
+    if target.provider_name != GATEWAY_TYPE:
+        return
+    resource = await engine.store.find_resource(tenant_id, "Gateway", target.gateway)
+    spec = getattr(resource, "spec", None)
+    if spec is None:
+        raise StepError(f"'{GATEWAY_TYPE}' needs a Gateway resource of that type (admins create it under Gateways)")
+    if problem := gateway_problem(spec):
+        raise StepError(f"gateway '{target.gateway}': {problem}")
+    if gateway_mode(spec.config, has_api_key=bool(spec.api_key_secret)) == "subscription":
+        token = await personal_token(engine, tenant_id, target.gateway, owner, who)
+        if redactor is not None:
+            redactor.add(token)
+        target.config["oauth_token"] = token
 
 
 def gateway_mode(config: dict[str, Any], *, has_api_key: bool) -> str:
@@ -123,18 +290,10 @@ async def gateway_env(inv: AgentInvocation) -> tuple[str, dict[str, str]]:
     if mode == "api_key":
         env["ANTHROPIC_API_KEY"] = config["api_key"]
         return mode, env
-    creds = ctx.engine.user_credentials
-    owner = await creds.owner_for(ctx.tenant_id, ctx.run.initiator)
-    values = await creds.get(ctx.tenant_id, owner, SHARED_NAMESPACE, gateway) if owner else None
-    if not values or not values.get(TOKEN_FIELD):
-        who = (ctx.run.initiator or {}).get("display_name") or owner or "the person this run acts for"
-        raise CredentialRequired(
-            f"gateway '{gateway}' runs Claude Code on each person's own Claude subscription and {who} has not linked one"
-            + ("" if owner else " (runs started by service accounts or schedules cannot use subscription mode)"),
-            tenant_id=ctx.tenant_id, owner=owner, namespace=SHARED_NAMESPACE, connection=gateway, fields=[TOKEN_FIELD],
-        )
-    ctx.redactor.add(values[TOKEN_FIELD])
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = values[TOKEN_FIELD]
+    owner = await ctx.engine.user_credentials.owner_for(ctx.tenant_id, ctx.run.initiator)
+    token = await personal_token(ctx.engine, ctx.tenant_id, gateway, owner, (ctx.run.initiator or {}).get("display_name"))
+    ctx.redactor.add(token)
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     return mode, env
 
 

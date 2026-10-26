@@ -16,7 +16,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from shoal.agents.claude_code import ClaudeCodeGatewayProvider
+from shoal.agents.claude_code import ClaudeCodeGatewayProvider, to_response, transcript
 from shoal.agents.providers.base import ModelRequest
 from shoal.api.app import create_app
 from shoal.core.errors import StepError
@@ -40,9 +40,22 @@ prompt = sys.stdin.read()
 record = {"args": sys.argv[1:], "prompt": prompt,
           "api_key": os.environ.get("ANTHROPIC_API_KEY"), "oauth": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"),
           "base_url": os.environ.get("ANTHROPIC_BASE_URL"), "headers": os.environ.get("ANTHROPIC_CUSTOM_HEADERS")}
-with open(os.environ["SHOAL_FAKE_CLAUDE_LOG"], "a") as f:
+with open(os.environ["FAKE_CLAUDE_LOG"], "a") as f:
     f.write(json.dumps(record) + "\n")
 def say(m): print(json.dumps(m), flush=True)
+if sys.argv[sys.argv.index("--output-format") + 1] == "json":  # one model turn for the general gateway
+    system = sys.argv[sys.argv.index("--system-prompt") + 1]
+    if "<tool_result" in prompt:
+        turn = {"text": "You have workflows: look.", "tool_calls": []}
+    elif "## finish" in system:
+        turn = {"text": "", "tool_calls": [{"name": "finish", "input": {"answer": "from the model gateway", "summary": "done"}}]}
+    elif "## api_get" in system:
+        turn = {"text": "Let me look.", "tool_calls": [{"name": "api_get", "input": {"path": "/v1/namespaces/default/workflows"}}]}
+    else:
+        turn = {"text": "hello", "tool_calls": []}
+    say({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1, "total_cost_usd": 0.01,
+         "usage": {"input_tokens": 50, "output_tokens": 5}, "result": "", "structured_output": turn})
+    sys.exit(0)
 say({"type": "system", "subtype": "init", "model": "claude-opus-5-5", "tools": ["Bash", "Edit"], "permissionMode": "bypassPermissions"})
 say({"type": "assistant", "message": {"content": [{"type": "text", "text": "Looking at the repo with " + str(os.environ.get("ANTHROPIC_API_KEY"))},
      {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}})
@@ -69,8 +82,9 @@ async def world(engine, tmp_path, monkeypatch):
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "claude.log"
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("SHOAL_FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
     engine.claude_logins.cli = str(fake)
+    engine.settings.claude_code_cli = str(fake)
     engine.settings.admin_token = SecretStr(ADMIN)
     app = create_app(engine=engine)
     clients: list[httpx.AsyncClient] = []
@@ -230,6 +244,76 @@ async def test_browser_sign_in_relays_the_cli_flow(world):
     assert (await admin.post("/v1/me/claude-code/claude-code/login")).status_code == 403
 
 
-async def test_gateway_provider_refuses_direct_model_calls():
-    with pytest.raises(StepError, match="runtime: claude-code"):
+SUBSCRIPTION = {"type": "claude-code", "config": {"mode": "subscription", "acknowledge_subscription_terms": True}}
+
+
+async def test_assistant_chats_on_the_persons_own_plan(world):
+    engine, tenant, admin, client, calls = world
+    await admin.put("/v1/gateways/claude-max", json={"spec": SUBSCRIPTION})
+    dana = client(await _person(engine, tenant, admin, "dana"))
+    # Admins pick the assistant's gateway in the admin console; SHOAL_ASSISTANT_* stay the defaults.
+    assert (await dana.put("/v1/assistant/settings", json={"gateway": "claude-max"})).status_code == 403
+    assert (await admin.put("/v1/assistant/settings", json={"gateway": "nope"})).status_code == 422
+    r = await admin.put("/v1/assistant/settings", json={"gateway": "claude-max", "model": "sonnet"})
+    assert r.status_code == 200, r.text
+    info = (await dana.get("/v1/assistant")).json()
+    assert (info["gateway"], info["model"], info["effort"]) == ("claude-max", "sonnet", engine.settings.assistant_effort)
+    assert info["overrides"] == {"gateway": "claude-max", "model": "sonnet"} and info["defaults"]["gateway"] == "anthropic"
+
+    r = await dana.post("/v1/assistant/chat", json={"message": "What workflows do I have?"})
+    assert r.status_code == 503 and "has not linked" in r.text and "shared/claude-max" in r.text
+    assert (await admin.post("/v1/assistant/chat", json={"message": "hi"})).status_code == 503  # service accounts: no plan
+
+    assert (await dana.put("/v1/me/claude-code/claude-max/token", json={"token": TOKEN})).status_code == 204
+    r = await dana.post("/v1/assistant/chat", json={"message": "What workflows do I have?"})
+    assert r.status_code == 200, r.text
+    assert r.json()["messages"][-1]["content"][0]["text"] == "You have workflows: look."
+    first, second = calls()
+    assert first["oauth"] == TOKEN and first["api_key"] is None
+    args = first["args"]
+    assert args[args.index("--tools") + 1] == "" and "--strict-mcp-config" in args
+    assert args[args.index("--model") + 1] == "sonnet"
+    assert "What workflows do I have?" in first["prompt"] and '<tool_call id="' in second["prompt"]
+    assert "look" in second["prompt"]  # the tool result reached the model
+
+    r = await admin.put("/v1/assistant/settings", json={})  # back to the server's defaults
+    assert r.json()["gateway"] == "anthropic" and r.json()["overrides"] == {}
+
+
+async def test_tool_loop_agents_use_the_gateway_as_a_model(world):
+    engine, tenant, admin, client, calls = world
+    await admin.put("/v1/gateways/claude-max", json={"spec": SUBSCRIPTION})
+    await engine.store.apply_resource(tenant, doc("Agent", "coder", {"provider": "claude-max", "model": "sonnet", "tools": []}))
+    run_id = await _run(engine, tenant, "user:dana")
+    assert (await engine.store.get_step(run_id, "look")).status == "waiting"  # Dana's plan isn't linked yet
+    dana = client(await _person(engine, tenant, admin, "dana"))
+    await dana.put("/v1/me/claude-code/claude-max/token", json={"token": TOKEN})
+    await engine.run_until_idle()
+    step = await engine.store.get_step(run_id, "look")
+    assert step.status == "succeeded", step.error
+    assert step.output == {"answer": "from the model gateway", "summary": "done"}
+    assert calls()[-1]["oauth"] == TOKEN and "cost_usd" not in step.usage
+
+    # An API key gateway serves everyone, including service accounts.
+    await admin.put("/v1/gateways/claude-max", json={"spec": {"type": "claude-code", "api_key_secret": "anthropic-key"}})
+    step = await engine.store.get_step(await _run(engine, tenant, "sa:ci"), "look")
+    assert step.status == "succeeded" and calls()[-1]["api_key"] == "sk-ant-api-secret-value"
+
+
+async def test_model_calls_that_act_for_nobody_need_an_api_key():
+    with pytest.raises(StepError, match="acts for nobody"):
         await ClaudeCodeGatewayProvider().complete(ModelRequest(model="m", system="", messages=[], tools=[]))
+
+
+def test_transcript_and_turns_round_trip():
+    text = transcript([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "api_get", "input": {"path": "/x"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "ok"}], "is_error": True}]},
+    ])
+    assert '<tool_call id="t1" name="api_get">{"path": "/x"}</tool_call>' in text
+    assert '<tool_result id="t1" is_error="true">ok</tool_result>' in text
+    response = to_response({"structured_output": {"text": "x", "tool_calls": [{"name": "api_get", "input": {}}, {"name": "rm", "input": {}}]},
+                            "usage": {"input_tokens": 3}, "total_cost_usd": 1.0}, ["api_get"], "subscription", "m")
+    assert [b["type"] for b in response.content] == ["text", "tool_use"] and response.stop_reason == "tool_use"
+    assert "cost_usd" not in response.usage

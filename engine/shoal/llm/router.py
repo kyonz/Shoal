@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
-from shoal.core.errors import StepError
+from shoal.core.errors import CredentialRequired, StepError
 from shoal.core.models import (
     GATEWAY_ONLY,
     AgentSpec,
@@ -233,6 +233,24 @@ class ModelRouter:
             redactor.add(value)
         return value
 
+    async def _sign_in(self, ctx: StepContext, targets: list[ModelTarget]) -> list[ModelTarget]:
+        """Sign claude-code targets in for the run's initiator; one that can't be falls back while others remain."""
+        from shoal.agents.claude_code import sign_in
+
+        owner = await self.engine.user_credentials.owner_for(ctx.tenant_id, ctx.run.initiator)
+        who = (ctx.run.initiator or {}).get("display_name")
+        usable: list[ModelTarget] = []
+        for index, target in enumerate(targets):
+            try:
+                await sign_in(self.engine, ctx.tenant_id, target, owner, who=who, redactor=ctx.redactor)
+            except (StepError, CredentialRequired) as exc:
+                if usable or index + 1 < len(targets):
+                    await ctx.emit("model.fallback", {**target.describe(), "reason": exc.message[:500]})
+                    continue
+                raise
+            usable.append(target)
+        return usable
+
     # ------------------------------------------------------------------ policies
 
     async def policy(self, tenant_id: str, name: str) -> ModelPolicySpec | None:
@@ -338,6 +356,7 @@ class ModelRouter:
                 )
         if not targets:
             raise StepError(f"model '{agent.model}' is not permitted by the tenant's model policy", details=info)
+        targets = await self._sign_in(ctx, targets)
         await ctx.emit("model.routed", {**info, "candidates": [t.describe() for t in targets]})
 
         async def on_fallback(target: ModelTarget, reason: str) -> None:

@@ -23,7 +23,7 @@ export function ClaudeCodeGatewaySection({ ctx }: { ctx: EditorContext }) {
     <Card>
       <CardHeader
         title="Claude Code sign-in"
-        description="Agents with runtime claude-code run the Claude Code CLI (claude -p) in their sandbox through this gateway."
+        description="Agents with runtime claude-code run the Claude Code CLI (claude -p) in their sandbox through this gateway. It also works as a model gateway for the assistant and tool-loop agents."
       />
       <fieldset disabled={!canWrite} className="space-y-4 p-4">
         <Field label="Who pays">
