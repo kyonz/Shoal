@@ -155,7 +155,7 @@ spec:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `secret` | | Verifies deliveries: an `X-Signature-256: sha256=<hmac>` header (`signature_header`, `signature_prefix`), or the secret itself in `X-Shoal-Token` or `?token=`. |
-| `allow_unsigned` | `false` | Accept deliveries without a secret. Anyone with the URL could then fire triggers. |
+| `allow_unsigned` | `false` | Accept deliveries that carry no signature or token. Anyone with the URL could then fire triggers. With a secret set, a delivery that does carry a signature or token is still checked. |
 | `event_type_header`, `event_type_field` | `X-Event-Type` | Where the event type comes from; otherwise it is `received`. |
 | `id_field` | | A delivery id for dedupe; otherwise `X-Request-Id` or `X-Delivery-Id`. |
 
@@ -167,6 +167,9 @@ A delivery can also name wake keys in `X-Shoal-Wake-Key` (comma-separated) to wa
 curl -X POST "$WEBHOOK_URL" -H "X-Shoal-Token: $SECRET" -H "X-Event-Type: tag_published" \
   -H "Content-Type: application/json" -d '{"service": "checkout", "version": "2.15.0"}'
 ```
+
+The connection's page (and `shoal connections webhook-url <name>`) shows the URL, how deliveries are signed, what the
+saved settings accept, and copyable curl examples for signed, token and (when allowed) unsigned deliveries.
 
 ## Triage with a decision model
 
