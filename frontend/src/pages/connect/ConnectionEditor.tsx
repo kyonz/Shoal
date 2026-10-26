@@ -33,6 +33,7 @@ import {
 } from "@/components/ui";
 import { Expandable, SchemaTable } from "./IntegrationDetail";
 import { ConnectLink, MyCredentialCard, WhoConnects, pickPersonal, userFields, type PersonalSpec } from "./PersonalCredentials";
+import { ConnectionUsage } from "./ConnectionUsage";
 import { ConnectionWebhooks } from "./TriggerWebhook";
 import { Crumb, ErrorList, IntegrationMark, NAME_RE, SecretPicker, VersionsPanel, YamlPanel, useConnectionCapabilities, useYamlSync } from "./shared";
 
@@ -59,7 +60,7 @@ export default function ConnectionEditor() {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [personal, setPersonal] = useState<PersonalSpec>({});
   const [namespaces, setNamespaces] = useState<string[]>([]);
-  const [tab, setTab] = useState("settings");
+  const [tab, setTab] = useState(params.get("tab") ?? "settings");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -182,6 +183,7 @@ export default function ConnectionEditor() {
               <TabsTrigger value="settings">Settings</TabsTrigger>
               <TabsTrigger value="yaml">YAML</TabsTrigger>
               {!isNew && <TabsTrigger value="actions">Actions</TabsTrigger>}
+              {!isNew && <TabsTrigger value="usage">Usage</TabsTrigger>}
               {!isNew && <TabsTrigger value="history">History</TabsTrigger>}
             </TabsList>
             <TabsContent value="settings" className="space-y-5">
@@ -262,6 +264,11 @@ export default function ConnectionEditor() {
             {!isNew && (
               <TabsContent value="actions">
                 <ConnectionActions ns={ns} name={name} catalog={catalog} />
+              </TabsContent>
+            )}
+            {!isNew && (
+              <TabsContent value="usage">
+                <ConnectionUsage ns={ns} name={name} />
               </TabsContent>
             )}
             {!isNew && (

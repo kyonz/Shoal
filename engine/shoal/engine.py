@@ -260,12 +260,10 @@ class Engine:
         await self.sandboxes.reap_orphans()
 
     async def _prune_audit(self) -> None:
-        """Apply audit and run event retention at most once an hour."""
+        """Apply audit, run event and connection history retention at most once an hour."""
         audit_days, event_days = self.settings.audit_retention_days, self.settings.run_event_retention_days
         now = clock.now()
-        if not (audit_days or event_days) or (
-            self._last_audit_prune and now - self._last_audit_prune < timedelta(hours=1)
-        ):
+        if self._last_audit_prune and now - self._last_audit_prune < timedelta(hours=1):
             return
         self._last_audit_prune = now
         if audit_days:
@@ -274,6 +272,10 @@ class Engine:
             await self.store.prune_run_events(now - timedelta(days=event_days))
         await self.federation.prune(now - timedelta(hours=1))  # forwarded calls are only kept briefly
         await self.store.prune_webhooks(now - timedelta(days=1))  # processed webhook deliveries
+        activity_days = self.settings.connection_activity_retention_days
+        await self.store.prune_connection_activity(
+            now - timedelta(days=activity_days) if activity_days else None, self.settings.connection_activity_max_entries
+        )
 
     async def run_until_idle(self, max_iterations: int = 1000) -> None:
         """Process everything that is due right now (tests, CLI ``--wait``)."""

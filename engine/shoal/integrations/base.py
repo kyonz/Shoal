@@ -286,6 +286,14 @@ class Integration:
     async def verify_webhook(self, ctx: ConnectionContext, headers: dict[str, str], body: bytes) -> bool:
         return True
 
+    def webhook_auth(self, ctx: ConnectionContext, headers: dict[str, str]) -> str | None:
+        """How a delivery authenticated (``signed``, ``token``, ``unsigned``), for the connection's history."""
+        return None
+
+    def webhook_rejection(self, ctx: ConnectionContext, headers: dict[str, str]) -> str:
+        """Why ``verify_webhook`` refused a delivery, in words for the connection's history."""
+        return "signature verification failed"
+
     async def parse_webhook(
         self, ctx: ConnectionContext, headers: dict[str, str], body: bytes
     ) -> list[IntegrationEvent]:

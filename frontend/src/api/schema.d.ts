@@ -4145,6 +4145,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/connections/{name}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The connection's usage history (newest first): webhook deliveries, and the runs, steps and people that used it */
+        get: operations["connection_activity_v1_namespaces__namespace__connections__name__activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/connections/{name}/actions": {
         parameters: {
             query?: never;
@@ -4982,6 +4999,85 @@ export interface components {
         CodeIn: {
             /** Code */
             code: string;
+        };
+        /**
+         * ConnectionActivityOut
+         * @description One entry in a connection's usage history (see ``GET /connections/{name}/activity``).
+         */
+        ConnectionActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Kind
+             * @description delivery (to its webhook), use (by a run step), call (an action from the API) or test.
+             */
+            kind: string;
+            /**
+             * Status
+             * @description delivery: queued, accepted, rejected or error; otherwise ok or error.
+             */
+            status: string;
+            /** Reason */
+            reason?: string | null;
+            /** Actor */
+            actor?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Run Namespace */
+            run_namespace?: string | null;
+            /** Workflow Name */
+            workflow_name?: string | null;
+            /** Step Id */
+            step_id?: string | null;
+            /**
+             * Count
+             * @default 1
+             */
+            count: number;
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ConnectionActivityPage */
+        ConnectionActivityPage: {
+            /** Items */
+            items: components["schemas"]["ConnectionActivityOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Total */
+            total?: number | null;
+            /**
+             * Retention Days
+             * @default 0
+             */
+            retention_days: number;
+            /**
+             * Max Entries
+             * @default 0
+             */
+            max_entries: number;
+            /**
+             * Counts
+             * @default {}
+             */
+            counts: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Oldest */
+            oldest?: string | null;
         };
         /** CredentialIn */
         CredentialIn: {
@@ -17453,6 +17549,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerWebhookOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connection_activity_v1_namespaces__namespace__connections__name__activity_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated: delivery, use, call, test. */
+                kind?: string | null;
+                /** @description Comma-separated: queued, accepted, rejected, error, ok. */
+                status?: string | null;
+                since?: string | null;
+                run_id?: string | null;
+                /** @description Cursor: entries older than this id. */
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionActivityPage"];
                 };
             };
             /** @description Validation Error */

@@ -1049,6 +1049,99 @@ class Store:
         async with self.session() as s:
             return (await s.execute(q)).scalars().all()
 
+    async def add_connection_activity(self, row: t.ConnectionActivity) -> int:
+        async with self.session() as s:
+            s.add(row)
+            await s.flush()
+            return row.id
+
+    async def update_connection_activity(self, activity_id: int, **values: Any) -> None:
+        async with self.session() as s:
+            await s.execute(
+                update(t.ConnectionActivity).where(t.ConnectionActivity.id == activity_id).values(updated_at=utcnow(), **values)
+            )
+
+    async def record_connection_use(
+        self, tenant_id: str, namespace: str, connection: str, run_id: str, step_id: str | None, action: str | None,
+        *, max_actions: int = 20,
+    ) -> None:
+        """Count one use of a connection by a run step: one row per (run, step), its calls counted."""
+        a = t.ConnectionActivity
+        async with self.session() as s:
+            q = select(a).where(
+                a.tenant_id == tenant_id, a.namespace == namespace, a.connection_name == connection, a.kind == "use",
+                a.run_id == run_id, a.step_id.is_(None) if step_id is None else a.step_id == step_id,
+            )
+            row = (await s.execute(q.limit(1))).scalar_one_or_none()
+            if row is not None:
+                actions = list((row.data or {}).get("actions") or [])
+                if action and action not in actions and len(actions) < max_actions:
+                    row.data = {**row.data, "actions": [*actions, action]}
+                row.count = (row.count or 0) + 1
+                row.updated_at = utcnow()
+                return
+            run = await s.get(t.Run, run_id)
+            s.add(a(
+                tenant_id=tenant_id, namespace=namespace, connection_name=connection, kind="use", status="ok",
+                run_id=run_id, step_id=step_id, run_namespace=run.namespace if run else None,
+                workflow_name=run.workflow_name if run else None, actor=(run.started_by if run else None),
+                data={"actions": [action] if action else []}, count=1,
+            ))
+
+    async def list_connection_activity(
+        self, tenant_id: str, namespace: str, connection: str, *, kind: str | None = None, status: str | None = None,
+        since: datetime | None = None, run_id: str | None = None, before: int | None = None, limit: int = 50,
+    ) -> Sequence[t.ConnectionActivity]:
+        a = t.ConnectionActivity
+        q = select(a).where(a.tenant_id == tenant_id, a.namespace == namespace, a.connection_name == connection)
+        if kind:
+            q = q.where(a.kind.in_(kind.split(",")))
+        if status:
+            q = q.where(a.status.in_(status.split(",")))
+        if since:
+            q = q.where(a.updated_at >= since)
+        if run_id:
+            q = q.where(a.run_id == run_id)
+        if before:
+            q = q.where(a.id < before)
+        async with self.read_session() as s:
+            return (await s.execute(q.order_by(a.id.desc()).limit(limit))).scalars().all()
+
+    async def connection_activity_summary(self, tenant_id: str, namespace: str, connection: str) -> dict[str, Any]:
+        """Counts by kind and status, and the oldest entry kept (what the retention limit left)."""
+        a = t.ConnectionActivity
+        where = (a.tenant_id == tenant_id, a.namespace == namespace, a.connection_name == connection)
+        async with self.read_session() as s:
+            counts = (await s.execute(select(a.kind, a.status, func.count()).where(*where).group_by(a.kind, a.status))).all()
+            oldest = (await s.execute(select(func.min(a.created_at)).where(*where))).scalar()
+        out: dict[str, dict[str, int]] = {}
+        for kind, status, n in counts:
+            out.setdefault(kind, {})[status] = n
+        return {"counts": out, "oldest": oldest}
+
+    async def prune_connection_activity(self, older_than: datetime | None, max_rows: int) -> int:
+        """Delete entries older than ``older_than``, then each connection's oldest beyond ``max_rows`` (0: no cap)."""
+        a = t.ConnectionActivity
+        removed = 0
+        async with self.session() as s:
+            if older_than is not None:
+                removed += (await s.execute(delete(a).where(a.updated_at < older_than))).rowcount or 0
+            if not max_rows:
+                return removed
+            over = (await s.execute(
+                select(a.tenant_id, a.namespace, a.connection_name)
+                .group_by(a.tenant_id, a.namespace, a.connection_name)
+                .having(func.count() > max_rows)
+            )).all()
+            for tenant_id, namespace, connection in over:
+                where = (a.tenant_id == tenant_id, a.namespace == namespace, a.connection_name == connection)
+                cutoff = (await s.execute(
+                    select(a.id).where(*where).order_by(a.id.desc()).offset(max_rows - 1).limit(1)
+                )).scalar()
+                if cutoff is not None:
+                    removed += (await s.execute(delete(a).where(*where, a.id < cutoff))).rowcount or 0
+        return removed
+
     async def get_trigger_state(self, tenant_id: str, trigger_name: str, *, namespace: str | None = None) -> t.TriggerState:
         ns = namespace or current_namespace()
         async with self.session() as s:

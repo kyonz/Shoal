@@ -49,7 +49,9 @@ class InteractionService:
                 continue
             with use_namespace(ctx.run.namespace):
                 name = await self._connection_name(ctx, target.integration, target.connection)
-                conn = await self.engine.integrations.connection(ctx.tenant_id, name, initiator=initiator, run_id=ctx.run.id)
+                conn = await self.engine.integrations.connection(
+                    ctx.tenant_id, name, initiator=initiator, run_id=ctx.run.id, step_id=step.id, action="request approval"
+                )
             integration = conn.integration
             if not integration.supports_approvals:
                 raise IntegrationError(f"connection '{name}' ({integration.key}) cannot ask for approvals")
@@ -87,7 +89,8 @@ class InteractionService:
             try:
                 with use_namespace(ctx.run.namespace):
                     conn = await self.engine.integrations.connection(
-                        ctx.tenant_id, note["connection"], initiator=ctx.run.initiator, run_id=ctx.run.id
+                        ctx.tenant_id, note["connection"], initiator=ctx.run.initiator, run_id=ctx.run.id,
+                        step_id=ctx.step.id, action="update approval",
                     )
                 request = ApprovalRequest.model_validate(note["request"])
                 await conn.integration.approval_resolved(conn, request, note["ref"], outcome)

@@ -161,7 +161,9 @@ quotas, event streams) reads the primary.
 
 Events of finished runs are deleted after `SHOAL_RUN_EVENT_RETENTION_DAYS`
 (default 400; `0` keeps them) and audit entries after
-`SHOAL_AUDIT_RETENTION_DAYS`. Processed webhook deliveries are kept for a day.
+`SHOAL_AUDIT_RETENTION_DAYS`. Processed webhook deliveries are kept for a day, and each connection's usage
+history for `SHOAL_CONNECTION_ACTIVITY_RETENTION_DAYS` (default 30), at most
+`SHOAL_CONNECTION_ACTIVITY_MAX_ENTRIES` (default 5000) entries per connection.
 Deletes run hourly in small batches.
 
 ## Dispatch queues

@@ -265,6 +265,12 @@ class Settings(BaseSettings):
     run_event_retention_days: int = Field(
         400, ge=0, description="Delete run events older than this once their run has finished (0 keeps them forever)."
     )
+    connection_activity_retention_days: int = Field(
+        30, ge=0, description="Delete connection usage history (webhook deliveries, uses by runs) older than this (0 keeps it)."
+    )
+    connection_activity_max_entries: int = Field(
+        5000, ge=0, description="Keep at most this many usage history entries per connection, dropping the oldest (0: no cap)."
+    )
 
     log_level: str = "INFO"
     log_json: bool = False

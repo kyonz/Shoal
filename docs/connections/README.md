@@ -174,6 +174,29 @@ Admins see who connected what with `GET /v1/users/{username}/credentials` and re
 Every set, removal and revocation is in the [audit log](../administration/README.md#audit-log). Personal credentials
 work the same way for every integration, MCP servers included.
 
+## Usage history
+
+Each connection's **Usage** tab shows what used it, newest first:
+
+- **Webhook deliveries**: when each delivery arrived, whether it was accepted or rejected and why (for the generic
+  webhook: unsigned while "Allow unsigned" is off, a bad signature, or a wrong token), how it authenticated
+  (`signed`, `token` or `unsigned`), its event type, and which triggers it fired, with links to the runs they started
+  and the waiting runs it woke. With `SHOAL_WEBHOOK_PROCESSING=queue` a delivery shows as *queued* until a worker
+  processes it.
+- **Uses by runs**: one entry per run step that used the connection (an action step, an agent's tool calls, sandbox
+  credentials, approval messages), with the workflow, the run, the actions called and how many calls it made.
+- **Calls and tests**: actions called from the UI or API, and connection tests, with who did it.
+
+Filter by kind, outcome or time, and page back with **Load older**. The API is
+`GET /v1/namespaces/{namespace}/connections/{name}/activity` (`kind`, `status`, `since`, `run_id`, `before`, `limit`),
+and needs `connections:read`. For an organisation connection, runs in namespaces you cannot read are listed without
+their run, workflow or step.
+
+The history is bounded: entries older than `SHOAL_CONNECTION_ACTIVITY_RETENTION_DAYS` (default 30) are deleted, and
+each connection keeps at most `SHOAL_CONNECTION_ACTIVITY_MAX_ENTRIES` (default 5000), dropping the oldest. Deliveries
+refused by the webhook rate limit are not recorded, so a flood cannot fill the history. Changes to the connection
+itself are in its **History** tab and the [audit log](../administration/README.md#audit-log).
+
 ## Cloud identities
 
 To give a step short-lived cloud credentials (AWS IAM roles today), without storing a cloud key anywhere, register a

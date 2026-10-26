@@ -170,6 +170,8 @@ curl -X POST "$WEBHOOK_URL" -H "X-Shoal-Token: $SECRET" -H "X-Event-Type: tag_pu
 
 The connection's page (and `shoal connections webhook-url <name>`) shows the URL, how deliveries are signed, what the
 saved settings accept, and copyable curl examples for signed, token and (when allowed) unsigned deliveries.
+Its **Usage** tab lists every delivery: accepted or rejected and why, and which triggers it fired and the runs they
+started. See [usage history](../connections/README.md#usage-history).
 
 ## Triage with a decision model
 

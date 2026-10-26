@@ -106,6 +106,8 @@ Every setting is an environment variable with the `SHOAL_` prefix (or a line in 
 | `SHOAL_SECRET_ENV_SHARED` | `true` | Turn off on deployments that host several organisations. |
 | `SHOAL_API_KEY_MAX_DAYS` | `0` (no limit) | The longest an API key may live. |
 | `SHOAL_AUDIT_RETENTION_DAYS` | `400` | Delete audit entries older than this. `0` keeps them. |
+| `SHOAL_CONNECTION_ACTIVITY_RETENTION_DAYS` | `30` | Delete [connection usage history](../connections/README.md#usage-history) older than this. `0` keeps it. |
+| `SHOAL_CONNECTION_ACTIVITY_MAX_ENTRIES` | `5000` | The most usage history entries kept per connection (oldest dropped). `0`: no cap. |
 | `SHOAL_TRUSTED_PROXIES` | | Proxies whose `X-Forwarded-For` is believed, for audit addresses. |
 | `SHOAL_CORS_ORIGINS`, `SHOAL_STATIC_DIR` | | For serving the UI from elsewhere, or from the API process. |
 | `SHOAL_SANDBOX_REAP_INTERVAL_SECONDS` | `600` | How often workers delete [leftover Kubernetes sandboxes](../agents/sandboxes.md#cleanup). `0` turns it off. |
