@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     )
     poll_interval_seconds: float = Field(1.0, gt=0)
     lease_seconds: int = Field(60, ge=5)
+    max_lost_leases: int = Field(
+        5, ge=0, description="Fail a run after this many passes in a row ended with its worker dying (0: never)."
+    )
     dispatch_queue: str = Field(
         "database",
         description="How workers hear that a run is due: database (they poll the runs table) or sqs; plugins add "

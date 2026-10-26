@@ -298,6 +298,10 @@ class Run(Base):
     next_wake_at: Mapped[datetime | None] = mapped_column()
     lease_owner: Mapped[str | None] = mapped_column(String(100))
     lease_expires_at: Mapped[datetime | None] = mapped_column()
+    lease_losses: Mapped[int] = mapped_column(
+        default=0, server_default="0",
+        doc="Leases taken over in a row from a worker that never released them (it crashed mid-pass).",
+    )
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column()
     finished_at: Mapped[datetime | None] = mapped_column()
