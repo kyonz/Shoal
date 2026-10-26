@@ -1,14 +1,16 @@
 import { ChevronRight, Download, Pencil, Star } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ApiError } from "@/api/client";
 import { useResource } from "@/api/hooks";
 import { useCan } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
-import { Badge, Button, Card, CardHeader, EmptyState, Page, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, EmptyState, Page, Segmented, Skeleton } from "@/components/ui";
+import { LAYOUT_ANNOTATION, type WorkflowSpecDoc } from "@/features/workflow/types";
+import { WorkflowPreview, type PreviewDoc } from "../../workflows/builder/Preview";
 import { Markdown } from "../widgets";
-import { isFeatured, spec, useAdoptions } from "./api";
+import { isFeatured, spec, useAdoptions, type BlueprintSpec } from "./api";
 import { AdoptWizard, AdoptionsTable, BlueprintIcon, BlueprintStatus } from "./components";
 
 export default function BlueprintDetailPage() {
@@ -96,6 +98,8 @@ export default function BlueprintDetailPage() {
         {blocked && <div className="border-t border-border bg-warn-soft px-5 py-2 text-[13px] text-warn">{blocked}</div>}
       </Card>
 
+      <WorkflowsPreview spec={s} />
+
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-5">
           {mine.length > 0 && (
@@ -151,5 +155,42 @@ export default function BlueprintDetailPage() {
       </div>
       <AdoptWizard open={adopting} onOpenChange={setAdopting} name={name!} spec={s} ns={ns} />
     </Page>
+  );
+}
+
+/** `{{ prefix }}` is filled in on adoption; a preview shows the names without it. */
+const PREFIX = /\{\{\s*prefix\s*\}\}/g;
+
+function WorkflowsPreview({ spec: s }: { spec: BlueprintSpec }) {
+  const docs = useMemo<PreviewDoc[]>(
+    () =>
+      (s.resources ?? [])
+        .filter((r) => r.kind === "Workflow" && r.spec)
+        .map((r) => JSON.parse(JSON.stringify(r).replace(PREFIX, "")) as typeof r)
+        .map((r) => ({
+          name: r.metadata?.name ?? "workflow",
+          description: r.metadata?.description,
+          labels: r.metadata?.labels,
+          spec: { ...(r.spec as unknown as WorkflowSpecDoc), steps: (r.spec as unknown as WorkflowSpecDoc).steps ?? [] },
+          layout: r.metadata?.annotations?.[LAYOUT_ANNOTATION],
+        })),
+    [s.resources],
+  );
+  const [current, setCurrent] = useState(0);
+  const doc = docs[Math.min(current, docs.length - 1)];
+  if (!doc) return null;
+  return (
+    <Card className="mb-5 overflow-hidden">
+      <CardHeader
+        title={docs.length > 1 ? "Workflows" : "Workflow"}
+        description="A read-only look at what you'll get. Click a step to see how it is set up."
+        actions={
+          docs.length > 1 ? (
+            <Segmented value={String(current)} onChange={(v) => setCurrent(Number(v))} options={docs.map((d, i) => ({ value: String(i), label: d.name }))} />
+          ) : undefined
+        }
+      />
+      <WorkflowPreview key={doc.name} doc={doc} hint="Adopt this blueprint to get your own copy to edit." />
+    </Card>
   );
 }

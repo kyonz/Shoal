@@ -23,7 +23,11 @@ export interface BlueprintSpec {
   visibility?: string;
   namespaces?: string[];
   params?: Record<string, BlueprintParam>;
-  resources: { kind?: string; metadata?: { name?: string; description?: string } }[];
+  resources: {
+    kind?: string;
+    metadata?: { name?: string; description?: string; labels?: Record<string, string>; annotations?: Record<string, string> };
+    spec?: Record<string, unknown>;
+  }[];
 }
 
 export interface AppliedResource {
