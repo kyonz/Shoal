@@ -1,4 +1,4 @@
-import { Activity, Building2, MessageSquareText, ShieldCheck, UsersRound, Workflow } from "lucide-react";
+import { Activity, Building2, Globe, MessageSquareText, ShieldCheck, UsersRound, Workflow } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -9,6 +9,7 @@ export const INSTANCE_NAV = [
   { label: "Accounts", to: "/instance/accounts", icon: UsersRound, keywords: "people instance admins auditors" },
   { label: "Orchestrator", to: "/instance/orchestrator", icon: Workflow, keywords: "temporal scheduler task queue workers" },
   { label: "Assistant", to: "/instance/assistant", icon: MessageSquareText, keywords: "chat assistant model gateway claude code" },
+  { label: "Federation", to: "/instance/federation", icon: Globe, keywords: "hub member deployments links enrollment" },
   { label: "Instance audit", to: "/instance/audit", icon: Activity, keywords: "log events" },
 ];
 

@@ -347,9 +347,9 @@ function UserMenu() {
 /** Tenant-wide state of a federated organisation: member offline, or a read-only link. */
 function FederationBanner() {
   const qc = useQueryClient();
-  const { me } = useAuth();
+  const { me, instance } = useAuth();
   const { disconnected, revoked, forbidden, readOnly, dismissedReadOnly, dismissReadOnly } = useFederationState();
-  const link = useFederatedLink(!!me?.is_system_admin, me?.tenant?.slug);
+  const link = useFederatedLink(instance.reader, me?.tenant?.slug);
   if (revoked)
     return (
       <div role="status" className="flex items-center gap-2.5 border-b border-warn/25 bg-warn-soft px-4 py-2 text-[13px] text-warn">

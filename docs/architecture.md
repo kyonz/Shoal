@@ -1035,7 +1035,8 @@ one control plane, and a federated deployment can also sit next to the hub.
   (Built. Long-poll over HTTPS was chosen over a WebSocket because it is
   proxy-friendly, and because the queue lives in the hub's database, any hub
   replica can take the call and any replica can serve the poll.)
-- **Enrollment.** An operator creates a federated tenant on the hub, which
+- **Enrollment.** An instance admin creates a federated tenant on the hub
+  (Instance console › Federation, which instance auditors can read), which
   returns a single-use enrollment token. The member's admin runs
   `shoal federation join <hub-url> --token … --max-mode read_write --namespace …
   --grant tenant-admin=hub_group:platform`, choosing the **maximum access** it

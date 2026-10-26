@@ -135,6 +135,8 @@ async def test_instance_roles_and_their_limits(world):
     dana = client(dana_login["session"])
     assert {t["slug"] for t in (await dana.get("/v1/instance/tenants")).json()} == {"red", "blue"}
     assert (await dana.patch("/v1/tenants/blue", json={"name": "x"})).status_code == 403
+    assert (await dana.get("/v1/federation/links")).status_code == 200  # hub links: read, never change
+    assert (await dana.post("/v1/federation/links", json={"tenant": "blue"})).status_code == 403
     blue = client((await dana.post("/v1/me/tenant", json={"tenant": "blue"})).json()["session"])
     assert (await blue.get("/v1/namespaces/default/workflows")).status_code == 200
     assert (await blue.put("/v1/namespaces/default/workflows/nope", json=WF)).status_code == 403

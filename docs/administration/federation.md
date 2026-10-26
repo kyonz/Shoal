@@ -36,7 +36,8 @@ and Jira are only reachable from there.
 
 ### 1. On the hub: create the link
 
-An operator creates an empty tenant and federates it, which prints a single-use **enrollment token**:
+An instance admin creates an empty tenant and federates it under **Instance console › Federation** (instance auditors
+can see the links there too), or with the CLI. Either prints a single-use **enrollment token**:
 
 ```sh
 shoal tenants create acme --name "Acme Corp"

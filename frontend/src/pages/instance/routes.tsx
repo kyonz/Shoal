@@ -9,6 +9,7 @@ const Accounts = lazy(() => import("./Accounts"));
 const InstanceAudit = lazy(() => import("./InstanceAudit"));
 const Orchestrator = lazy(() => import("./Orchestrator"));
 const InstanceAssistant = lazy(() => import("./InstanceAssistant"));
+const InstanceFederation = lazy(() => import("./Federation"));
 
 /** Instance console: /instance/* */
 export const instanceRoutes: RouteObject[] = [
@@ -21,6 +22,7 @@ export const instanceRoutes: RouteObject[] = [
       { path: "accounts", element: <Lazy><Accounts /></Lazy> },
       { path: "orchestrator", element: <Lazy><Orchestrator /></Lazy> },
       { path: "assistant", element: <Lazy><InstanceAssistant /></Lazy> },
+      { path: "federation", element: <Lazy><InstanceFederation /></Lazy> },
       { path: "audit", element: <Lazy><InstanceAudit /></Lazy> },
     ],
   },

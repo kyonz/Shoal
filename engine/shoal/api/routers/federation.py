@@ -14,7 +14,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field
 
-from shoal.api.deps import CtxDep, EngineDep, SystemCtxDep, _bearer
+from shoal.api.deps import CtxDep, EngineDep, InstanceReaderCtxDep, SystemCtxDep, _bearer
 from shoal.core.errors import NotFound, Unauthorized
 from shoal.federation import protocol as p
 from shoal.store import tables as t
@@ -99,12 +99,12 @@ async def create_link(body: LinkIn, ctx: SystemCtxDep) -> Any:
 
 
 @router.get("/links", response_model=list[LinkOut])
-async def list_links(ctx: SystemCtxDep) -> Any:
+async def list_links(ctx: InstanceReaderCtxDep) -> Any:
     return [await _link_out(ctx.engine, link) for link in await ctx.engine.federation.links()]
 
 
 @router.get("/links/{tenant}", response_model=LinkOut)
-async def get_link(tenant: str, ctx: SystemCtxDep) -> Any:
+async def get_link(tenant: str, ctx: InstanceReaderCtxDep) -> Any:
     link = await ctx.engine.federation.link_for_tenant(await _tenant_id(ctx.engine, tenant))
     if link is None:
         raise NotFound(f"tenant '{tenant}' is not federated")
