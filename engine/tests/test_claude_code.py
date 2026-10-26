@@ -250,8 +250,15 @@ SUBSCRIPTION = {"type": "claude-code", "config": {"mode": "subscription", "ackno
 async def test_assistant_chats_on_the_persons_own_plan(world):
     engine, tenant, admin, client, calls = world
     await admin.put("/v1/gateways/claude-max", json={"spec": SUBSCRIPTION})
-    engine.settings.assistant_gateway = "claude-max"
     dana = client(await _person(engine, tenant, admin, "dana"))
+    # Admins pick the assistant's gateway in the admin console; SHOAL_ASSISTANT_* stay the defaults.
+    assert (await dana.put("/v1/assistant/settings", json={"gateway": "claude-max"})).status_code == 403
+    assert (await admin.put("/v1/assistant/settings", json={"gateway": "nope"})).status_code == 422
+    r = await admin.put("/v1/assistant/settings", json={"gateway": "claude-max", "model": "sonnet"})
+    assert r.status_code == 200, r.text
+    info = (await dana.get("/v1/assistant")).json()
+    assert (info["gateway"], info["model"], info["effort"]) == ("claude-max", "sonnet", engine.settings.assistant_effort)
+    assert info["overrides"] == {"gateway": "claude-max", "model": "sonnet"} and info["defaults"]["gateway"] == "anthropic"
 
     r = await dana.post("/v1/assistant/chat", json={"message": "What workflows do I have?"})
     assert r.status_code == 503 and "has not linked" in r.text and "shared/claude-max" in r.text
@@ -265,9 +272,12 @@ async def test_assistant_chats_on_the_persons_own_plan(world):
     assert first["oauth"] == TOKEN and first["api_key"] is None
     args = first["args"]
     assert args[args.index("--tools") + 1] == "" and "--strict-mcp-config" in args
-    assert args[args.index("--model") + 1] == engine.settings.assistant_model
+    assert args[args.index("--model") + 1] == "sonnet"
     assert "What workflows do I have?" in first["prompt"] and '<tool_call id="' in second["prompt"]
     assert "look" in second["prompt"]  # the tool result reached the model
+
+    r = await admin.put("/v1/assistant/settings", json={})  # back to the server's defaults
+    assert r.json()["gateway"] == "anthropic" and r.json()["overrides"] == {}
 
 
 async def test_tool_loop_agents_use_the_gateway_as_a_model(world):

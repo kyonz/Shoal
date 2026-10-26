@@ -75,28 +75,61 @@ class AssistantInfo(BaseModel):
     enabled: bool
     gateway: str
     model: str
+    effort: str
+    defaults: dict[str, str] = Field(default_factory=dict, description="The server's values (SHOAL_ASSISTANT_*), used where the tenant sets none.")
+    overrides: dict[str, str] = Field(default_factory=dict, description="What the tenant's admins set in the admin console.")
 
 
-@router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled, and its model")
-async def assistant_info(ctx: CtxDep) -> AssistantInfo:
+class AssistantSettingsIn(BaseModel):
+    gateway: str | None = Field(None, max_length=200, description="Gateway resource or provider plugin; null uses the server default.")
+    model: str | None = Field(None, max_length=200, description="Model name; null uses the server default.")
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+
+
+SETTING_FIELDS = ("gateway", "model", "effort")
+
+
+async def assistant_config(ctx: CtxDep) -> AssistantInfo:
+    """The assistant's settings for the calling tenant: admin-console overrides on top of SHOAL_ASSISTANT_*."""
     s = ctx.engine.settings
-    return AssistantInfo(enabled=s.assistant_enabled, gateway=s.assistant_gateway, model=s.assistant_model)
+    defaults = {"gateway": s.assistant_gateway, "model": s.assistant_model, "effort": s.assistant_effort}
+    tenant = await ctx.engine.store.get_tenant(ctx.tenant_id)
+    own = {k: v for k, v in ((tenant.settings or {}).get("assistant") or {}).items() if k in SETTING_FIELDS and v}
+    return AssistantInfo(enabled=s.assistant_enabled, **{**defaults, **own}, defaults=defaults, overrides=own)
+
+
+@router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled, and its gateway and model")
+async def assistant_info(ctx: CtxDep) -> AssistantInfo:
+    return await assistant_config(ctx)
+
+
+@router.put("/settings", response_model=AssistantInfo, summary="Choose the assistant's gateway, model and effort for this tenant")
+async def put_assistant_settings(body: AssistantSettingsIn, ctx: CtxDep) -> AssistantInfo:
+    await ctx.require("tenant:manage")
+    own = body.model_dump(exclude_none=True)
+    if own.get("gateway") and await ctx.engine.store.find_resource(ctx.tenant_id, "Gateway", own["gateway"]) is None \
+            and own["gateway"] not in ctx.engine.registry.names("providers"):
+        raise InvalidRequest(f"no gateway or provider named '{own['gateway']}'")
+    await ctx.engine.store.update_tenant_settings(ctx.tenant_id, assistant=own or None)
+    await ctx.audit("assistant.settings", "assistant", **own)
+    return await assistant_config(ctx)
 
 
 @router.post("/chat", response_model=ChatOut, summary="Send a message or approval decisions to the assistant")
 async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
     settings = ctx.engine.settings
+    config = await assistant_config(ctx)
     if not settings.assistant_enabled:
         raise AssistantUnavailable("the assistant is disabled on this server (SHOAL_ASSISTANT_ENABLED)")
     namespace = await ctx.namespace(body.namespace, "workflows:read")
     if not (body.message or body.decisions or body.messages):
         raise InvalidRequest("send a message")
     tenant = ctx.tenant_id
-    if not ModelRouter.permitted(settings.assistant_model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
-        raise Forbidden(f"model '{settings.assistant_model}' is not permitted by the tenant's model policy")
+    if not ModelRouter.permitted(config.model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
+        raise Forbidden(f"model '{config.model}' is not permitted by the tenant's model policy")
     try:
         target = await ctx.engine.models.gateway_target(
-            tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
+            tenant, config.gateway, config.model, effort=config.effort
         )
         # A claude-code gateway on people's own plans runs the chat on the plan of the person chatting.
         owner = ctx.actor if ctx.actor.startswith("user:") else None

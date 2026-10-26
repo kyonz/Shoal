@@ -101,7 +101,7 @@ The same endpoints are available to scripts: `GET /v1/me/claude-code`,
 ## Use it as a model gateway
 
 A `claude-code` gateway also works wherever Shoal calls a model: the in-app assistant
-(`SHOAL_ASSISTANT_GATEWAY=claude-max`), `tool-loop` agents (`provider: claude-max`) and model
+(pick the gateway in **Admin → Assistant**, or set `SHOAL_ASSISTANT_GATEWAY=claude-max`), `tool-loop` agents (`provider: claude-max`) and model
 policy candidates. Each model call runs the CLI once on the Shoal server (API and workers need
 `claude` on PATH, e.g. the image built with `CLAUDE_CODE=1`), with Claude Code's own tools, MCP
 servers, skills and settings turned off. The conversation and the caller's tool definitions go

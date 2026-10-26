@@ -59,7 +59,9 @@ Your conversation stays in your browser, per tenant, and is sent with each messa
 
 ## Configuration
 
-Operators configure the assistant with environment variables on the server:
+Admins pick the assistant's gateway, model and effort for their organisation in **Admin → Assistant**
+(`PUT /v1/assistant/settings`, needs `tenant:manage`). Anything they leave blank falls back to the
+server's environment variables, which operators set:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -69,7 +71,7 @@ Operators configure the assistant with environment variables on the server:
 | `SHOAL_ASSISTANT_EFFORT` | `medium` | Reasoning effort. |
 | `SHOAL_ASSISTANT_MAX_TURNS` | `16` | Model calls per message before it stops and asks you to continue. |
 
-To run the assistant on Claude Code, set `SHOAL_ASSISTANT_GATEWAY` to a `claude-code` gateway. On a subscription
+To run the assistant on Claude Code, pick a `claude-code` gateway in **Admin → Assistant** (or set `SHOAL_ASSISTANT_GATEWAY`). On a subscription
 gateway each person chats on their own Claude plan, once they have linked it under **Settings → Connected accounts**
 ([Claude Code agents](../claude-code.md#use-it-as-a-model-gateway)).
 
