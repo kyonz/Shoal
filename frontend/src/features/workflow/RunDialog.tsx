@@ -9,7 +9,7 @@ import { JsonField } from "@/components/forms/SchemaForm";
 import type { ParamDoc } from "./types";
 
 function initial(inputs: Record<string, ParamDoc>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(inputs).map(([k, p]) => [k, p.default ?? (p.type === "boolean" ? false : undefined)]));
+  return Object.fromEntries(Object.entries(inputs).map(([k, p]) => [k, p?.default ?? (p?.type === "boolean" ? false : undefined)]));
 }
 
 /** "Run workflow" with a form generated from the workflow's declared inputs. */
@@ -32,7 +32,7 @@ export function RunDialog({ open, onOpenChange, ns, workflow, inputs, version }:
     }
   }, [open, inputs]);
 
-  const missing = Object.entries(inputs).filter(([k, p]) => (p.required ?? p.default == null) && (values[k] == null || values[k] === ""));
+  const missing = Object.entries(inputs).filter(([k, p]) => (p?.required ?? p?.default == null) && (values[k] == null || values[k] === ""));
 
   const start = async () => {
     setBusy(true);
@@ -80,7 +80,8 @@ export function RunDialog({ open, onOpenChange, ns, workflow, inputs, version }:
           if (!missing.length) void start();
         }}
       >
-        {entries.map(([k, p], i) => {
+        {entries.map(([k, param], i) => {
+          const p: ParamDoc = param ?? {};
           const required = p.required ?? p.default == null;
           const v = values[k];
           const set = (nv: unknown) => setValues((cur) => ({ ...cur, [k]: nv }));

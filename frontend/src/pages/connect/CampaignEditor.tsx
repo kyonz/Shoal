@@ -7,6 +7,7 @@ import { rawJson } from "@/api/client";
 import { useDeleteResource, useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
 import { SchemaForm } from "@/components/forms/SchemaForm";
 import { useAuth } from "@/lib/auth";
+import * as shape from "@/lib/shape";
 import { cn } from "@/lib/cn";
 import { nsPath, useNs } from "@/lib/ns";
 import {
@@ -134,6 +135,16 @@ export default function CampaignEditor() {
   const cleaned = useMemo(() => clean(spec), [spec]);
   const yaml = useYamlSync("Campaign", name, description, cleaned, (p) => {
     setDescription(p.description ?? "");
+    // Check everything the form renders before applying any of it.
+    shape.string(p.spec.workflow, "spec.workflow", true);
+    shape.record(p.spec.inputs ?? undefined, "spec.inputs", true);
+    shape.record(p.spec.policy ?? undefined, "spec.policy", true);
+    const targets = shape.record(p.spec.targets ?? undefined, "spec.targets", true);
+    if (targets) {
+      for (const k of ["connection", "resource", "list", "key"]) shape.string(targets[k], `spec.targets.${k}`, true);
+      shape.record(targets.filter ?? undefined, "spec.targets.filter", true);
+      shape.list(targets.items ?? undefined, "spec.targets.items", true);
+    }
     const s = p.spec as unknown as Spec;
     setSpec({ ...s, targets: s.targets ?? {} });
     if (s.targets?.items) setItemsText(JSON.stringify(s.targets.items, null, 2));
@@ -343,6 +354,7 @@ export default function CampaignEditor() {
                               try {
                                 const v = JSON.parse(t);
                                 if (!Array.isArray(v)) throw new Error("Must be a JSON array");
+                                v.forEach((item, i) => shape.record(item, `Item ${i + 1}`));
                                 setTargets({ items: v });
                                 setItemsError(null);
                               } catch (e) {

@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import YAML from "yaml";
+import { isRecord, list, record, scalar, string } from "@/lib/shape";
 import { useNamespaces } from "@/api/hooks";
 import { useCan } from "@/lib/auth";
 import { nsPath } from "@/lib/ns";
@@ -125,8 +126,17 @@ function ResourcesEditor({ ctx }: { ctx: EditorContext }) {
           try {
             const docs = YAML.parseAllDocuments(t).map((d) => {
               if (d.errors.length) throw new Error(d.errors[0].message);
-              return d.toJS();
-            }).filter(Boolean);
+              return d.toJS() as unknown;
+            }).filter((d) => d != null);
+            docs.forEach((d, i) => {
+              const at = `Document ${i + 1}`;
+              if (!isRecord(d)) throw new Error(`${at} must be a mapping with kind, metadata and spec`);
+              string(d.kind, `${at}: kind`);
+              const md = record(d.metadata ?? undefined, `${at}: metadata`, true);
+              scalar(md?.name, `${at}: metadata.name`, true);
+              record(d.spec ?? undefined, `${at}: spec`, true);
+              if (d.kind === "Workflow" && isRecord(d.spec)) list(d.spec.steps ?? undefined, `${at}: spec.steps`, true);
+            });
             setSpec({ ...spec, resources: docs });
             setErr(null);
           } catch (e) {

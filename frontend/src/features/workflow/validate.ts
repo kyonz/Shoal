@@ -67,7 +67,7 @@ export function validateWorkflow(
       else if (sig.name && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(sig.name)) at("Signal names use letters, digits and _ . : - (up to 100)", "error", "signal");
     }
 
-    for (const n of step.needs ?? []) if (!known.has(n)) at(`Depends on unknown step '${n}'`, "error", "needs");
+    for (const n of Array.isArray(step.needs) ? step.needs : []) if (!known.has(n)) at(`Depends on unknown step '${n}'`, "error", "needs");
 
     const upstream = ancestors(deps, step.id);
     for (const ref of referencedSteps(step)) {

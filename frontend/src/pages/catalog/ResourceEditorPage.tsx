@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Link, useBlocker, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import YAML from "yaml";
+import * as shape from "@/lib/shape";
 import { ApiError, applyYaml, rawJson, type Resource, type Schemas } from "@/api/client";
 import {
   TENANT_SCOPED,
@@ -51,9 +52,10 @@ import {
   Textarea,
   useConfirm,
 } from "@/components/ui";
-import { KeyValueInput, SchemaForm, type Widget } from "@/components/forms/SchemaForm";
+import { KeyValueInput, SchemaForm, checkAgainstSchema, type Widget } from "@/components/forms/SchemaForm";
 import { KINDS, NAME_RE, kindPath, kindPermissions } from "./kinds";
 import { actorName } from "@/lib/actor";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 export interface Draft {
   name: string;
@@ -475,6 +477,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
               </Card>
               {Object.keys(specSchema?.properties ?? {}).some((k) => k !== "description" && !cfg.hidden?.includes(k)) && (
               <Card className="p-4">
+                <ErrorBoundary label="this form" resetKeys={[draft]}>
                 <fieldset disabled={!canWrite} className="min-w-0">
                   <SchemaForm
                     schema={specSchema}
@@ -487,9 +490,12 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
                     collapseOptional
                   />
                 </fieldset>
+                </ErrorBoundary>
               </Card>
               )}
-              {ext.sections?.(ctx)}
+              <ErrorBoundary label="this section" resetKeys={[draft]}>
+                {ext.sections?.(ctx)}
+              </ErrorBoundary>
             </div>
             <div className="space-y-4">
               <Card>
@@ -516,7 +522,9 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
         </TabsContent>
 
         <TabsContent value="yaml" className="outline-none">
-          {tab === "yaml" && <YamlTab kind={cfg.kind} draft={draft} schema={specSchema} ns={ns} isNew={isNew} readOnly={!canWrite} onChange={setDraft} />}
+          <ErrorBoundary label="the YAML" resetKeys={[tab]}>
+            {tab === "yaml" && <YamlTab kind={cfg.kind} draft={draft} schema={specSchema} ns={ns} isNew={isNew} readOnly={!canWrite} onChange={setDraft} />}
+          </ErrorBoundary>
         </TabsContent>
 
         {!isNew && (
@@ -539,7 +547,9 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
         )}
         {extraTabs.map((t) => (
           <TabsContent key={t.value} value={t.value} className="outline-none">
-            {t.content}
+            <ErrorBoundary label="this tab" resetKeys={[draft, tab]}>
+              {t.content}
+            </ErrorBoundary>
           </TabsContent>
         ))}
       </Tabs>
@@ -592,9 +602,16 @@ function YamlTab({ kind, draft, schema, ns, isNew, readOnly, onChange }: {
     setText(t);
     try {
       const doc = YAML.parse(t) as { kind?: string; metadata?: { name?: string; description?: string; labels?: Record<string, string> }; spec?: Record<string, unknown> };
-      if (!doc || typeof doc !== "object") throw new Error("expected a mapping");
+      if (!shape.isRecord(doc)) throw new Error("expected a mapping");
       if (doc.kind && doc.kind !== kind) throw new Error(`kind must be ${kind}`);
-      if (!doc.spec || typeof doc.spec !== "object") throw new Error("missing spec");
+      if (doc.spec == null) throw new Error("missing spec");
+      shape.record(doc.spec, "spec");
+      // The form, and the panels beside it, render straight from what is applied here.
+      const md = shape.record(doc.metadata ?? undefined, "metadata", true);
+      shape.scalar(md?.name, "metadata.name", true);
+      shape.string(md?.description, "metadata.description", true);
+      shape.stringMap(md?.labels ?? undefined, "metadata.labels", true);
+      checkAgainstSchema(doc.spec, schema, "spec");
       const name = isNew ? String(doc.metadata?.name ?? "") : draft.name;
       if (!isNew && doc.metadata?.name && doc.metadata.name !== draft.name) throw new Error("the name cannot be changed here");
       const spec = { ...doc.spec };
