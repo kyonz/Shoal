@@ -37,6 +37,7 @@ import {
 } from "@/components/ui";
 import { SchemaForm } from "@/components/forms/SchemaForm";
 import { ChoiceCard, Crumb, ErrorList, ExprInput, NAME_RE, VersionsPanel, YamlPanel, useYamlSync } from "./shared";
+import { WebhookFields, WebhookStatusCard } from "./TriggerWebhook";
 import { deliveryStatus } from "./Triggers";
 
 interface Spec {
@@ -55,6 +56,7 @@ interface Spec {
   dedupe_key?: string;
   enabled?: boolean;
   triage?: unknown;
+  webhook?: Record<string, unknown>;
 }
 
 const PRESETS = [
@@ -90,6 +92,7 @@ function clean(spec: Spec): Record<string, unknown> {
   }
   if (spec.event === "schedule") {
     delete out.connection;
+    delete out.webhook;
     delete out.match;
   } else {
     delete out.schedule;
@@ -313,6 +316,9 @@ export default function TriggerEditor() {
                     ) : (
                       <ScheduleFields spec={spec} set={set} />
                     )}
+                    {source === "event" && catalog?.webhook_schema && (
+                      <WebhookFields ns={ns} catalog={catalog} connection={spec.connection} event={spec.event} value={spec.webhook} onChange={(v) => set({ webhook: v })} />
+                    )}
                   </div>
                 </Card>
 
@@ -389,6 +395,7 @@ export default function TriggerEditor() {
           </Tabs>
         </div>
         <aside className="space-y-4">
+          {!isNew && (existing.data?.spec as unknown as Spec | undefined)?.webhook !== undefined && <WebhookStatusCard ns={ns} name={name} />}
           {!isNew ? (
             <TestPanel key={`${spec.event}-${catalog ? 1 : 0}`} ns={ns} name={name} spec={existing.data?.spec as unknown as Spec} example={catalog?.events.find((e) => e.name === spec.event)?.example} />
           ) : (

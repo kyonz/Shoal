@@ -92,6 +92,41 @@ export interface paths {
         patch: operations["patch_tenant_v1_tenants__slug__patch"];
         trace?: never;
     };
+    "/v1/tenants/{slug}/quotas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tenant Quotas */
+        get: operations["get_tenant_quotas_v1_tenants__slug__quotas_get"];
+        /** Set a tenant's quotas (unset fields use the server defaults; 0 means unlimited) */
+        put: operations["put_tenant_quotas_v1_tenants__slug__quotas_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/quotas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The calling tenant's quotas */
+        get: operations["my_quotas_v1_quotas_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/me": {
         parameters: {
             query?: never;
@@ -515,6 +550,23 @@ export interface paths {
         put?: never;
         /** Receive a webhook for a connection */
         post: operations["receive_v1_hooks__webhook_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/hooks/{webhook_id}/{registration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive a delivery for a webhook Shoal registered for a trigger */
+        post: operations["receive_registered_v1_hooks__webhook_id___registration_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2725,6 +2777,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/target-lists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Target-Lists */
+        get: operations["list_target_lists_v1_namespaces__namespace__target_lists_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Target-Lists */
+        get: operations["get_target_lists_v1_namespaces__namespace__target_lists__name__get"];
+        /** Create or replace a TargetList */
+        put: operations["put_target_lists_v1_namespaces__namespace__target_lists__name__put"];
+        post?: never;
+        /** Delete Target-Lists */
+        delete: operations["delete_target_lists_v1_namespaces__namespace__target_lists__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions Target-Lists */
+        get: operations["versions_target_lists_v1_namespaces__namespace__target_lists__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Target-Lists */
+        get: operations["version_target_lists_v1_namespaces__namespace__target_lists__name__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What changed between two versions of a TargetList */
+        get: operations["diff_target_lists_v1_namespaces__namespace__target_lists__name__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/{name}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore an earlier version of a TargetList as a new version */
+        post: operations["rollback_target_lists_v1_namespaces__namespace__target_lists__name__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/cloud-identities": {
         parameters: {
             query?: never;
@@ -3833,6 +3989,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/connections/{name}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Webhooks Shoal registered with the provider through this connection, one per trigger */
+        get: operations["connection_webhooks_v1_namespaces__namespace__connections__name__webhooks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/connections/{name}/actions": {
         parameters: {
             query?: never;
@@ -3887,6 +4060,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces/{namespace}/target-lists/{name}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The targets a target list resolves to now */
+        get: operations["resolve_target_list_v1_namespaces__namespace__target_lists__name__resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/target-lists/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve an unsaved target list spec */
+        post: operations["preview_target_list_v1_namespaces__namespace__target_lists_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespaces/{namespace}/triggers/{name}/test": {
         parameters: {
             query?: never;
@@ -3932,6 +4139,60 @@ export interface paths {
         get: operations["trigger_deliveries_v1_namespaces__namespace__triggers__name__deliveries_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/triggers/{name}/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The provider webhook Shoal registered for this trigger */
+        get: operations["trigger_webhook_v1_namespaces__namespace__triggers__name__webhook_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/triggers/{name}/webhook/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register, update or remove this trigger's provider webhook now
+         * @description Re-registers even when nothing changed (use after the webhook was deleted in the provider), and retries failures now.
+         */
+        post: operations["sync_trigger_webhook_v1_namespaces__namespace__triggers__name__webhook_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/trigger-webhook-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** What Shoal would register with the provider for these trigger settings */
+        post: operations["preview_trigger_webhook_v1_namespaces__namespace__trigger_webhook_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5539,6 +5800,11 @@ export interface components {
              */
             limit: number;
         };
+        /** QuotasOut */
+        QuotasOut: {
+            tenant: components["schemas"]["TenantQuotas"];
+            effective: components["schemas"]["TenantQuotas"];
+        };
         /** RemoveResult */
         RemoveResult: {
             /**
@@ -6105,6 +6371,49 @@ export interface components {
              */
             tenant: string | null;
         };
+        /**
+         * TargetListSpec
+         * @description A reusable, named set of targets (e.g. repositories) for campaigns and trigger filters.
+         *
+         *     - ``items`` alone: exactly these targets, as written.
+         *     - ``connection`` + ``resource`` alone: a saved query, resolved each time it is used.
+         *     - both: exactly the listed targets, each looked up through the query so it carries the
+         *       integration's details (a listed target the query does not return is reported missing).
+         */
+        TargetListSpec: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Connection
+             * @description Connection to query or look targets up through.
+             */
+            connection?: string | null;
+            /**
+             * Resource
+             * @description Integration resource, e.g. 'repository'.
+             */
+            resource?: string | null;
+            /**
+             * Filter
+             * @description Query filter, e.g. {org: acme}.
+             */
+            filter?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Items
+             * @description The targets, e.g. [{full_name: acme/api}]; with a connection, looked up by key.
+             */
+            items?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Key
+             * @description Expression giving a stable key per target, e.g. '{{ target.full_name }}'.
+             * @default {{ target.id }}
+             */
+            key: string;
+        };
         /** TargetOut */
         TargetOut: {
             /** Id */
@@ -6284,6 +6593,32 @@ export interface components {
              */
             status?: ("active" | "suspended") | null;
         };
+        /**
+         * TenantQuotas
+         * @description Per-tenant overrides of the server-wide defaults. Unset fields use the defaults; 0 means unlimited.
+         */
+        TenantQuotas: {
+            /**
+             * Requests Per Second
+             * @description API requests per second, per API process.
+             */
+            requests_per_second?: number | null;
+            /**
+             * Request Burst
+             * @description Requests allowed in a burst above the rate.
+             */
+            request_burst?: number | null;
+            /**
+             * Max Pending Runs
+             * @description Runs waiting for a worker before new runs get 429.
+             */
+            max_pending_runs?: number | null;
+            /**
+             * Max Concurrent Runs
+             * @description Runs workers advance at once for this tenant.
+             */
+            max_concurrent_runs?: number | null;
+        };
         /** TenantSummary */
         TenantSummary: {
             /** Id */
@@ -6325,6 +6660,63 @@ export interface components {
             data?: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TriggerWebhookOut
+         * @description A webhook Shoal registered with the provider for a trigger (`spec.webhook`).
+         */
+        TriggerWebhookOut: {
+            /** Id */
+            id: string;
+            /** Trigger */
+            trigger: string;
+            /** Namespace */
+            namespace: string;
+            /** Connection */
+            connection: string;
+            /** Integration */
+            integration: string;
+            /**
+             * Status
+             * @description pending, active, error (retried with backoff) or removing.
+             */
+            status: string;
+            /**
+             * Url
+             * @description The callback URL the provider delivers to.
+             */
+            url?: string | null;
+            /**
+             * State
+             * @description What the provider holds: webhook ids, events, filter...
+             */
+            state?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Desired
+             * @description What the trigger asks to register now.
+             */
+            desired?: {
+                [key: string]: unknown;
+            } | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /** Registered By */
+            registered_by?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Next Attempt At */
+            next_attempt_at?: string | null;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            /** Last Received At */
+            last_received_at?: string | null;
         };
         /** TunnelIn */
         TunnelIn: {
@@ -6429,6 +6821,17 @@ export interface components {
             changes: {
                 [key: string]: unknown;
             }[];
+        };
+        /** WebhookPreviewIn */
+        WebhookPreviewIn: {
+            /** Connection */
+            connection: string;
+            /** Event */
+            event: string;
+            /** Webhook */
+            webhook?: {
+                [key: string]: unknown;
+            };
         };
         /** UpgradeIn */
         shoal__api__routers__blueprints__UpgradeIn: {
@@ -6682,6 +7085,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tenant_quotas_v1_tenants__slug__quotas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotasOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_tenant_quotas_v1_tenants__slug__quotas_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantQuotas"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotasOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_quotas_v1_quotas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotasOut"];
                 };
             };
         };
@@ -7468,6 +7957,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_registered_v1_hooks__webhook_id___registration_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: string;
+                registration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -9502,7 +10025,10 @@ export interface operations {
     start_run_v1_namespaces__namespace__workflows__name__runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Retrying with the same key returns the run the first call started (200). */
+                "idempotency-key"?: string | null;
+            };
             path: {
                 namespace: string;
                 name: string;
@@ -13217,6 +13743,284 @@ export interface operations {
             };
         };
     };
+    list_target_lists_v1_namespaces__namespace__target_lists_get: {
+        parameters: {
+            query?: {
+                label?: string[];
+            };
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_target_lists_v1_namespaces__namespace__target_lists__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_target_lists_v1_namespaces__namespace__target_lists__name__put: {
+        parameters: {
+            query?: {
+                /** @description Change note stored with the new version. */
+                message?: string | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_target_lists_v1_namespaces__namespace__target_lists__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_target_lists_v1_namespaces__namespace__target_lists__name__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_target_lists_v1_namespaces__namespace__target_lists__name__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_target_lists_v1_namespaces__namespace__target_lists__name__diff_get: {
+        parameters: {
+            query: {
+                from: number;
+                /** @description Defaults to the current version. */
+                to?: number | null;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_target_lists_v1_namespaces__namespace__target_lists__name__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOut"] | components["schemas"]["VersionDiffOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_cloud_identities_v1_namespaces__namespace__cloud_identities_get: {
         parameters: {
             query?: {
@@ -15926,6 +16730,38 @@ export interface operations {
             };
         };
     };
+    connection_webhooks_v1_namespaces__namespace__connections__name__webhooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerWebhookOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_actions_v1_namespaces__namespace__connections__name__actions_get: {
         parameters: {
             query?: never;
@@ -16013,6 +16849,77 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["QueryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_target_list_v1_namespaces__namespace__target_lists__name__resolve_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_target_list_v1_namespaces__namespace__target_lists_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TargetListSpec"];
             };
         };
         responses: {
@@ -16135,6 +17042,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeliveryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_webhook_v1_namespaces__namespace__triggers__name__webhook_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerWebhookOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_trigger_webhook_v1_namespaces__namespace__triggers__name__webhook_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerWebhookOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_trigger_webhook_v1_namespaces__namespace__trigger_webhook_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookPreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

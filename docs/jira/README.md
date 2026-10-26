@@ -20,6 +20,7 @@ automation, not just the bot.
 | --- | --- | --- |
 | Connection | Cloud with an API token or Data Center with a PAT. Shared, or each person's own credential. | [Set up Jira](setup.md) |
 | Webhooks | Jira admin webhooks (signed) or Jira Automation "Send web request" rules, into one URL per connection. | [Set up Jira](setup.md#receive-events-from-jira) |
+| Registered webhooks | A trigger can have Shoal create its webhook in Jira (admin or dynamic webhooks), filtered by JQL or a board column, refreshed and removed with the trigger. | [Webhooks Shoal registers](webhooks.md) |
 | Triggers | Start a workflow on `issue_updated`, `issue_created`, `comment_created` or an Automation payload, filtered by status change, project, labels or anything in the payload. | [Triggers](triggers.md) |
 | Actions | `get_issue`, `add_comment`, `transition_issue`, `update_issue`, `create_issue`. | [Reference](reference.md#actions) |
 | Issue queries | The `issue` resource runs JQL, for campaigns and the API. | [Reference](reference.md#resources) |
@@ -98,6 +99,7 @@ spec:
 
 - [Set up Jira](setup.md): Cloud and Data Center credentials, webhooks and Automation rules, per-person credentials.
 - [Triggers](triggers.md): events, what the run gets, filters for common cases, and waking waiting runs.
+- [Webhooks Shoal registers](webhooks.md): admin and dynamic webhooks created from a trigger, for Cloud and Data Center.
 - [Reference](reference.md): connection settings, actions, resources, event fields, attribution and security.
 
 For other integrations see [GitHub](../github/README.md), [Slack](../slack/README.md) and

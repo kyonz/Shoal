@@ -4,6 +4,7 @@
 * :class:`IntegrationHarness` - call actions, queries and webhook handlers with no database;
 * :func:`engine_harness` - a real throwaway engine, for trigger and workflow tests;
 * :func:`signed_webhook` / :func:`github_webhook` - signed deliveries;
+* :class:`MockJira` - a stateful Jira (issues, boards, admin and dynamic webhooks that deliver);
 * :class:`MockSlack` - a fake Slack (Web API state plus signed clicks, form submissions, events, commands);
 * :class:`IntegrationContract` / :func:`check_integration` / :func:`check_remote_service` -
   the contract every integration (Python or remote) should pass;
@@ -21,6 +22,7 @@ from shoal.sdk.testing.contract import (
 )
 from shoal.sdk.testing.harness import EngineHarness, IntegrationHarness, engine_harness
 from shoal.sdk.testing.http import MockHTTP, RecordedCall, Route, UnmatchedRequest
+from shoal.sdk.testing.jira import Delivery, MockJira, jql_matches
 from shoal.sdk.testing.plugins import (
     check_decision_provider,
     check_dispatch_queue,
@@ -35,10 +37,12 @@ from shoal.sdk.testing.slack import MockSlack, SlackMessage, slack_request, slac
 from shoal.sdk.testing.webhooks import github_webhook, signed_webhook, webhook_body
 
 __all__ = [
+    "Delivery",
     "EngineHarness",
     "IntegrationContract",
     "IntegrationHarness",
     "MockHTTP",
+    "MockJira",
     "MockSlack",
     "RecordedCall",
     "Route",
@@ -58,6 +62,7 @@ __all__ = [
     "check_skill_source",
     "engine_harness",
     "github_webhook",
+    "jql_matches",
     "signed_webhook",
     "slack_request",
     "slack_signature",

@@ -37,6 +37,7 @@ server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for valid
 | `inputs` | map | optional | Workflow inputs (expressions). |
 | `dedupe_key` | string | optional | Expression; events with a seen key are ignored. |
 | `triage` | object | optional |  |
+| `webhook` | object | optional | Register the webhook with the provider (integration-specific settings, e.g. Jira `jql`). |
 | `enabled` | bool | optional |  Default: `true`. |
 
 ## Import

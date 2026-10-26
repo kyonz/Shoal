@@ -32,6 +32,7 @@ import {
 } from "@/components/ui";
 import { Expandable, SchemaTable } from "./IntegrationDetail";
 import { ConnectLink, MyCredentialCard, WhoConnects, pickPersonal, userFields, type PersonalSpec } from "./PersonalCredentials";
+import { ConnectionWebhooks } from "./TriggerWebhook";
 import { Crumb, ErrorList, IntegrationMark, NAME_RE, SecretPicker, VersionsPanel, YamlPanel, useConnectionCapabilities, useYamlSync } from "./shared";
 
 export default function ConnectionEditor() {
@@ -273,6 +274,7 @@ export default function ConnectionEditor() {
             <MyCredentialCard ns={ns} connection={name} spec={existing.data!.spec as PersonalSpec} />
           )}
           {!isNew && <ConnectionSidebar ns={ns} name={name} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}
+          {!isNew && <ConnectionWebhooks ns={ns} name={name} />}
           {!isNew && existing.data?.spec.integration === "slack" && <SlackBots ns={ns} name={name} />}
         </aside>
       </div>
@@ -468,7 +470,7 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
       )}
       {url && (
         <Card>
-          <CardHeader title={<span className="flex items-center gap-1.5"><Webhook className="size-3.5" /> Webhook URL</span>} description="Point the service's webhooks here so triggers fire." />
+          <CardHeader title={<span className="flex items-center gap-1.5"><Webhook className="size-3.5" /> Webhook URL</span>} description="Point the service's webhooks here so triggers fire. Triggers that register their own webhook get their own URL." />
           <div className="space-y-2 p-4">
             <CopyField value={url} />
             {webhook.data?.instructions && <p className="text-xs leading-relaxed break-all text-muted">{webhook.data.instructions}</p>}

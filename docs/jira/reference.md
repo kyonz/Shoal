@@ -13,11 +13,17 @@ Everything the Jira integration offers, as listed under **Integrations › Jira*
 | `email` | config | | The Atlassian account email (Cloud, with `api_token`). |
 | `api_token` | secret | | An Atlassian API token (Cloud). |
 | `personal_access_token` | secret | | A personal access token (Server and Data Center), sent as a bearer token. |
+| `oauth_token` | secret | | An OAuth 2.0 (3LO) access token (Cloud), with `cloud_id`. Calls go through `api.atlassian.com`. |
+| `cloud_id` | config | | The site's Atlassian cloud id, for OAuth 2.0 calls. |
+| `oauth_client_secret` | secret | | The OAuth 2.0 app's client secret. Verifies [dynamic webhook](webhooks.md) deliveries. |
+| `connect_app_key` | config | | An Atlassian Connect app's key (Cloud), with `connect_shared_secret`. |
+| `connect_shared_secret` | secret | | The Connect installation's shared secret. Signs API calls and verifies deliveries. |
+| `connect_client_key` | config | | The Connect installation's client key, checked on deliveries. |
 | `webhook_secret` | secret | | Verifies deliveries. See [Security](#security). |
 | `requested_by_trailer` | config | `true` | End comments and new issue descriptions with "Requested by: person". |
 | `provenance_label` | config | `shoal-automated` | A label added to every issue Shoal creates. Empty for none; no spaces. |
 
-A connection needs either `email` and `api_token`, or `personal_access_token`. Secrets are names of Shoal
+A connection needs `email` and `api_token`, `personal_access_token`, `oauth_token` and `cloud_id`, or the two Connect settings. Secrets are names of Shoal
 [secrets](../connections/README.md), never values. For people's own credentials (`credentials: per_user`) see
 [Set up Jira](setup.md#each-persons-own-credential).
 
@@ -158,7 +164,8 @@ The person is the run's initiator: whoever started it, or the person behind the 
 | --- | --- |
 | Jira admin webhook | `X-Hub-Signature: sha256=<HMAC-SHA256 of the body>` with `webhook_secret`. |
 | Automation rule | The `X-Shoal-Token` header equal to `webhook_secret`, or `?token=<secret>` on the URL. |
-| No `webhook_secret` | Accepted unsigned. Always set one on a connection that receives events. |
+| No `webhook_secret` | Rejected. A connection that receives events at its own URL needs one. |
+| A [registered webhook](webhooks.md) | At its own URL, checked with that registration's secret (admin webhooks) or the app's JWT (dynamic webhooks). |
 
 Comparisons are constant-time, and a delivery that fails them is rejected (422, `webhook signature verification failed`) before any trigger sees it. Each
 connection has its own webhook URL, so rotating one connection's secret doesn't affect others. Calls to Jira use only
@@ -172,4 +179,8 @@ only the projects and permissions your workflows need.
 | `POST /v1/namespaces/{ns}/connections/{name}/test` | Calls `/myself` and returns the account name. |
 | `GET /v1/namespaces/{ns}/connections/{name}/webhook` | The webhook URL and setup instructions. |
 | `POST /v1/hooks/{id}` | Where Jira delivers events. |
+| `POST /v1/hooks/{id}/{registration}` | Where a webhook Shoal registered for a trigger delivers. |
+| `GET /v1/namespaces/{ns}/triggers/{name}/webhook` | A trigger's registered webhook: status, callback URL, filter, expiry. |
+| `POST /v1/namespaces/{ns}/triggers/{name}/webhook/sync` | Register the trigger's webhook again now. |
+| `GET /v1/namespaces/{ns}/connections/{name}/webhooks` | Every webhook registered through the connection. |
 | `GET /v1/integrations/jira` | This integration's settings, actions, resources and events. |

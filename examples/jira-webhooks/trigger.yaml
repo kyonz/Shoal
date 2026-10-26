@@ -1,0 +1,25 @@
+# Runs the jira-bugfix workflow when a ticket lands in the "Ready for AI" column,
+# with the webhook registered in Jira by Shoal (no Jira admin screens).
+#
+# Shoal creates the webhook when this trigger is applied, updates it when the
+# trigger changes, refreshes it before Jira expires it (dynamic webhooks) and
+# deletes it when the trigger is disabled or deleted. Check it with
+# `shoal triggers webhook jira-ready-for-ai-registered`.
+apiVersion: shoal.dev/v1
+kind: Trigger
+metadata:
+  name: jira-ready-for-ai-registered
+spec:
+  workflow: jira-bugfix
+  connection: jira-acme
+  event: issue_updated
+  webhook:
+    jql: project = BUG AND issuetype = Bug   # Jira only sends these issues
+    board: 42                                # the board's "Ready for AI" column, whichever statuses map to it
+    column: Ready for AI
+    # statuses: ["Ready for AI"]             # or name the statuses directly
+    # mode: auto                             # admin (Cloud + Data Center) or dynamic (Cloud OAuth 2.0 / Connect apps)
+  inputs:
+    issue_key: "{{ event.issue_key }}"
+    repo: "{{ event.issue.fields.customfield_10050 or 'acme/api' }}"
+  dedupe_key: "{{ event.issue_key }}:{{ event.timestamp }}"

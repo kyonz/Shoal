@@ -89,6 +89,15 @@ shoal connections webhook-url jira-acme            # the URL, then its setup ins
 shoal connections webhook-url jira-acme -o json    # the full response, including any setup manifest
 ```
 
+## Triggers and connections
+
+```sh
+shoal triggers webhook jira-ready-for-ai    # the webhook Shoal registered in the provider for a trigger
+shoal triggers sync jira-ready-for-ai       # register it again now (exit 1 if that fails)
+shoal connections webhooks jira-acme        # every registered webhook on a connection
+shoal connections webhook-url jira-acme     # the connection's URL, for webhooks set up by hand
+```
+
 ## Secrets
 
 ```sh

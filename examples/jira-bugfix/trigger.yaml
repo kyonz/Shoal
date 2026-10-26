@@ -1,6 +1,7 @@
 # Fires when an issue moves into the "Ready for AI" column.
 # Point a Jira webhook (Issue updated) or an Automation "Send web request" at the
 # connection's webhook URL: `shoal connections webhook-url jira-acme`.
+# Or let Shoal register the webhook in Jira itself: ../jira-webhooks/trigger.yaml.
 apiVersion: shoal.dev/v1
 kind: Trigger
 metadata:

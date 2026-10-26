@@ -3,6 +3,7 @@ and connection / trigger operations."""
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import yaml
@@ -23,7 +24,9 @@ from shoal.api.schemas import (
     SecretIn,
     SecretOut,
     TriggerTestIn,
+    TriggerWebhookOut,
     VersionDiffOut,
+    WebhookPreviewIn,
 )
 from shoal.core.diff import diff
 from shoal.core.errors import InvalidRequest, NotFound
@@ -39,7 +42,12 @@ from shoal.core.models import (
     parse_resource,
 )
 from shoal.core.scope import SHARED_NAMESPACE, TENANT_SCOPED_KINDS, use_namespace
-from shoal.integrations.base import IntegrationEvent, describe_actions, describe_resources
+from shoal.integrations.base import (
+    IntegrationEvent,
+    WebhookRegistration,
+    describe_actions,
+    describe_resources,
+)
 from shoal.integrations.manager import shared_with
 from shoal.store import tables as t
 from shoal.triggers import validate_cron
@@ -48,6 +56,7 @@ if TYPE_CHECKING:
     from shoal.engine import Engine
 
 router = APIRouter(prefix="/v1")
+log = logging.getLogger(__name__)
 
 NAMESPACED = {p: k for p, k in KIND_BY_PLURAL.items() if k not in TENANT_SCOPED_KINDS}
 TENANT_SCOPED = {p: k for p, k in KIND_BY_PLURAL.items() if k in TENANT_SCOPED_KINDS}
@@ -76,6 +85,13 @@ async def to_out(ctx: Ctx, row: t.Resource) -> ResourceOut:
         loaded = await ctx.engine.integrations.custom.load(ctx.tenant_id, row.name)
         if loaded is not None:
             status.update(loaded.status())
+    elif row.kind == "Trigger" and doc["spec"].get("webhook") is not None:
+        # A compact summary (it also lands in Terraform state); GET .../triggers/{name}/webhook has the details.
+        registration = await ctx.engine.webhooks.get(ctx.tenant_id, row.namespace, row.name)
+        full = await ctx.engine.webhooks.describe(registration) or {"status": "pending"}
+        status["webhook"] = {k: full.get(k) for k in ("id", "status", "url", "error", "expires_at")} | {
+            "mode": (full.get("state") or {}).get("mode")
+        }
     elif row.kind == "Trigger" and doc["spec"].get("event") == "schedule" and doc["spec"].get("schedule"):
         with use_namespace(row.namespace):
             state = await ctx.engine.store.get_trigger_state(ctx.tenant_id, row.name)
@@ -144,6 +160,24 @@ def validate_plugin_config(engine: Engine, resource: ResourceBase) -> None:
                                      details={"errors": errors}) from exc
 
 
+async def validate_webhook(ctx: Ctx, resource: ResourceBase, namespace: str) -> None:
+    if isinstance(resource, Trigger):
+        await ctx.engine.webhooks.validate(ctx.tenant_id, namespace, resource)
+
+
+async def sync_webhook(ctx: Ctx, kind: str, namespace: str, name: str) -> None:
+    """Register, update or remove a trigger's provider webhook now, so the response shows the outcome.
+
+    Failures are recorded on the registration (and retried in the background), not raised: the trigger is saved either way.
+    """
+    if kind != "Trigger":
+        return
+    try:
+        await ctx.engine.webhooks.sync(ctx.tenant_id, namespace, name, changed=True)
+    except Exception:
+        log.exception("webhook sync for trigger %s/%s failed", namespace, name)
+
+
 MessageQuery = Query(None, max_length=2000, description="Change note stored with the new version.")
 
 
@@ -160,11 +194,13 @@ async def _put(ctx: Ctx, kind: str, name: str, namespace: str, body: ResourceIn,
     resource = build_resource(kind, name, body)
     validate_plugin_config(ctx.engine, resource)
     await check_apply(ctx, resource, namespace)
+    await validate_webhook(ctx, resource, namespace)
     row, outcome = await ctx.engine.store.apply_resource(
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(body.spec), message=message
     )
     if outcome != "unchanged":
         await ctx.audit(f"{kind.lower()}.{outcome}", f"{row.namespace}/{name}", namespace=row.namespace, version=row.version)
+    await sync_webhook(ctx, row.kind, row.namespace, row.name)
     if outcome == "created":
         response.status_code = 201
     return await to_out(ctx, row)
@@ -204,6 +240,7 @@ def _namespaced_routes(plural: str, kind: str) -> None:
         await ctx.namespace(namespace, f"{plural}:delete")
         await ctx.engine.store.delete_resource(ctx.tenant_id, kind, name, namespace=namespace)
         await ctx.audit(f"{kind.lower()}.deleted", f"{namespace}/{name}", namespace=namespace)
+        await sync_webhook(ctx, kind, namespace, name)
 
     @router.get(f"{base}/{{name}}/versions", tags=tag, response_model=list[ResourceVersionOut], name=f"versions_{plural}")
     async def versions(namespace: str, name: str, ctx: CtxDep) -> Any:
@@ -331,6 +368,7 @@ async def _rollback(ctx: Ctx, kind: str, name: str, namespace: str, body: Rollba
          "spec": target.source if target.source is not None else target.document["spec"]}
     )
     resource = build_resource(kind, name, restored)
+    await validate_webhook(ctx, resource, namespace)
     new, outcome = await store.apply_resource(
         ctx.tenant_id, resource, actor=ctx.actor, namespace=namespace, source=strip_nulls(restored.spec),
         message=body.message or f"Roll back to version {body.version}",
@@ -338,6 +376,7 @@ async def _rollback(ctx: Ctx, kind: str, name: str, namespace: str, body: Rollba
     if outcome != "unchanged":
         await ctx.audit(f"{kind.lower()}.rolled_back", f"{new.namespace}/{name}", namespace=new.namespace,
                         version=new.version, restored=body.version)
+    await sync_webhook(ctx, kind, new.namespace, name)
     return await to_out(ctx, new)
 
 
@@ -366,6 +405,7 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
             resource = parse_resource({**doc, "spec": strip_nulls(doc.get("spec"))})
             validate_semantics(resource)
             validate_plugin_config(ctx.engine, resource)
+            await validate_webhook(ctx, resource, ns)
         except (ValidationError, ValueError, InvalidRequest) as exc:
             message = "; ".join(f"{e['loc']}: {e['msg']}" for e in _errors(exc)) if isinstance(exc, ValidationError) else str(exc)
             results.append(ApplyResult(kind=kind, name=name, namespace=ns, outcome="invalid", error=message))
@@ -396,6 +436,7 @@ async def apply(request: Request, ctx: CtxDep, namespace: str = "default", dry_r
         )
         if outcome != "unchanged":
             await ctx.audit(f"{row.kind.lower()}.{outcome}", f"{row.namespace}/{row.name}", namespace=row.namespace, version=row.version)
+            await sync_webhook(ctx, row.kind, row.namespace, row.name)
         results.append(ApplyResult(kind=row.kind, name=row.name, namespace=row.namespace, outcome=outcome, version=row.version))  # type: ignore[arg-type]
     return results
 
@@ -587,6 +628,18 @@ async def install_connection(
     return {"authorize_url": url}
 
 
+@router.get("/namespaces/{namespace}/connections/{name}/webhooks", tags=["connections"], response_model=list[TriggerWebhookOut],
+            summary="Webhooks Shoal registered with the provider through this connection, one per trigger")
+async def connection_webhooks(namespace: str, name: str, ctx: CtxDep) -> Any:
+    await ctx.namespace(namespace, "connections:read")
+    row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace)
+    out = []
+    for registration in await ctx.engine.webhooks.for_connection(ctx.tenant_id, row.namespace, name):
+        if await ctx.engine.authz.allowed(ctx.principal, "triggers:read", registration.namespace):
+            out.append(await ctx.engine.webhooks.describe(registration))
+    return out
+
+
 @router.get("/namespaces/{namespace}/connections/{name}/actions", tags=["connections"],
             summary="Actions and queryable resources this connection offers")
 async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
@@ -723,6 +776,43 @@ async def fire_trigger(namespace: str, name: str, body: TriggerTestIn, ctx: CtxD
 async def trigger_deliveries(namespace: str, name: str, ctx: CtxDep, limit: int = Query(50, le=500)) -> Any:
     await ctx.namespace(namespace, "triggers:read")
     return await ctx.engine.store.list_deliveries(ctx.tenant_id, name, limit, namespace=namespace)
+
+
+@router.get("/namespaces/{namespace}/triggers/{name}/webhook", tags=["triggers"], response_model=TriggerWebhookOut | None,
+            summary="The provider webhook Shoal registered for this trigger")
+async def trigger_webhook(namespace: str, name: str, ctx: CtxDep) -> Any:
+    await ctx.namespace(namespace, "triggers:read")
+    trigger = await _trigger(ctx, namespace, name)
+    return await ctx.engine.webhooks.describe(await ctx.engine.webhooks.get(ctx.tenant_id, namespace, name), trigger)
+
+
+@router.post("/namespaces/{namespace}/triggers/{name}/webhook/sync", tags=["triggers"], response_model=TriggerWebhookOut | None,
+             summary="Register, update or remove this trigger's provider webhook now")
+async def sync_trigger_webhook(namespace: str, name: str, ctx: CtxDep) -> Any:
+    """Re-registers even when nothing changed (use after the webhook was deleted in the provider), and retries failures now."""
+    await ctx.namespace(namespace, "triggers:write")
+    trigger = await _trigger(ctx, namespace, name)
+    row = await ctx.engine.webhooks.sync(ctx.tenant_id, namespace, name, force=True)
+    await ctx.audit("trigger.webhook_synced", f"{namespace}/{name}", namespace=namespace, status=row.status if row else None)
+    return await ctx.engine.webhooks.describe(row, trigger)
+
+
+@router.post("/namespaces/{namespace}/trigger-webhook-preview", tags=["triggers"],
+             summary="What Shoal would register with the provider for these trigger settings")
+async def preview_trigger_webhook(namespace: str, body: WebhookPreviewIn, ctx: CtxDep) -> dict[str, Any]:
+    await ctx.namespace(namespace, "triggers:read")
+    conn = await _connection(ctx, namespace, body.connection)
+    integration = ctx.engine.integrations.get(conn.spec.integration)
+    trigger = Trigger.model_validate({
+        "apiVersion": "shoal.dev/v1", "kind": "Trigger", "metadata": {"name": "preview"},
+        "spec": {"connection": body.connection, "event": body.event, "workflow": "preview", "webhook": body.webhook},
+    })
+    config = ctx.engine.webhooks.config(integration, trigger)
+    registration = WebhookRegistration(id="preview", url="", name="", event=body.event, config=config, secret="")
+    try:
+        return {"integration": integration.key, **integration.describe_webhook(registration)}
+    except Exception as exc:
+        raise InvalidRequest(str(exc)) from exc
 
 
 @router.get("/schedule-preview", tags=["triggers"], summary="Next fire times for a cron expression")

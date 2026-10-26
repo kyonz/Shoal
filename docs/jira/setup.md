@@ -45,7 +45,14 @@ check is `POST /v1/namespaces/{ns}/connections/{name}/test`.
 Every connection has its own webhook URL, `https://<shoal>/v1/hooks/<id>`. The connection page shows it with a copy
 button and these instructions, and the API returns it in the connection's `status.webhook_url` and from
 `GET /v1/namespaces/{ns}/connections/{name}/webhook`, which `shoal connections webhook-url <name>` prints. Point Jira at it
-in one of two ways.
+in one of two ways, or let a trigger register its own webhook (below).
+
+### Let Shoal register the webhook
+
+Give a trigger a `webhook` block (a JQL filter, a board column or statuses) and Shoal creates the webhook in Jira,
+keeps it in step with the trigger, refreshes it before it expires and deletes it with the trigger. It works with an
+administrator's credential (admin webhooks, Cloud and Data Center) and with OAuth 2.0 and Connect apps (dynamic
+webhooks, Cloud). See [Webhooks Shoal registers](webhooks.md).
 
 ### Option 1: a Jira admin webhook
 
@@ -77,8 +84,8 @@ A delivery from Jira's issue data has the same fields as a webhook (`issue`, `us
 
 ### Without a secret
 
-If the connection has no `webhook_secret`, Jira deliveries are accepted unsigned, so anyone who learns the URL could fire
-your triggers. Always set one for a connection that receives webhooks.
+If the connection has no `webhook_secret`, Shoal rejects deliveries to its URL, since anyone who learns the URL could
+otherwise fire your triggers. Webhooks Shoal registers have their own secrets and don't need it.
 
 ## Each person's own credential
 

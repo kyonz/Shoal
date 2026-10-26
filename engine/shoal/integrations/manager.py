@@ -19,9 +19,15 @@ from typing import TYPE_CHECKING, Any
 
 from shoal.core import clock
 from shoal.core.errors import CredentialRequired, InvalidRequest, NotFound, PluginError, Unauthorized
-from shoal.core.models import Connection
+from shoal.core.models import Connection, Trigger
 from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
-from shoal.integrations.base import ConnectionContext, Integration, IntegrationEvent, Page
+from shoal.integrations.base import (
+    ConnectionContext,
+    Integration,
+    IntegrationEvent,
+    Page,
+    WebhookRegistration,
+)
 from shoal.integrations.custom import CustomIntegrations
 
 if TYPE_CHECKING:
@@ -30,6 +36,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 INSTALL_STATE_TTL = timedelta(minutes=15)
+# Queued deliveries to a registered webhook's URL carry its id in this header (never taken from the sender).
+REGISTRATION_HEADER = "x-shoal-registration-id"
 # Key spaces the engine itself waits on (signals, approvals, child runs, credentials); never set by an event.
 INTERNAL_WAKE_PREFIXES = {"signal", "event", "approval", "run", "credential"}
 
@@ -230,13 +238,20 @@ class IntegrationManager:
         endpoint = await self.engine.store.webhook_for_connection(tenant_id, connection_name, namespace=row.namespace)
         return f"{self.engine.settings.public_url.rstrip('/')}/v1/hooks/{endpoint.id}"
 
-    async def accept_webhook(self, webhook_id: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
+    async def accept_webhook(
+        self, webhook_id: str, headers: dict[str, str], body: bytes, *, registration_id: str | None = None
+    ) -> dict[str, Any]:
         """Verify a delivery and queue it for a worker; the sender gets its answer without waiting for runs to start."""
         endpoint = await self.engine.store.resolve_webhook(webhook_id)
         if endpoint is None:
             raise NotFound("unknown webhook")
         await self.engine.quotas.check_webhook(endpoint.id)
-        headers = {k.lower(): v for k, v in headers.items()}
+        headers = {k.lower(): v for k, v in headers.items() if k.lower() != REGISTRATION_HEADER}
+        if registration_id is not None:
+            await self._registered(endpoint, registration_id, headers, body)  # verifies
+            headers[REGISTRATION_HEADER] = registration_id  # set only here, after verifying; stripped from senders
+            delivery = await self.engine.store.enqueue_webhook(endpoint, headers, body)
+            return {"queued": True, "delivery": delivery}
         with use_namespace(endpoint.namespace):
             ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
             if not await ctx.integration.verify_webhook(ctx, headers, body):
@@ -253,8 +268,12 @@ class IntegrationManager:
         rows = await store.claim_webhooks(limit=limit, lease=timedelta(minutes=5))
         for row in rows:
             body = base64.b64decode(row.body)
+            headers = dict(row.headers)
+            registration_id = headers.pop(REGISTRATION_HEADER, None)
             try:
-                result = await self.handle_webhook(row.webhook_id, row.headers, body, verified=True)
+                result = await self.handle_webhook(
+                    row.webhook_id, headers, body, verified=True, registration_id=registration_id
+                )
             except Exception as exc:
                 log.warning("webhook delivery %s failed (attempt %d): %s", row.id, row.attempts, exc)
                 retry = row.attempts < 5 and not isinstance(exc, (NotFound, InvalidRequest))
@@ -267,13 +286,19 @@ class IntegrationManager:
         return len(rows)
 
     async def handle_webhook(
-        self, webhook_id: str, headers: dict[str, str], body: bytes, *, verified: bool = False
+        self, webhook_id: str, headers: dict[str, str], body: bytes, *, verified: bool = False,
+        registration_id: str | None = None,
     ) -> dict[str, Any]:
-        """Verify, parse, wake waiting runs and fire matching triggers."""
+        """Verify, parse, wake waiting runs and fire matching triggers.
+
+        ``registration_id``: a delivery to the URL of a webhook Shoal registered for one trigger.
+        """
         store = self.engine.store
         endpoint = await (store.get_webhook_endpoint(webhook_id) if verified else store.resolve_webhook(webhook_id))
         if endpoint is None:
             raise NotFound("unknown webhook")
+        if registration_id is not None:
+            return await self._handle_registered(endpoint, registration_id, headers, body, verified=verified)
         with use_namespace(endpoint.namespace):
             ctx = await self.connection(endpoint.tenant_id, endpoint.connection_name)
             headers = {k.lower(): v for k, v in headers.items()}
@@ -317,6 +342,50 @@ class IntegrationManager:
         if len(kept) != len(keys):
             log.warning("ignored wake keys %s from a %s webhook", sorted(set(keys) - set(kept)), integration_key)
         return kept
+
+    async def _registered(
+        self, endpoint: Any, registration_id: str, headers: dict[str, str], body: bytes, *, verified: bool = False
+    ) -> tuple[Any, ConnectionContext, WebhookRegistration]:
+        """The registration a delivery is for (and its trigger's connection), checked with the registration's secret."""
+        webhooks = self.engine.webhooks
+        row = await webhooks.by_id(registration_id)
+        if row is None or row.tenant_id != endpoint.tenant_id or row.connection_name != endpoint.connection_name:
+            raise NotFound("unknown webhook")
+        try:
+            trigger_row = await self.engine.store.get_resource_row(
+                row.tenant_id, "Trigger", row.trigger_name, namespace=row.namespace, fallback=False
+            )
+        except NotFound:
+            raise NotFound("unknown webhook") from None
+        trigger = Trigger.model_validate(trigger_row.document)
+        if trigger.spec.webhook is None:
+            raise NotFound("unknown webhook")
+        headers = {k.lower(): v for k, v in headers.items()}
+        ctx = await webhooks.context(row.tenant_id, row.namespace, row.connection_name, row.registered_by)
+        registration = await webhooks.registration(row, trigger, ctx.integration, "")
+        if not verified and not await ctx.integration.verify_registered_webhook(ctx, registration, headers, body):
+            raise InvalidRequest("webhook signature verification failed")
+        return row, ctx, registration
+
+    async def _handle_registered(
+        self, endpoint: Any, registration_id: str, headers: dict[str, str], body: bytes, *, verified: bool = False
+    ) -> dict[str, Any]:
+        """A delivery to the URL of a webhook Shoal registered for one trigger: fires only that trigger."""
+        webhooks = self.engine.webhooks
+        headers = {k.lower(): v for k, v in headers.items() if k.lower() != REGISTRATION_HEADER}
+        row, ctx, registration = await self._registered(endpoint, registration_id, headers, body, verified=verified)
+        with use_namespace(row.namespace):
+            events = await ctx.integration.parse_webhook(ctx, headers, body)
+        await webhooks.touch(row.id)
+        woken: list[str] = []
+        fired: list[dict[str, Any]] = []
+        for event in events:
+            event.wake_keys = self.own_wake_keys(ctx.integration.key, event.wake_keys)
+            woken += await self.engine.store.wake_by_keys(row.tenant_id, event.wake_keys)
+            woken += await self.engine.signals.deliver_event(row.tenant_id, event)
+            matches = ctx.integration.registered_event_matches(registration, event)
+            fired += await self.engine.triggers.dispatch_registered(row.tenant_id, row.namespace, row.trigger_name, event, matches)
+        return {"events": len(events), "woken_runs": sorted(set(woken)), "triggers": fired}
 
     async def inject_event(self, tenant_id: str, connection: str, event: IntegrationEvent) -> dict[str, Any]:
         """Process an already-parsed event (polling integrations, tests, replays)."""

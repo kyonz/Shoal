@@ -40,6 +40,20 @@ async def receive(webhook_id: str, request: Request, engine: EngineDep, token: s
     return JSONResponse(reply.body, status_code=reply.status)
 
 
+@router.post("/{webhook_id}/{registration_id}", status_code=202, summary="Receive a delivery for a webhook Shoal registered for a trigger")
+async def receive_registered(webhook_id: str, registration_id: str, request: Request, engine: EngineDep) -> dict[str, Any]:
+    body = await request.body()
+    if len(body) > MAX_BODY:
+        from shoal.core.errors import InvalidRequest
+
+        raise InvalidRequest("payload too large")
+    headers = dict(request.headers)
+    if engine.settings.webhook_processing == "queue":
+        return await engine.integrations.accept_webhook(webhook_id, headers, body, registration_id=registration_id)
+    await engine.quotas.check_webhook(webhook_id)
+    return await engine.integrations.handle_webhook(webhook_id, headers, body, registration_id=registration_id)
+
+
 @router.post("/runs/{run_id}/{token}/signals/{name}", status_code=202, summary="Signal a run through its callback URL")
 async def run_callback(run_id: str, token: str, name: str, request: Request, engine: EngineDep) -> dict[str, Any]:
     """For systems that can only call a URL: ``{{ run.signal_url }}/<name>``. A JSON body is the payload; any other body is sent as text."""
