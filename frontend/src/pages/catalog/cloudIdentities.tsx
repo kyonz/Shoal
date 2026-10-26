@@ -1,6 +1,6 @@
 /** Cloud identities: in-page AWS role setup (trust policy, namespace binding) and a Test button. */
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConical, TriangleAlert } from "lucide-react";
+import { Cloud, FlaskConical, TriangleAlert } from "lucide-react";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { rawJson } from "@/api/client";
@@ -231,6 +231,17 @@ function TestButton({ ctx }: { ctx: EditorContext }) {
 }
 
 export const cloudIdentityExtension: EditorExtension = {
-  sections: (ctx) => <SetupGuide ctx={ctx} />,
+  tabs: (ctx) => [
+    {
+      value: "aws-setup",
+      label: (
+        <>
+          <Cloud className="size-3.5" /> AWS setup
+        </>
+      ),
+      content: <SetupGuide ctx={ctx} />,
+      showOnNew: true,
+    },
+  ],
   actions: (ctx) => <TestButton ctx={ctx} />,
 };
