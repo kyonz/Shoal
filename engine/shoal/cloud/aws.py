@@ -29,6 +29,7 @@ import httpx
 from shoal.cloud import CloudSession, IssueRequest
 from shoal.core import clock
 from shoal.core.errors import StepError
+from shoal.core.scope import SHARED_NAMESPACE
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
@@ -319,46 +320,196 @@ class AwsProvider:
             },
         )
 
-    def trust_policy(self, request: IssueRequest) -> dict[str, Any]:
+    def trust_policy(self, request: IssueRequest, scope: str = "identity") -> dict[str, Any]:
+        """The role's trust policy plus everything needed to set it up, with this deployment's real values.
+
+        ``account`` is the one-off connection of an AWS account to Shoal (the IAM OIDC identity provider,
+        web_identity only); ``role`` is the role's trust policy ("role assumption"). Each has console steps,
+        a CLI script and Terraform.
+        """
         cfg = request.spec.aws
         assert cfg is not None
         part, acct = partition(cfg.role_arn), account(cfg.role_arn)
+        role_name = cfg.role_arn.rsplit("/", 1)[-1]
+        tf_name = re.sub(r"[^A-Za-z0-9_]", "_", role_name)
         actions = ["sts:TagSession", "sts:SetSourceIdentity"]
         notes: list[str] = []
-        setup: list[str] = []
+        bound_namespace = scope == "namespace" and request.namespace != SHARED_NAMESPACE
+        if scope == "namespace" and not bound_namespace:
+            notes.append("This identity is in `shared`, so it serves runs from several namespaces. To bind the role to "
+                         "one team, register the identity in that team's namespace.")
+        match = "StringLike" if scope == "namespace" else "StringEquals"
+        subject = request.namespace_subjects if scope == "namespace" else request.subject
+        extra: dict[str, Any] = {}
+        if bound_namespace:  # the run's namespace travels as a session tag
+            extra = {"StringEquals": {"aws:RequestTag/shoal:namespace": request.namespace}}
+        result: dict[str, Any] = {"role_arn": cfg.role_arn, "role_name": role_name, "account": acct}
+        explain: list[dict[str, str]] = []
+        account_setup: dict[str, Any] | None = None
         if request.spec.trust == "web_identity":
             issuer = self.engine.workload.issuer
             host = self._issuer_host()
             audience = self.engine.settings.aws_audience
+            provider_arn = f"arn:{part}:iam::{acct}:oidc-provider/{host}"
+            condition: dict[str, Any] = {"StringEquals": {f"{host}:aud": audience}}
+            condition.setdefault(match, {})[f"{host}:sub"] = subject
+            for op, values in extra.items():
+                condition.setdefault(op, {}).update(values)
             statement = {
                 "Sid": "ShoalWorkloadIdentity",
                 "Effect": "Allow",
-                "Principal": {"Federated": f"arn:{part}:iam::{acct}:oidc-provider/{host}"},
+                "Principal": {"Federated": provider_arn},
                 "Action": ["sts:AssumeRoleWithWebIdentity", *actions],
-                "Condition": {"StringEquals": {f"{host}:aud": audience, f"{host}:sub": request.subject}},
+                "Condition": condition,
             }
-            setup.append(f"aws iam create-open-id-connect-provider --url {issuer} --client-id-list {audience}")
+            result.update(issuer=issuer, audience=audience, oidc_provider_arn=provider_arn)
+            explain += [
+                {"field": "Principal.Federated", "value": provider_arn,
+                 "meaning": "Only tokens from Shoal's identity provider in this account (set up in the account step)."},
+                {"field": f"{host}:aud", "value": audience, "meaning": "The token was issued for AWS STS."},
+                {"field": f"{host}:sub", "value": subject,
+                 "meaning": "Only this cloud identity." if scope == "identity" else
+                 f"Any cloud identity in the {request.namespace} namespace of this Shoal tenant."},
+            ]
+            host_only = host.split("/", 1)[0]
             if not issuer.startswith("https://"):
-                notes.append(f"AWS must reach {issuer}/.well-known/openid-configuration over public HTTPS; "
-                             "set SHOAL_OIDC_ISSUER or publish the discovery document and JWKS (e.g. on S3).")
+                notes.append(f"AWS only accepts an HTTPS identity provider that it can reach from the internet, and {issuer} "
+                             "is not. Set SHOAL_OIDC_ISSUER to a public HTTPS URL that serves Shoal's "
+                             "/.well-known/openid-configuration and /.well-known/jwks.json (for example an S3 bucket or CDN).")
+            elif host_only in ("localhost", "127.0.0.1") or host_only.endswith((".local", ".internal", ".lan")):
+                notes.append(f"{issuer} looks private. AWS must fetch {issuer}/.well-known/openid-configuration from the "
+                             "internet; publish the two documents publicly and set SHOAL_OIDC_ISSUER if it cannot.")
+            account_setup = {
+                "title": "Connect the AWS account to Shoal (once per account)",
+                "summary": f"Add Shoal as an OpenID Connect identity provider in account {acct}. Every role in the account "
+                           "that Shoal should assume trusts this one provider; nothing is stored in Shoal.",
+                "values": [
+                    {"label": "Provider type", "value": "OpenID Connect"},
+                    {"label": "Provider URL", "value": issuer},
+                    {"label": "Audience", "value": audience},
+                    {"label": "Provider ARN (after creation)", "value": provider_arn},
+                ],
+                "console": [
+                    f"Sign in to the AWS console for account {acct} and open IAM → Identity providers → Add provider.",
+                    "Provider type: OpenID Connect.",
+                    f"Provider URL: {issuer}",
+                    f"Audience: {audience}",
+                    "Choose Add provider. (No thumbprint is needed: AWS checks the certificate against its trusted CAs. "
+                    "Older tools that ask for one accept the thumbprint from the CLI tab.)",
+                ],
+                "cli": (
+                    f"aws iam create-open-id-connect-provider \\\n  --url {issuer} \\\n  --client-id-list {audience}\n\n"
+                    "# Older AWS CLI versions require a thumbprint. Get it from the issuer's certificate chain:\n"
+                    f"# openssl s_client -servername {host_only} -showcerts -connect {host_only}:443 </dev/null 2>/dev/null \\\n"
+                    "#   | openssl x509 -fingerprint -sha1 -noout | tr -d ':' | cut -d= -f2\n"
+                    f"# then add: --thumbprint-list <fingerprint>\n\n"
+                    f"aws iam get-open-id-connect-provider --open-id-connect-provider-arn {provider_arn}"
+                ),
+                "terraform": (
+                    'resource "aws_iam_openid_connect_provider" "shoal" {\n'
+                    f'  url            = "{issuer}"\n'
+                    f'  client_id_list = ["{audience}"]\n'
+                    "  # thumbprint_list is optional with AWS provider v5.x and later\n"
+                    "}"
+                ),
+            }
+            principal_tf = "aws_iam_openid_connect_provider.shoal.arn"
         else:
             deployment = self.engine.settings.aws_deployment_role_arn or "<this Shoal deployment's IAM role ARN>"
+            condition = {match: {"sts:ExternalId": subject}}
+            for op, values in extra.items():
+                condition.setdefault(op, {}).update(values)
             statement = {
                 "Sid": "ShoalDeployment",
                 "Effect": "Allow",
                 "Principal": {"AWS": deployment},
                 "Action": ["sts:AssumeRole", *actions],
-                "Condition": {"StringEquals": {"sts:ExternalId": request.subject}},
+                "Condition": condition,
             }
-            notes.append(f"The deployment role needs sts:AssumeRole, sts:TagSession and sts:SetSourceIdentity on {cfg.role_arn}.")
+            result.update(deployment_role_arn=deployment)
+            explain += [
+                {"field": "Principal.AWS", "value": deployment, "meaning": "The IAM role this Shoal deployment runs as."},
+                {"field": "sts:ExternalId", "value": subject,
+                 "meaning": "Only this cloud identity." if scope == "identity" else
+                 f"Any cloud identity in the {request.namespace} namespace (stops other tenants on the same deployment)."},
+            ]
+            deployment_policy = {"Version": "2012-10-17", "Statement": [{
+                "Effect": "Allow", "Action": ["sts:AssumeRole", *actions], "Resource": cfg.role_arn}]}
+            account_setup = {
+                "title": "Let Shoal's deployment role assume roles in this account",
+                "summary": "In ambient mode Shoal uses the AWS identity it runs as (IRSA, EKS Pod Identity, an instance "
+                           "role). That role needs permission to assume this role.",
+                "values": [{"label": "Deployment role", "value": deployment}],
+                "console": [f"Open IAM → Roles → {deployment.rsplit('/', 1)[-1]} → Add permissions → Create inline policy.",
+                            "Choose JSON, paste the policy from the CLI tab, and save."],
+                "cli": f"cat > assume.json <<'EOF'\n{json.dumps(deployment_policy, indent=2)}\nEOF\n"
+                       f"aws iam put-role-policy --role-name {deployment.rsplit('/', 1)[-1]} "
+                       "--policy-name shoal-assume --policy-document file://assume.json",
+                "terraform": f'resource "aws_iam_role_policy" "shoal_assume_{tf_name}" {{\n'
+                             f'  role   = "{deployment.rsplit("/", 1)[-1]}"\n'
+                             f"  policy = <<EOF\n{json.dumps(deployment_policy, indent=2)}\nEOF\n}}",
+            }
             if not self.engine.settings.aws_ambient:
                 notes.append("trust 'ambient' is not enabled on this deployment (SHOAL_AWS_AMBIENT=true).")
-        return {
-            "role_arn": cfg.role_arn,
-            "policy": {"Version": "2012-10-17", "Statement": [statement]},
-            "setup": setup
-            + [f"aws iam update-assume-role-policy --role-name {cfg.role_arn.rsplit('/', 1)[-1]} --policy-document file://trust.json"],
-            "notes": notes,
-            "session_tags": sorted({"shoal:tenant", "shoal:namespace", "shoal:workflow", "shoal:run", "shoal:step",
-                                    "shoal:initiator", "shoal:agent"}),
+            principal_tf = None
+        explain.append({"field": "Action", "value": ", ".join(statement["Action"]),
+                        "meaning": "Assume the role and attach Shoal's session tags and source identity (the person who "
+                                   "started the run), so CloudTrail shows who and which run."})
+        if bound_namespace:
+            explain.append({"field": "aws:RequestTag/shoal:namespace", "value": request.namespace,
+                            "meaning": f"Only for runs in the {request.namespace} namespace."})
+        policy = {"Version": "2012-10-17", "Statement": [statement]}
+        policy_json = json.dumps(policy, indent=2)
+        tf_policy = policy_json
+        if principal_tf:
+            tf_policy = policy_json.replace(f'"{statement["Principal"]["Federated"]}"', f'"${{{principal_tf}}}"')
+        role_setup = {
+            "title": "Set the role's trust policy (role assumption)",
+            "summary": f"The trust policy on {role_name} says who may assume it. Use this one exactly; it only lets Shoal "
+                       "assume the role for this identity.",
+            "policy": policy,
+            "explain": explain,
+            "console": [
+                f"Open IAM → Roles → Create role (or open {role_name} → Trust relationships → Edit trust policy).",
+                "Trusted entity type: Custom trust policy.",
+                "Replace the whole policy with the JSON below, then add permissions and name the role "
+                f"{role_name}.",
+            ],
+            "cli": f"cat > trust.json <<'EOF'\n{policy_json}\nEOF\n\n"
+                   f"aws iam create-role --role-name {role_name} --assume-role-policy-document file://trust.json\n"
+                   f"# or, for an existing role:\n"
+                   f"aws iam update-assume-role-policy --role-name {role_name} --policy-document file://trust.json",
+            "terraform": f'resource "aws_iam_role" "{tf_name}" {{\n'
+                         f'  name                 = "{role_name}"\n'
+                         f"  max_session_duration = {max(3600, int(cfg.duration.total_seconds()))}\n"
+                         f"  assume_role_policy   = <<EOF\n{tf_policy}\nEOF\n}}",
         }
+        steps: list[dict[str, str]] = []
+        if request.spec.trust == "web_identity":
+            steps.append({"title": "Add Shoal as an identity provider in the AWS account (once per account)",
+                          "detail": f"IAM → Identity providers → Add provider → OpenID Connect, provider URL "
+                                    f"{result['issuer']}, audience {result['audience']}.",
+                          "command": account_setup["cli"].split("\n\n")[0]})
+        steps += [
+            {"title": "Create the role with this trust policy (or replace an existing role's trust policy)",
+             "detail": "Save the trust policy below as trust.json.",
+             "command": role_setup["cli"].split("\n\n", 1)[1]},
+            {"title": "Give the role only the permissions the workflows need",
+             "detail": "Attach managed or inline policies to the role. Session tags (shoal:namespace, shoal:workflow, "
+                       "shoal:initiator, ...) can be used in conditions as aws:PrincipalTag/<key>.",
+             "command": f"aws iam attach-role-policy --role-name {role_name} --policy-arn <policy ARN>"},
+            {"title": "Grant workflows and agents, save, then Test",
+             "detail": "List workflows under allow.workflows (and optionally allow.agents). Test assumes the role once "
+                       "and discards the credentials.", "command": ""},
+        ]
+        result.update(
+            policy=policy,
+            account_setup=account_setup,
+            role_setup=role_setup,
+            steps=steps,
+            setup=[step["command"] for step in steps if step["command"]],
+            notes=notes,
+            session_tags=sorted({"shoal:tenant", "shoal:namespace", "shoal:workflow", "shoal:run", "shoal:step",
+                                 "shoal:initiator", "shoal:agent"}),
+        )
+        return result

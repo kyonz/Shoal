@@ -52,6 +52,66 @@ The role's trust policy decides what may assume it. Open the identity in the UI 
 - **`web_identity`** (default). Shoal is an OpenID Connect issuer. For each step it signs a five-minute ES256 token whose subject names this identity (`tenant:<tenant id>:namespace:<ns>:cloud-identity:<name>`), and calls `AssumeRoleWithWebIdentity`. Shoal needs no AWS credentials. In AWS you add Shoal's issuer once as an IAM OIDC provider, and the trust policy pins the audience and subject. AWS must reach `<issuer>/.well-known/openid-configuration` and `/.well-known/jwks.json` over public HTTPS. A deployment inside a private network can publish those two documents somewhere public (for example an S3 bucket) and set `SHOAL_OIDC_ISSUER` to that URL.
 - **`ambient`**. Shoal uses the deployment's own AWS identity and calls `AssumeRole`. It looks for credentials the way the AWS SDKs do: environment variables, IRSA (`AWS_WEB_IDENTITY_TOKEN_FILE`), EKS Pod Identity or the ECS task role, then the EC2 instance role. The trust policy names the deployment role and requires an ExternalId that is unique to this identity, so another tenant on the same deployment cannot use the role. Operators turn this on with `SHOAL_AWS_AMBIENT=true` and set `SHOAL_AWS_DEPLOYMENT_ROLE_ARN` so the generated policies are complete. With the Helm chart, put the IRSA annotation on `serviceAccount.annotations`.
 
+### Step by step
+
+The cloud identity page (**Set up AWS**) walks through this with your real values filled in, and shows each step for the AWS console, the AWS CLI or Terraform.
+
+**1. Connect the AWS account to Shoal** (once per account, `web_identity` only). Add Shoal as an OpenID Connect identity provider:
+
+- Console: IAM → Identity providers → Add provider → **OpenID Connect**. Provider URL: Shoal's issuer (`SHOAL_OIDC_ISSUER`, by default `SHOAL_PUBLIC_URL`). Audience: `sts.amazonaws.com`.
+- No thumbprint is needed. AWS checks the issuer's certificate against its trusted CAs. Older CLI versions that insist on one take the SHA-1 fingerprint of the issuer's certificate, and the page shows the `openssl` command to get it.
+- CLI: `aws iam create-open-id-connect-provider --url https://shoal.example.com --client-id-list sts.amazonaws.com`
+- Terraform:
+
+  ```hcl
+  resource "aws_iam_openid_connect_provider" "shoal" {
+    url            = "https://shoal.example.com"
+    client_id_list = ["sts.amazonaws.com"]
+  }
+  ```
+
+The issuer must be HTTPS and reachable from the internet, because AWS fetches `/.well-known/openid-configuration` and `/.well-known/jwks.json` from it. The page warns when it isn't.
+
+For `ambient` trust this step instead gives the deployment's own role an inline policy that allows `sts:AssumeRole`, `sts:TagSession` and `sts:SetSourceIdentity` on the target role.
+
+**2. Set the role's trust policy** (role assumption). Use the generated policy exactly. With `web_identity` it looks like this:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "ShoalWorkloadIdentity",
+    "Effect": "Allow",
+    "Principal": {"Federated": "arn:aws:iam::123456789012:oidc-provider/shoal.example.com"},
+    "Action": ["sts:AssumeRoleWithWebIdentity", "sts:TagSession", "sts:SetSourceIdentity"],
+    "Condition": {"StringEquals": {
+      "shoal.example.com:aud": "sts.amazonaws.com",
+      "shoal.example.com:sub": "tenant:<tenant id>:namespace:<ns>:cloud-identity:<name>"
+    }}
+  }]
+}
+```
+
+- **Principal**: only tokens from Shoal's identity provider in this account.
+- **aud**: the token was issued for AWS STS.
+- **sub**: only this cloud identity. To bind the role to a namespace instead, see the next section.
+- **Action**: the role may be assumed, and Shoal's session tags and source identity (the person who started the run) are attached to the session.
+
+In the console, create the role (or open it → Trust relationships → Edit trust policy), choose **Custom trust policy** and paste the JSON. The page also gives the `aws iam create-role` / `update-assume-role-policy` commands and an `aws_iam_role` Terraform resource that references the provider.
+
+**3. Give the role only the permissions the workflows need.** Session tags can be used in policy conditions, such as `aws:PrincipalTag/shoal:namespace`.
+
+**4. Grant workflows** (and optionally agents) under `allow`, save, and choose **Test**. Test assumes the role once, as a run would, and discards the credentials. If it fails, it says why: for example, that AWS could not verify Shoal's token (the identity provider is missing or the issuer is not public), or that the trust policy does not match.
+
+### Bind a role to a namespace
+
+By default the trust policy names one cloud identity, so only that identity can assume the role. Choose **Any identity in this namespace** (`GET …/trust-policy?scope=namespace`) to bind the role to a Shoal namespace instead:
+
+- The subject (or, for `ambient`, the ExternalId) is matched with `StringLike` on `tenant:<tenant id>:namespace:<ns>:cloud-identity:*`, so any identity that the namespace's admins register can use the role, and identities in other namespaces or tenants cannot.
+- The policy also requires the session tag `aws:RequestTag/shoal:namespace` to equal the namespace, so the role is only assumed for runs in that namespace.
+
+An identity in `shared` serves several namespaces, so it cannot be bound to one team this way. To give one team a role, register the identity in that team's namespace.
+
 Federated tenants mint credentials on their own member deployment, with that deployment's issuer or role. Nothing passes through the hub.
 
 ## Attribution and audit

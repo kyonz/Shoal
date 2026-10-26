@@ -422,7 +422,11 @@ kept out of the model's reach.
   cannot use each other's roles. Sessions carry the initiator as
   SourceIdentity and `shoal:*` session tags (tenant, namespace, workflow, run,
   step, agent, initiator); `GET …/cloud-identities/{name}/trust-policy`
-  generates the role's trust policy and setup commands. Issues, refusals and
+  generates the role's trust policy and setup steps, bound to the identity
+  or (`?scope=namespace`) to its namespace: a `StringLike` subject/ExternalId
+  over the namespace's identities plus `aws:RequestTag/shoal:namespace`;
+  `POST` previews a draft, and `POST …/test` assumes the role once
+  (`cloud-identities:write`, audited) with hints for common setup errors. Issues, refusals and
   failures go to run events and the audit log. Registering roles and changing
   grants is `namespace-admin` only (editors cannot grant their own
   workflows). Federated members mint on their own deployment. Guide:

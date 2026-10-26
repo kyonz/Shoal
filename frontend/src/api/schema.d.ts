@@ -4032,10 +4032,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The trust policy the cloud role needs so this identity can assume it */
+        /** The trust policy and setup steps the cloud role needs so this identity can assume it */
         get: operations["cloud_identity_trust_policy_v1_namespaces__namespace__cloud_identities__name__trust_policy_get"];
         put?: never;
-        post?: never;
+        /** Preview the trust policy for a draft identity (not saved) */
+        post: operations["preview_cloud_identity_trust_policy_v1_namespaces__namespace__cloud_identities__name__trust_policy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{namespace}/cloud-identities/{name}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assume the role once, as a run would, to check the setup (credentials are discarded) */
+        post: operations["test_cloud_identity_v1_namespaces__namespace__cloud_identities__name__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17163,6 +17181,84 @@ export interface operations {
         };
     };
     cloud_identity_trust_policy_v1_namespaces__namespace__cloud_identities__name__trust_policy_get: {
+        parameters: {
+            query?: {
+                /** @description identity: only this identity may assume the role; namespace: any identity in its namespace. */
+                scope?: string;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_cloud_identity_trust_policy_v1_namespaces__namespace__cloud_identities__name__trust_policy_post: {
+        parameters: {
+            query?: {
+                /** @description identity: only this identity may assume the role; namespace: any identity in its namespace. */
+                scope?: string;
+            };
+            header?: never;
+            path: {
+                namespace: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_cloud_identity_v1_namespaces__namespace__cloud_identities__name__test_post: {
         parameters: {
             query?: never;
             header?: never;

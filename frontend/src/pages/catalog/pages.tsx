@@ -1,7 +1,8 @@
 /** Route components: one per kind, binding the generic pages to their extensions. */
 import ResourceEditorPage from "./ResourceEditorPage";
 import ResourceListPage from "./ResourceListPage";
-import { agentExtension, cloudIdentityExtension, gatewayExtension, modelPolicyExtension, sandboxExtension, skillExtension } from "./extensions";
+import { agentExtension, gatewayExtension, modelPolicyExtension, sandboxExtension, skillExtension } from "./extensions";
+import { cloudIdentityExtension } from "./cloudIdentities";
 import { evalExtension } from "./evals/EvalExtension";
 import { evalPlatformExtension } from "./evals/Platforms";
 import { blueprintExtension } from "./blueprints/blueprintExtension";

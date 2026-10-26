@@ -283,3 +283,73 @@ async def test_api_trust_policy_issuer_and_permissions(engine, admin):
     token = engine.workload.issue("sub-1", "sts.amazonaws.com")
     key = jwt.PyJWK(jwks["keys"][0]).key
     assert jwt.decode(token, key, algorithms=["ES256"], audience="sts.amazonaws.com")["sub"] == "sub-1"
+
+
+async def test_trust_policy_can_bind_the_role_to_the_namespace(engine, admin):
+    spec = identity()["spec"]
+    await admin.put("/v1/namespaces/default/cloud-identities/aws-prod", json={"spec": spec})
+    body = (await admin.get("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy?scope=namespace")).json()
+    (statement,) = body["policy"]["Statement"]
+    cond = statement["Condition"]
+    assert cond["StringLike"]["shoal.test:sub"].endswith(":namespace:default:cloud-identity:*")
+    assert cond["StringEquals"] == {"shoal.test:aud": "sts.amazonaws.com", "aws:RequestTag/shoal:namespace": "default"}
+    assert body["scope"] == "namespace" and body["oidc_provider_arn"].endswith(":oidc-provider/shoal.test")
+    assert any("create-open-id-connect-provider" in s["command"] for s in body["steps"])
+
+    # ambient: ExternalId pattern plus the run's namespace tag
+    spec["trust"] = "ambient"
+    body = (await admin.post("/v1/namespaces/default/cloud-identities/draft/trust-policy?scope=namespace",
+                             json={"spec": spec})).json()  # preview of an unsaved draft
+    cond = body["policy"]["Statement"][0]["Condition"]
+    assert cond["StringLike"]["sts:ExternalId"].endswith(":namespace:default:cloud-identity:*")
+    assert cond["StringEquals"]["aws:RequestTag/shoal:namespace"] == "default"
+    assert (await admin.get("/v1/namespaces/default/cloud-identities/draft")).status_code == 404
+
+    # a shared identity cannot be bound to one team this way, and says so
+    await admin.put("/v1/namespaces/shared/cloud-identities/org", json={"spec": identity()["spec"]})
+    body = (await admin.get("/v1/namespaces/shared/cloud-identities/org/trust-policy?scope=namespace")).json()
+    assert "aws:RequestTag/shoal:namespace" not in str(body["policy"]) and body["notes"]
+    assert (await admin.get("/v1/namespaces/shared/cloud-identities/org/trust-policy?scope=team")).status_code == 422
+
+
+async def test_test_button_assumes_the_role_and_explains_failures(engine, admin):
+    fake = FakeSTS()
+    engine.http_transport = httpx.MockTransport(fake)
+    await admin.put("/v1/namespaces/default/cloud-identities/aws-prod", json={"spec": identity()["spec"]})
+    r = await admin.post("/v1/namespaces/default/cloud-identities/aws-prod/test")
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    assert r.json()["assumed_role_arn"].startswith("arn:aws:sts::123456789012:assumed-role/")
+    assert SECRET not in r.text and TOKEN not in r.text
+    tags = jwt.decode(FakeSTS.form(fake.requests[-1])["WebIdentityToken"], options={"verify_signature": False})
+    assert tags["https://aws.amazon.com/tags"]["principal_tags"]["shoal:workflow"] == ["shoal-test"]
+
+    engine.http_transport = httpx.MockTransport(FakeSTS(error="InvalidIdentityToken"))
+    body = (await admin.post("/v1/namespaces/default/cloud-identities/aws-prod/test")).json()
+    assert body["ok"] is False and body["code"] == "InvalidIdentityToken" and "OIDC provider" in body["hint"]
+    tenant = (await engine.store.get_tenant_by_slug("acme")).id
+    outcomes = [e.outcome for e in await engine.store.list_audit(tenant, action="cloud-identity.tested")]
+    assert sorted(outcomes) == ["failure", "success"]
+
+
+async def test_setup_instructions_cover_the_account_and_the_role(engine, admin):
+    engine.settings.oidc_issuer = None
+    engine.workload.issuer = "https://shoal.acme.com"
+    await admin.put("/v1/namespaces/default/cloud-identities/aws-prod", json={"spec": identity()["spec"]})
+    body = (await admin.get("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy")).json()
+    account = body["account_setup"]
+    values = {v["label"]: v["value"] for v in account["values"]}
+    assert values["Provider URL"] == "https://shoal.acme.com" and values["Audience"] == "sts.amazonaws.com"
+    assert values["Provider ARN (after creation)"] == "arn:aws:iam::123456789012:oidc-provider/shoal.acme.com"
+    assert "--url https://shoal.acme.com" in account["cli"] and "thumbprint" in account["cli"]
+    assert 'aws_iam_openid_connect_provider" "shoal"' in account["terraform"]
+    assert not body["notes"]  # a public https issuer needs no warning
+
+    role = body["role_setup"]
+    assert role["policy"] == body["policy"]
+    assert "update-assume-role-policy --role-name deploy" in role["cli"]
+    assert "${aws_iam_openid_connect_provider.shoal.arn}" in role["terraform"]
+    assert {e["field"] for e in role["explain"]} >= {"Principal.Federated", "shoal.acme.com:sub", "shoal.acme.com:aud"}
+
+    spec = identity(trust="ambient")["spec"]
+    body = (await admin.post("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy", json={"spec": spec})).json()
+    assert "put-role-policy" in body["account_setup"]["cli"] and "sts:ExternalId" in str(body["role_setup"]["policy"])
