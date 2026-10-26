@@ -174,11 +174,17 @@ class AgentStep(StepBase):
     connections: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _no_reserved_outputs(self) -> AgentStep:
-        # The agent's finish tool always takes `summary`; a declared output of the same name could never be set.
-        reserved = AGENT_RESERVED_OUTPUTS & set(self.outputs)
-        if reserved:
-            raise ValueError(f"reserved output names: {sorted(reserved)} (every agent step already returns a summary)")
+    def _reserved_outputs(self) -> AgentStep:
+        # The agent's finish tool always takes a string `summary`, and the step's output always includes it. A declared
+        # string `summary` is the same thing (older versions of the editor added one), so it is dropped; any other type
+        # could never be set.
+        for name in AGENT_RESERVED_OUTPUTS & set(self.outputs):
+            if self.outputs[name].type != "string":
+                raise ValueError(
+                    f"output {name!r} is reserved: every agent step already returns a string {name}. "
+                    f"Rename this output (for example to 'result')."
+                )
+            del self.outputs[name]
         return self
 
 
