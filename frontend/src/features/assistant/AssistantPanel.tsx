@@ -4,7 +4,7 @@
  * on an approval card unless auto-approve is on.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Bot, Check, ChevronRight, CircleAlert, Eye, MessageSquarePlus, MoreHorizontal, ShieldCheck, Sparkles, X } from "lucide-react";
+import { ArrowLeft, ArrowLeftRight, ArrowUp, Bot, Check, ChevronRight, CircleAlert, Eye, History, MessageSquarePlus, MoreHorizontal, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { ApiError, rawJson } from "@/api/client";
@@ -26,7 +26,7 @@ import {
   type ChatMessage,
   type PendingAction,
 } from "./api";
-import { useAssistant } from "./store";
+import { chatTitle, isNamespaceNote, NAMESPACE_NOTE, newChatId, useAssistant, useConversation, type Conversation } from "./store";
 
 const NO_MESSAGES: ChatMessage[] = [];
 /** The server accepts at most this many history messages (ChatIn.messages). */
@@ -76,13 +76,15 @@ export function AssistantLauncher() {
 }
 
 export function AssistantPanel() {
-  const { open, setOpen, draft, setDraft, autoApprove, setAutoApprove, conversation, load, save } = useAssistant();
+  const { open, setOpen, draft, setDraft, autoApprove, setAutoApprove, load, save, select } = useAssistant();
+  const conversation = useConversation();
   const { me } = useAuth();
   const ns = useNs();
   const location = useLocation();
   const qc = useQueryClient();
   const info = useAssistantInfo(open);
   const [error, setError] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -94,14 +96,25 @@ export function AssistantPanel() {
 
   const messages = conversation?.messages ?? NO_MESSAGES;
   const pending = conversation?.pending ?? NO_PENDING;
-  const namespace = conversation?.namespace ?? ns;
+  // The assistant follows the namespace the user is in; a switch since the chat's last message is sent along so it knows.
+  const namespace = ns;
+  const switchedFrom = conversation && messages.length > 0 && conversation.namespace !== ns ? conversation.namespace : null;
+  const tenantName = me?.tenant?.name ?? me?.tenant?.slug ?? null;
   const results = useMemo(() => resultsById(messages), [messages]);
 
   const chat = useMutation({
     // The history travels with each call: the optimistic save below re-renders before the request is sent.
-    mutationFn: (body: { message?: string; decisions?: Record<string, { approve: boolean; note?: string }>; history: ChatMessage[]; pending: PendingAction[] }) =>
+    mutationFn: (body: {
+      id: string;
+      message?: string;
+      decisions?: Record<string, { approve: boolean; note?: string }>;
+      history: ChatMessage[];
+      pending: PendingAction[];
+      previous: string | null;
+    }) =>
       sendChat({
         namespace,
+        previous_namespace: body.previous,
         messages: body.history as unknown as ChatIn["messages"],
         message: body.message ?? null,
         decisions: body.decisions ?? {},
@@ -112,16 +125,22 @@ export function AssistantPanel() {
     onMutate: (body) => {
       setError(null);
       // Show the user's message straight away; the response replaces the history.
-      if (body.message) save({ messages: [...body.history, { role: "user", content: body.message }], pending: NO_PENDING, namespace, updatedAt: new Date().toISOString() });
+      if (body.message) {
+        const content = body.previous ? [{ type: "text", text: `${NAMESPACE_NOTE} to \`${namespace}\`` }, { type: "text", text: body.message }] : body.message;
+        save({ id: body.id, messages: [...body.history, { role: "user", content }], pending: NO_PENDING, namespace, updatedAt: new Date().toISOString() });
+      }
     },
     onSuccess: (out, body) => {
-      save({ messages: out.messages as unknown as ChatMessage[], pending: out.pending ?? NO_PENDING, namespace, updatedAt: new Date().toISOString() });
+      save({ id: body.id, messages: out.messages as unknown as ChatMessage[], pending: out.pending ?? NO_PENDING, namespace, updatedAt: new Date().toISOString() });
       if (body.decisions && Object.values(body.decisions).some((d) => d.approve)) void qc.invalidateQueries();
       else if (autoApprove) void qc.invalidateQueries();
       if (out.stopped === "max_turns") setError("The assistant paused after many steps. Send “continue” to let it carry on.");
     },
     onError: (e, body) => {
-      if (body.message) save({ messages: body.history, pending: body.pending, namespace, updatedAt: new Date().toISOString() });
+      if (body.message) {
+        if (body.history.length) save({ id: body.id, messages: body.history, pending: body.pending, namespace: body.previous ?? namespace, updatedAt: new Date().toISOString() });
+        else useAssistant.getState().remove(body.id);
+      }
       setError(
         e instanceof ApiError && e.status === 422 && body.history.length >= MAX_MESSAGES - 10
           ? "This chat has reached its length limit. Start a new chat to carry on."
@@ -142,14 +161,22 @@ export function AssistantPanel() {
     if (!message || chat.isPending) return;
     setDraft("");
     // A new message while actions wait declines them.
-    chat.mutate({ message, history: messages, pending });
+    chat.mutate({ id: conversation?.id ?? newChatId(), message, history: messages, pending, previous: switchedFrom });
   };
 
-  const decide = (decisions: Record<string, { approve: boolean; note?: string }>) => chat.mutate({ decisions, history: messages, pending });
+  const decide = (decisions: Record<string, { approve: boolean; note?: string }>) =>
+    conversation && chat.mutate({ id: conversation.id, decisions, history: messages, pending, previous: switchedFrom });
 
   const reset = () => {
-    save(null);
+    select(null);
     setError(null);
+    setShowHistory(false);
+  };
+
+  const openChat = (id: string) => {
+    select(id);
+    setError(null);
+    setShowHistory(false);
   };
 
   if (!open) return null;
@@ -164,11 +191,17 @@ export function AssistantPanel() {
         <div className="min-w-0 flex-1">
           <div className="text-[13px] leading-tight font-semibold">Assistant</div>
           <div className="truncate text-[11px] text-faint">
+            {tenantName ? `${tenantName} · ` : ""}
             {namespace}
             {info.data ? ` · ${info.data.model}` : ""}
             {autoApprove ? " · auto-approve" : ""}
           </div>
         </div>
+        <Tooltip content="Earlier chats">
+          <Button variant={showHistory ? "secondary" : "ghost"} size="icon-sm" aria-label="Earlier chats" aria-pressed={showHistory} onClick={() => setShowHistory(!showHistory)} disabled={chat.isPending}>
+            <History className="size-4" />
+          </Button>
+        </Tooltip>
         <Tooltip content="New chat">
           <Button variant="ghost" size="icon-sm" aria-label="New chat" onClick={reset} disabled={chat.isPending}>
             <MessageSquarePlus className="size-4" />
@@ -200,12 +233,14 @@ export function AssistantPanel() {
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
         {disabled ? (
           <Notice>The assistant is turned off on this server (SHOAL_ASSISTANT_ENABLED).</Notice>
+        ) : showHistory ? (
+          <ChatHistory currentId={conversation?.id ?? null} onOpen={openChat} onNew={reset} onBack={() => setShowHistory(false)} />
         ) : !messages.length ? (
           <Welcome onPick={(s) => send(s)} />
         ) : (
           <Transcript messages={messages} results={results} pending={pending} />
         )}
-        {pending.length > 0 && !chat.isPending && <PendingCards pending={pending} onDecide={decide} />}
+        {!showHistory && pending.length > 0 && !chat.isPending && <PendingCards pending={pending} tenant={tenantName} onDecide={decide} />}
         {chat.isPending && (
           <div className="flex items-center gap-2 px-1 text-xs text-muted">
             <Spinner className="size-3.5" /> Working…
@@ -222,13 +257,14 @@ export function AssistantPanel() {
           </Button>
         </div>
       )}
-      {messages.length > 0 && namespace !== ns && (
+      {!showHistory && switchedFrom && (
         <div className="flex shrink-0 items-center gap-2 border-t border-border bg-subtle px-3 py-2 text-[12px] text-muted">
           <span className="min-w-0 flex-1">
-            This chat works in <span className="font-mono text-fg">{namespace}</span>; you are now in <span className="font-mono text-fg">{ns}</span>.
+            You switched from <span className="font-mono text-fg">{switchedFrom}</span> to <span className="font-mono text-fg">{ns}</span>. The assistant carries on
+            in <span className="font-mono text-fg">{ns}</span>{pending.length ? "; changes waiting for approval stay where their card says" : ""}.
           </span>
           <Button size="sm" variant="ghost" onClick={reset} disabled={chat.isPending}>
-            New chat in {ns}
+            New chat
           </Button>
         </div>
       )}
@@ -260,7 +296,10 @@ export function AssistantPanel() {
             <ArrowUp className="size-4" />
           </Button>
         </div>
-        <p className="mt-1.5 px-1 text-[10.5px] text-faint">Acts with your permissions in {namespace}. Never paste secret values here.</p>
+        <p className="mt-1.5 px-1 text-[10.5px] text-faint">
+          Acts with your permissions in {tenantName ? `${tenantName} · ` : ""}
+          {namespace}. Never paste secret values here.
+        </p>
       </form>
     </aside>
   );
@@ -295,11 +334,13 @@ function Transcript({ messages, results, pending }: { messages: ChatMessage[]; r
       {messages.map((m, i) => {
         const bs = blocks(m);
         if (m.role === "user") {
-          const text = bs.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-          if (!text) return null;
+          const switched = bs.find((b) => b.type === "text" && isNamespaceNote(b.text));
+          const text = bs.filter((b) => b.type === "text" && !isNamespaceNote(b.text)).map((b) => b.text).join("\n");
+          if (!text && !switched) return null;
           return (
-            <div key={i} className="ml-8 rounded-xl rounded-tr-sm bg-accent-soft px-3 py-2 text-[13px] whitespace-pre-wrap text-fg">
-              {text}
+            <div key={i} className="space-y-3">
+              {switched && <NamespaceDivider note={switched.text ?? ""} />}
+              {text && <div className="ml-8 rounded-xl rounded-tr-sm bg-accent-soft px-3 py-2 text-[13px] whitespace-pre-wrap text-fg">{text}</div>}
             </div>
           );
         }
@@ -318,6 +359,31 @@ function Transcript({ messages, results, pending }: { messages: ChatMessage[]; r
   );
 }
 
+/** "Switched to namespace ops" between turns, from the note the server adds to the user's turn. */
+function NamespaceDivider({ note }: { note: string }) {
+  const to = note.match(/to `([^`]+)`/)?.[1];
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-faint" role="separator">
+      <div className="h-px flex-1 bg-border" />
+      <ArrowLeftRight className="size-3" />
+      <span>
+        Switched to namespace <span className="font-mono text-muted">{to ?? "?"}</span>
+      </span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+/** Where a change goes: the namespace it names in its input or path, if any. */
+function callNamespace(call: Block): string | null {
+  const i = call.input ?? {};
+  if (typeof i.namespace === "string" && i.namespace) return i.namespace;
+  const m = typeof i.path === "string" ? i.path.match(/^\/v1\/namespaces\/([^/?]+)/) : null;
+  if (m) return decodeURIComponent(m[1]);
+  const q = i.query as Record<string, unknown> | undefined;
+  return typeof q?.namespace === "string" ? q.namespace : null;
+}
+
 function ToolRow({ call, result, waiting }: { call: Block; result?: Block; waiting: boolean }) {
   const [open, setOpen] = useState(false);
   const change = call.name === "apply_resources" || call.name === "api_call";
@@ -332,6 +398,7 @@ function ToolRow({ call, result, waiting }: { call: Block; result?: Block; waiti
         <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
         {change ? <ShieldCheck className="size-3.5 shrink-0" /> : <Eye className="size-3.5 shrink-0" />}
         <span className="min-w-0 flex-1 truncate">{describeCall(call)}</span>
+        {change && callNamespace(call) && <span className="shrink-0 font-mono text-[11px] text-faint">{callNamespace(call)}</span>}
         {label && (
           <Badge tone={tone} className="shrink-0">
             {label}
@@ -360,7 +427,7 @@ function parse(text: string): unknown {
   }
 }
 
-function PendingCards({ pending, onDecide }: { pending: PendingAction[]; onDecide: (d: Record<string, { approve: boolean; note?: string }>) => void }) {
+function PendingCards({ pending, tenant, onDecide }: { pending: PendingAction[]; tenant: string | null; onDecide: (d: Record<string, { approve: boolean; note?: string }>) => void }) {
   const [decided, setDecided] = useState<Record<string, boolean>>({});
   const decideOne = (id: string, approve: boolean) => {
     const next = { ...decided, [id]: approve };
@@ -370,7 +437,7 @@ function PendingCards({ pending, onDecide }: { pending: PendingAction[]; onDecid
   return (
     <div className="space-y-2">
       {pending.map((p) => (
-        <ActionCard key={p.id} action={p} decided={decided[p.id]} onDecide={(approve) => decideOne(p.id, approve)} />
+        <ActionCard key={p.id} action={p} tenant={tenant} decided={decided[p.id]} onDecide={(approve) => decideOne(p.id, approve)} />
       ))}
       {pending.length > 1 && Object.keys(decided).length === 0 && (
         <div className="flex justify-end gap-2">
@@ -388,7 +455,7 @@ function PendingCards({ pending, onDecide }: { pending: PendingAction[]; onDecid
 
 const OUTCOME_TONE: Record<string, "ok" | "info" | "neutral"> = { created: "ok", updated: "info", unchanged: "neutral" };
 
-function ActionCard({ action, decided, onDecide }: { action: PendingAction; decided?: boolean; onDecide: (approve: boolean) => void }) {
+function ActionCard({ action, tenant, decided, onDecide }: { action: PendingAction; tenant: string | null; decided?: boolean; onDecide: (approve: boolean) => void }) {
   const [show, setShow] = useState(false);
   const plan = (Array.isArray(action.plan) ? action.plan : []) as { kind: string; name: string; namespace: string; outcome: string }[];
   const destructive = action.method === "DELETE";
@@ -397,7 +464,17 @@ function ActionCard({ action, decided, onDecide }: { action: PendingAction; deci
       <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-warn uppercase">
         <ShieldCheck className="size-3.5" /> Approve this change?
       </div>
-      <div className="mb-2 text-[13px] font-medium">{action.summary}</div>
+      <div className="mb-1 text-[13px] font-medium">{action.summary}</div>
+      <div className="mb-2 text-[11.5px] text-muted">
+        {action.namespace ? (
+          <>
+            In namespace <span className="font-mono text-fg">{action.namespace}</span>
+            {tenant ? <> of {tenant}</> : null}
+          </>
+        ) : (
+          <>Applies to the whole {tenant ? <>{tenant} </> : null}tenant</>
+        )}
+      </div>
       {plan.length > 0 ? (
         <ul className="mb-2 space-y-1">
           {plan.map((d) => (
@@ -437,6 +514,46 @@ function ActionCard({ action, decided, onDecide }: { action: PendingAction; deci
       ) : (
         <div className="text-right text-xs text-muted">{decided ? "Approved" : "Declined"}</div>
       )}
+    </div>
+  );
+}
+
+function ChatHistory({ currentId, onOpen, onNew, onBack }: { currentId: string | null; onOpen: (id: string) => void; onNew: () => void; onBack: () => void }) {
+  const { chats, remove } = useAssistant();
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 px-1 pb-1">
+        <Button variant="ghost" size="icon-sm" aria-label="Back to chat" onClick={onBack}>
+          <ArrowLeft className="size-4" />
+        </Button>
+        <div className="flex-1 text-[13px] font-semibold">Earlier chats</div>
+        <Button size="sm" variant="ghost" icon={<MessageSquarePlus className="size-3.5" />} onClick={onNew}>
+          New chat
+        </Button>
+      </div>
+      {!chats.length && <p className="px-1 text-[12.5px] text-muted">No chats yet.</p>}
+      {chats.map((c: Conversation) => (
+        <div
+          key={c.id}
+          className={cn(
+            "group flex items-start gap-2 rounded-lg border px-2.5 py-2 transition-colors hover:border-border-strong",
+            c.id === currentId ? "border-accent/40 bg-accent-soft/40" : "border-border",
+          )}
+        >
+          <button className="min-w-0 flex-1 text-left" onClick={() => onOpen(c.id)}>
+            <div className="truncate text-[12.5px] text-fg">{chatTitle(c)}</div>
+            <div className="truncate text-[11px] text-faint">
+              <span className="font-mono">{c.namespace}</span> · {new Date(c.updatedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+              {c.pending.length ? " · waiting for approval" : ""}
+            </div>
+          </button>
+          <Tooltip content="Delete chat">
+            <Button variant="ghost" size="icon-sm" aria-label="Delete chat" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => remove(c.id)}>
+              <Trash2 className="size-3.5" />
+            </Button>
+          </Tooltip>
+        </div>
+      ))}
     </div>
   );
 }

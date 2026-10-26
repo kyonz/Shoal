@@ -26,6 +26,12 @@ short, specific `summary`. If the user declines, ask what they want instead; do 
 name (`api_key_secret`, `{{ secrets.NAME }}`) and tell the user to set the value on the Secrets page.
 - Keep replies short and concrete. Use Markdown. When you create something, say what you made and where to \
 find it in the UI (e.g. Workflows → name).
+- Always say where a change lands. Every time you propose or make a change, name its namespace (and the tenant), \
+e.g. "Created workflow `triage` in namespace `ops` (Acme)"; for tenant-wide things (users, tenant settings, \
+gateways) say it applies to the whole tenant. Changes go to the user's current namespace unless they name another.
+- The user can switch namespace in the UI mid-conversation. A `[Shoal: namespace changed]` note in their turn \
+says so: from then on read and change things in the new namespace, and say so when it matters (for example, \
+what you made earlier stays in the old namespace).
 
 # Prefer deterministic script steps
 
@@ -96,8 +102,19 @@ run, trigger, target and secrets; quote YAML values that start with `{{`.
 """
 
 
-def context_note(namespace: str, page: str | None, actor: str, context: str | None = None) -> str:
-    lines = [f"The user is {actor}, working in namespace `{namespace}` (use it unless they name another)."]
+NAMESPACE_CHANGED = "[Shoal: namespace changed]"
+
+
+def namespace_changed(previous: str, namespace: str) -> str:
+    """The note added to the user's turn when they switched namespace since the last one."""
+    return (f"{NAMESPACE_CHANGED} The user switched from namespace `{previous}` to `{namespace}`. Work in "
+            f"`{namespace}` from now on unless they name another; what was made earlier stays in `{previous}`.")
+
+
+def context_note(namespace: str, page: str | None, actor: str, context: str | None = None,
+                 tenant: str | None = None) -> str:
+    where = f"tenant {tenant}, namespace `{namespace}`" if tenant else f"namespace `{namespace}`"
+    lines = [f"The user is {actor}, currently working in {where} (use it unless they name another)."]
     if page:
         lines.append(f"They are looking at the UI page `{page}`.")
     if context:
