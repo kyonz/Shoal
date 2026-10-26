@@ -8,6 +8,8 @@ import { relTime } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
 import { Badge, Button, Card, CardHeader, EmptyState, Page, Segmented, Skeleton } from "@/components/ui";
 import { LAYOUT_ANNOTATION, type WorkflowSpecDoc } from "@/features/workflow/types";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { isRecord } from "@/lib/shape";
 import { WorkflowPreview, type PreviewDoc } from "../../workflows/builder/Preview";
 import { Markdown } from "../widgets";
 import { isFeatured, spec, useAdoptions, type BlueprintSpec } from "./api";
@@ -165,13 +167,13 @@ function WorkflowsPreview({ spec: s }: { spec: BlueprintSpec }) {
   const docs = useMemo<PreviewDoc[]>(
     () =>
       (s.resources ?? [])
-        .filter((r) => r.kind === "Workflow" && r.spec)
+        .filter((r) => isRecord(r) && r.kind === "Workflow" && isRecord(r.spec))
         .map((r) => JSON.parse(JSON.stringify(r).replace(PREFIX, "")) as typeof r)
         .map((r) => ({
           name: r.metadata?.name ?? "workflow",
           description: r.metadata?.description,
           labels: r.metadata?.labels,
-          spec: { ...(r.spec as unknown as WorkflowSpecDoc), steps: (r.spec as unknown as WorkflowSpecDoc).steps ?? [] },
+          spec: { ...(r.spec as unknown as WorkflowSpecDoc), steps: Array.isArray(r.spec?.steps) ? (r.spec.steps as WorkflowSpecDoc["steps"]).filter(isRecord) : [] },
           layout: r.metadata?.annotations?.[LAYOUT_ANNOTATION],
         })),
     [s.resources],
@@ -190,7 +192,9 @@ function WorkflowsPreview({ spec: s }: { spec: BlueprintSpec }) {
           ) : undefined
         }
       />
-      <WorkflowPreview key={doc.name} doc={doc} hint="Adopt this blueprint to get your own copy to edit." />
+      <ErrorBoundary label="this workflow" resetKeys={[doc]}>
+        <WorkflowPreview key={doc.name} doc={doc} hint="Adopt this blueprint to get your own copy to edit." />
+      </ErrorBoundary>
     </Card>
   );
 }

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ApiError, rawJson, type Schemas } from "@/api/client";
 import { useDeleteResource, useIntegrations, usePutResource, useResource, useResources } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
+import * as shape from "@/lib/shape";
 import { cn } from "@/lib/cn";
 import { dateTime, relTime } from "@/lib/format";
 import { nsPath, useNs } from "@/lib/ns";
@@ -155,7 +156,14 @@ export default function TriggerEditor() {
   const cleaned = useMemo(() => clean(spec), [spec]);
   const yaml = useYamlSync("Trigger", name, description, cleaned, (p) => {
     setDescription(p.description ?? "");
-    setSpec({ enabled: true, ...(p.spec as unknown as Spec) });
+    const s = p.spec;
+    // Check everything the form renders before applying any of it.
+    for (const k of ["workflow", "campaign", "connection", "event", "schedule", "timezone", "overlap", "filter", "dedupe_key"]) shape.string(s[k], `spec.${k}`, true);
+    for (const k of ["match", "inputs", "webhook"]) shape.record(s[k] ?? undefined, `spec.${k}`, true);
+    const rate = shape.record(s.rate_limit ?? undefined, "spec.rate_limit", true);
+    if (rate) shape.string(rate.per, "spec.rate_limit.per", true);
+    shape.boolean(s.enabled, "spec.enabled", true);
+    setSpec({ enabled: true, ...(s as unknown as Spec) });
   });
 
   const nameError = isNew && name && !NAME_RE.test(name) ? "Lowercase letters, digits and dashes." : undefined;

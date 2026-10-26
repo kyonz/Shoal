@@ -58,6 +58,7 @@ import { isDirty, useBuilder, useDirty } from "./builder/store";
 import { VersionsDialog } from "./builder/Versions";
 import { WorkflowSettings } from "./builder/WorkflowSettings";
 import { YamlPane } from "./builder/YamlPane";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 type View = "canvas" | "split" | "yaml";
 
@@ -559,6 +560,7 @@ function Builder() {
           )}
           {showCanvas && (
             <div className="relative min-w-0 flex-1" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+              <ErrorBoundary label="the canvas" resetKeys={[spec, layout]}>
               <ReactFlow<StepNodeType>
                 nodes={nodes}
                 edges={edges}
@@ -590,6 +592,7 @@ function Builder() {
                 <Controls showInteractive={false} position="bottom-left" />
                 <MiniMap pannable zoomable position="bottom-right" style={{ width: 168, height: 112 }} nodeStrokeWidth={2} nodeColor={() => "var(--border-strong)"} maskColor="color-mix(in oklab, var(--bg) 65%, transparent)" />
               </ReactFlow>
+              </ErrorBoundary>
               {spec.steps.length === 0 && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div className="max-w-sm rounded-2xl border border-dashed border-border-strong bg-panel/90 px-8 py-7 text-center shadow-card backdrop-blur">
@@ -607,6 +610,7 @@ function Builder() {
           )}
           {showYaml && (
             <div className={cn("min-w-0 border-l border-border bg-panel", view === "yaml" ? "flex-1" : "w-[44%] max-w-[720px]")}>
+              <ErrorBoundary label="the YAML view" resetKeys={[yamlText]}>
               <YamlPane
                 text={yamlText}
                 readOnly={!canWrite}
@@ -626,15 +630,18 @@ function Builder() {
                   return parsed;
                 }}
               />
+              </ErrorBoundary>
             </div>
           )}
           {view !== "yaml" && (
             <aside className="w-[380px] shrink-0 border-l border-border bg-panel">
+              <ErrorBoundary label={selected ? `step '${selected}'` : "the workflow settings"} resetKeys={[spec, selected]}>
               {selected ? (
                 <Inspector key={selected} stepId={selected} issues={issues} readOnly={!canWrite} />
               ) : (
                 <WorkflowSettings isNew={isNew} issues={issues} readOnly={!canWrite} />
               )}
+              </ErrorBoundary>
             </aside>
           )}
         </div>

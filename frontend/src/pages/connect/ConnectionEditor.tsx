@@ -7,6 +7,7 @@ import { ApiError, rawJson } from "@/api/client";
 import { allowsScope, useDeleteResource, useIntegrations, usePutResource, useResource, useResources, type IntegrationCatalog } from "@/api/hooks";
 import { SchemaForm, humanize, unwrapNullable } from "@/components/forms/SchemaForm";
 import { useAuth } from "@/lib/auth";
+import * as shape from "@/lib/shape";
 import { cn } from "@/lib/cn";
 import { SHARED_NS, lastNamespace, nsPath, useNs, useOrgScope } from "@/lib/ns";
 import { NamespaceMultiPicker } from "@/pages/catalog/widgets";
@@ -91,6 +92,14 @@ export default function ConnectionEditor() {
   const yaml = useYamlSync("Connection", name, description, spec, (p) => {
     setDescription(p.description ?? "");
     const s = p.spec as { integration?: string; config?: Record<string, unknown>; secrets?: Record<string, string>; namespaces?: string[] } & PersonalSpec;
+    // Check everything the form renders before applying any of it.
+    shape.string(s.integration, "spec.integration", true);
+    shape.record(s.config ?? undefined, "spec.config", true);
+    shape.stringMap(s.secrets ?? undefined, "spec.secrets", true);
+    shape.stringList(s.namespaces ?? undefined, "spec.namespaces", true);
+    shape.string(s.credentials, "spec.credentials", true);
+    shape.stringList(s.user_fields ?? undefined, "spec.user_fields", true);
+    shape.record(s.oauth ?? undefined, "spec.oauth", true);
     if (s.integration) setIntegration(s.integration);
     setConfig(s.config ?? {});
     setSecrets(s.secrets ?? {});

@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { nsPath, rememberNamespace, useNs, useSwitchNamespace } from "@/lib/ns";
 import { useTheme } from "@/lib/theme";
 import { TenantSwitcher } from "./TenantSwitcher";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button, EmptyState, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Popover, Tooltip } from "@/components/ui";
 import { AssistantLauncher, AssistantPanel } from "@/features/assistant/AssistantPanel";
 import { CommandPalette, useCommandPalette } from "./CommandPalette";
@@ -157,10 +158,15 @@ export function AppShell() {
         </header>
         <FederationBanner />
         <main className={cn("min-h-0 flex-1", fullBleed ? "overflow-hidden" : "overflow-y-auto")}>
-          {me?.tenant || OUTSIDE_TENANT.test(location.pathname) ? <Outlet /> : <NoTenant />}
+          {/* A page that fails to render keeps the shell (and navigation away from it) working. */}
+          <ErrorBoundary label="this page" resetKeys={[location.pathname]}>
+            {me?.tenant || OUTSIDE_TENANT.test(location.pathname) ? <Outlet /> : <NoTenant />}
+          </ErrorBoundary>
         </main>
       </div>
-      <AssistantPanel />
+      <ErrorBoundary label="the assistant" className="fixed right-4 bottom-4 h-auto rounded-xl border border-border bg-panel shadow-pop">
+        <AssistantPanel />
+      </ErrorBoundary>
       <CommandPalette open={palette.open} onOpenChange={palette.setOpen} />
     </div>
   );

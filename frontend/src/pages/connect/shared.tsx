@@ -5,6 +5,7 @@ import { AlertTriangle, Blocks, GitPullRequest, History, KeyRound, MessagesSquar
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import YAML from "yaml";
+import * as shape from "@/lib/shape";
 import { ApiError, rawJson, type Resource, type Schemas } from "@/api/client";
 import { useResourceVersions, type Plural } from "@/api/hooks";
 import { useAuth } from "@/lib/auth";
@@ -165,10 +166,13 @@ export function toYaml(kind: string, name: string, metadata: { description?: str
 
 /** Parse a resource YAML document back to {description, spec}; throws on bad YAML. */
 export function fromYaml(text: string): { description?: string; spec: Record<string, unknown> } {
-  const doc = YAML.parse(text) as { metadata?: { description?: string }; spec?: Record<string, unknown> } | null;
+  const doc = YAML.parse(text) as unknown;
   if (!doc || typeof doc !== "object") throw new Error("Document is empty");
-  if (!doc.spec || typeof doc.spec !== "object") throw new Error("Missing `spec`");
-  return { description: doc.metadata?.description, spec: doc.spec };
+  if (!shape.isRecord(doc)) throw new Error("The document must be a mapping");
+  if (doc.spec == null) throw new Error("Missing `spec`");
+  const spec = shape.record(doc.spec, "spec")!;
+  const metadata = shape.record(doc.metadata ?? undefined, "metadata", true);
+  return { description: shape.string(metadata?.description, "metadata.description", true), spec };
 }
 
 /** Editable YAML of a resource (kept in sync by the caller). */

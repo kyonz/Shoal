@@ -81,6 +81,58 @@ function typeOf(s: JsonSchema): string | undefined {
   return undefined;
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Whether `value` has the JSON type `type` (undefined: anything goes). */
+function fits(value: unknown, type: string | undefined): boolean {
+  switch (type) {
+    case "object":
+      return isRecord(value);
+    case "array":
+      return Array.isArray(value);
+    case "string":
+      return typeof value === "string" || typeof value === "number";
+    case "integer":
+    case "number":
+      return typeof value === "number" || (typeof value === "string" && value.includes("{{"));
+    case "boolean":
+      return typeof value === "boolean" || (typeof value === "string" && value.includes("{{"));
+    default:
+      return true;
+  }
+}
+
+const TYPE_NAME: Record<string, string> = { object: "a mapping", array: "a list", string: "text", integer: "a whole number", number: "a number", boolean: "true or false" };
+
+/**
+ * Throw when `value` has a different shape than `schema` describes anywhere a
+ * form would render it (mappings, lists, scalars), naming the path. Live
+ * YAML editors call this before applying a document, so the form never
+ * receives a value it cannot show. Unions it cannot tell apart are skipped.
+ */
+export function checkAgainstSchema(value: unknown, schema: JsonSchema, path: string, root: JsonSchema = schema) {
+  if (value == null) return;
+  const { schema: s } = unwrapNullable(schema, root);
+  if ((s.anyOf ?? s.oneOf) && !s.type) return;
+  const type = typeOf(s);
+  if (!fits(value, type)) {
+    const got = Array.isArray(value) ? "a list" : isRecord(value) ? "a mapping" : JSON.stringify(value);
+    throw new Error(`${path} must be ${TYPE_NAME[type!] ?? type} (got ${got})`);
+  }
+  if (type === "object" && isRecord(value)) {
+    for (const [k, sub] of Object.entries(s.properties ?? {})) checkAgainstSchema(value[k], sub, `${path}.${k}`, root);
+    const ap = s.additionalProperties;
+    if (typeof ap === "object" && !s.properties) for (const [k, v] of Object.entries(value)) checkAgainstSchema(v, ap, `${path}.${k}`, root);
+  }
+  if (type === "array" && Array.isArray(value) && s.items) {
+    const nullable = unwrapNullable(s.items, root).nullable || typeOf(resolve(s.items, root)) === "null";
+    value.forEach((item, i) => {
+      if (item == null && !nullable) throw new Error(`${path}[${i}] is empty`);
+      checkAgainstSchema(item, s.items!, `${path}[${i}]`, root);
+    });
+  }
+}
+
 export function humanize(key: string): string {
   const s = key.replace(/_/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2");
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -109,7 +161,7 @@ export function SchemaForm({ schema, value, onChange, root, widgets, hidden = []
   const s = resolve(schema, r);
   const props = s.properties ?? {};
   const required = new Set(s.required ?? []);
-  const v = value ?? {};
+  const v = isRecord(value) ? value : {};
   const [showMore, setShowMore] = useState(false);
 
   const keys = useMemo(() => {
@@ -190,6 +242,10 @@ export function SchemaField({ name, schema, root, value, onChange, required, wid
   if (widget) return wrap(widget({ value, onChange, schema: s, name, required }));
 
   if (s.const !== undefined) return null;
+
+  // A value of another shape (typed into the YAML view, or from an older
+  // version) is shown as JSON rather than fed to a control that cannot hold it.
+  if (value != null && !s.enum && !fits(value, type)) return wrap(<JsonField value={value} onChange={onChange} />);
 
   if (s.enum) {
     return wrap(

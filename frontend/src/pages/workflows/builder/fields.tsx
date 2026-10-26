@@ -347,7 +347,8 @@ export function ParamsEditor({ value, onChange, kind }: {
   };
   return (
     <div className="space-y-1.5">
-      {entries.map(([k, p]) => {
+      {entries.map(([k, param]) => {
+        const p: ParamDoc = param ?? {};
         const required = p.required ?? p.default === undefined;
         return (
           <div key={k} className="rounded-lg border border-border bg-panel">

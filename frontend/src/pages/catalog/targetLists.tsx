@@ -6,6 +6,7 @@ import { useIntegrations, useResources } from "@/api/hooks";
 import { SchemaForm } from "@/components/forms/SchemaForm";
 import { Button, Card, CardHeader, CodeEditor, Field, NativeSelect, Textarea } from "@/components/ui";
 import { useCan } from "@/lib/auth";
+import * as shape from "@/lib/shape";
 import { ErrorList, useConnectionCapabilities } from "../connect/shared";
 import { TargetListResult, previewTargetList } from "../connect/TargetListPreview";
 import type { EditorContext, EditorExtension } from "./ResourceEditorPage";
@@ -68,6 +69,7 @@ function ItemsEditor({ ctx }: { ctx: EditorContext }) {
             try {
               const v = JSON.parse(t);
               if (!Array.isArray(v)) throw new Error("Must be a JSON array");
+              v.forEach((item, i) => shape.record(item, `Item ${i + 1}`));
               set(v);
               setJsonError(null);
             } catch (e) {
