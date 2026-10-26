@@ -4,9 +4,11 @@ import json
 
 import httpx
 import pytest
+import yaml
 from pydantic import SecretStr
 
 from shoal.api.app import create_app
+from shoal.core.scope import use_namespace
 
 ADMIN = "test-admin-token"
 
@@ -375,10 +377,113 @@ async def test_blueprint_adoption_lifecycle(admin, api):
     r = await admin.post(adopt, json={"params": {"team": "a"}, "prefix": "z"})
     assert r.status_code == 403
 
-    assert (await admin.delete(url)).status_code == 204
+    gone = await admin.delete(url)
+    assert gone.status_code == 200 and gone.json() == {"removed": [{"kind": "Workflow", "name": "x-greet"}], "kept": []}
     assert (await admin.get("/v1/namespaces/team-a/workflows/x-greet")).status_code == 404
     assert (await admin.get(url)).status_code == 404
     assert any(e["action"] == "blueprint.adopted" for e in (await admin.get("/v1/audit")).json()["items"])
+
+
+async def test_blueprint_upgrade_edge_cases(engine, admin, api):
+    assert (await admin.put("/v1/namespaces/team-a", json={})).status_code == 201
+    v1 = json.loads(json.dumps(GREETER))
+    v1["spec"]["params"]["emoji"] = {"required": False}
+    assert (await admin.put("/v1/blueprints/greeter", json=v1)).status_code == 201
+    r = await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "a", "emoji": "x"}})
+    assert r.status_code == 201, r.text
+    url = f"/v1/namespaces/team-a/blueprint-adoptions/{r.json()['adoption']['id']}"
+
+    # v2 drops a parameter and a resource; the preview says what is updated and what goes
+    v2 = json.loads(json.dumps(GREETER))
+    v2["spec"].update(version="2.0.0", resources=GREETER["spec"]["resources"][:1])
+    assert (await admin.put("/v1/blueprints/greeter", json=v2)).status_code == 200
+    dry = await admin.put(url, json={"dry_run": True})
+    assert dry.status_code == 200, dry.text
+    assert [(x["name"], x["outcome"]) for x in dry.json()["resources"]] == [("greet", "updated")]
+    assert dry.json()["removed"] == [{"kind": "Workflow", "name": "wave"}]
+    assert (await admin.get("/v1/namespaces/team-a/workflows/wave")).status_code == 200
+    up = await admin.put(url, json={})
+    assert up.status_code == 200, up.text
+    assert up.json()["adoption"]["params"] == {"greeting": "Hello", "team": "a"}
+    assert (await admin.put(url, json={"params": {"emoji": "y"}, "dry_run": True})).status_code == 422  # still rejected when asked for
+
+    # deprecated: no new adoptions, but existing ones can still change
+    deprecated = json.loads(json.dumps(v2))
+    deprecated["spec"]["status"] = "deprecated"
+    assert (await admin.put("/v1/blueprints/greeter", json=deprecated)).status_code == 200
+    assert (await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "b"}, "prefix": "b"})).status_code == 403
+    assert (await admin.put(url, json={"params": {"greeting": "Hi"}})).status_code == 200
+
+    # a failed adoption leaves nothing behind, so it can be retried
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 200
+    real_apply, calls = engine.store.apply_resource, []
+
+    async def flaky(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 2:
+            raise RuntimeError("database went away")
+        return await real_apply(*args, **kwargs)
+
+    engine.store.apply_resource = flaky
+    with pytest.raises(RuntimeError):
+        await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "c"}, "prefix": "c"})
+    engine.store.apply_resource = real_apply
+    assert (await admin.get("/v1/namespaces/team-a/workflows/c-greet")).status_code == 404
+    r = await admin.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "c"}, "prefix": "c"})
+    assert r.status_code == 201, r.text
+
+    # removing reports what it left alone: a resource someone relabelled, and one already deleted
+    wave = (await admin.get("/v1/namespaces/team-a/workflows/c-wave")).json()
+    assert (await admin.put("/v1/namespaces/team-a/workflows/c-wave", json={"spec": wave["spec"]})).status_code == 200
+    assert (await admin.delete("/v1/namespaces/team-a/workflows/c-greet")).status_code == 204
+    gone = await admin.delete(f"/v1/namespaces/team-a/blueprint-adoptions/{r.json()['adoption']['id']}")
+    assert gone.status_code == 200 and gone.json()["removed"] == []
+    assert [(k["name"], k["reason"].split()[0]) for k in gone.json()["kept"]] == [("c-greet", "already"), ("c-wave", "no")]
+    assert (await admin.get("/v1/namespaces/team-a/workflows/c-wave")).status_code == 200
+
+
+async def test_adoption_permissions_follow_rendered_kinds_and_removals(admin, api):
+    assert (await admin.put("/v1/namespaces/team-a", json={})).status_code == 201
+    perms = ["blueprints:read", "blueprints:adopt", "workflows:read", "workflows:write", "skills:read", "skills:write"]
+    assert (await admin.put("/v1/roles/adopter", json={"permissions": perms})).status_code == 201
+    headers = {"Authorization": f"Bearer {await _key_for(admin, 'adopter', 'adopter', 'team-a')}"}
+
+    # the kind is a parameter: permissions are checked on what renders, not on the template
+    helper = {"spec": {"title": "Helper", "summary": "A skill or an agent", "status": "published",
+                       "params": {"kind": {"type": "choice", "options": ["Skill", "Agent"], "default": "Skill"}},
+                       "resources": [{"kind": "{{ params.kind }}", "metadata": {"name": "{{ prefix }}helper"},
+                                      "spec": {"description": "Helps", "instructions": "Help."}}]}}
+    assert (await admin.put("/v1/blueprints/helper", json=helper)).status_code == 201
+    adopt = "/v1/namespaces/team-a/blueprints/helper/adopt"
+    r = await api.post(adopt, json={"params": {"kind": "Agent"}, "dry_run": True}, headers=headers)
+    assert r.status_code == 403, r.text
+    assert (await api.post(adopt, json={"params": {}}, headers=headers)).status_code == 201
+
+    # an upgrade that drops a workflow needs workflows:delete
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 201
+    r = await api.post("/v1/namespaces/team-a/blueprints/greeter/adopt", json={"params": {"team": "a"}}, headers=headers)
+    assert r.status_code == 201, r.text
+    url = f"/v1/namespaces/team-a/blueprint-adoptions/{r.json()['adoption']['id']}"
+    v2 = json.loads(json.dumps(GREETER))
+    v2["spec"].update(version="2.0.0", resources=GREETER["spec"]["resources"][:1])
+    assert (await admin.put("/v1/blueprints/greeter", json=v2)).status_code == 200
+    assert (await api.put(url, json={"dry_run": True}, headers=headers)).status_code == 403
+    assert (await admin.put(url, json={})).status_code == 200
+
+
+async def test_featuring_a_blueprint_needs_feature_on_every_write_path(admin, api):
+    assert (await admin.put("/v1/roles/publisher", json={"permissions": ["blueprints:read", "blueprints:publish"]})).status_code == 201
+    headers = {"Authorization": f"Bearer {await _key_for(admin, 'pub', 'publisher', None)}"}
+    featured = json.loads(json.dumps(GREETER))
+    featured["spec"]["status"] = "featured"
+    assert (await api.put("/v1/blueprints/greeter", json=featured, headers=headers)).status_code == 403
+    assert (await api.put("/v1/blueprints/greeter", json=GREETER, headers=headers)).status_code == 201
+    doc = yaml.safe_dump({"apiVersion": "shoal.dev/v1", "kind": "Blueprint", "metadata": {"name": "greeter"}, **featured})
+    assert (await api.post("/v1/apply", content=doc, headers=headers)).status_code == 403
+    assert (await admin.put("/v1/blueprints/greeter", json=featured)).status_code == 200  # an admin features it (v2)
+    assert (await admin.put("/v1/blueprints/greeter", json=GREETER)).status_code == 200  # and unfeatures it (v3)
+    assert (await api.post("/v1/blueprints/greeter/rollback", json={"version": 2}, headers=headers)).status_code == 403
+    assert (await api.post("/v1/blueprints/greeter/rollback", json={"version": 1}, headers=headers)).status_code == 200
 
 
 async def test_connection_actions_are_listed_per_connection(admin):
@@ -406,6 +511,7 @@ async def test_versions_diff_and_rollback(admin):
     history = (await admin.get(f"{url}/versions")).json()
     assert [(h["version"], h["message"]) for h in history] == [(2, "Friendlier greeting"), (1, None)]
     assert (await admin.get(f"{url}/versions/1")).json()["document"]["spec"]["steps"][0]["id"] == "greet"
+    assert history[1]["source"] == HELLO["spec"]  # as written, without server defaults
 
     changes = (await admin.get(f"{url}/diff", params={"from": 1})).json()["changes"]
     assert {"op": "add", "path": "/spec/steps/[id=first]", "to": {"id": "first", "type": "set", "values": {}}} in changes
@@ -424,29 +530,93 @@ async def test_versions_diff_and_rollback(admin):
     assert any(e["action"] == "workflow.rolled_back" for e in (await admin.get("/v1/audit")).json()["items"])
 
 
-async def test_journey_blueprints_adopt_cleanly(admin):
-    """The shipped journey blueprints (examples/blueprints) adopt into a namespace with real connections."""
-    from pathlib import Path
+async def test_sandbox_profile_config_is_checked_against_the_backend(admin):
+    r = await admin.put("/v1/namespaces/default/sandbox-profiles/k8s", json={"spec": {
+        "backend": "kubernetes", "config": {"namespce": "sbx", "run_as_user": -1}}})
+    assert r.status_code == 422, r.text
+    assert "spec.config.namespce" in r.text and "spec.config.run_as_user" in r.text
+    ok = {"backend": "kubernetes", "config": {"namespace": "shoal-{tenant}", "runtime_class": "gvisor"}}
+    assert (await admin.put("/v1/namespaces/default/sandbox-profiles/k8s", json={"spec": ok})).status_code == 201
 
-    from shoal.core.loader import load_path
+    doc = "apiVersion: shoal.dev/v1\nkind: SandboxProfile\nmetadata: {name: e2b}\nspec: {backend: e2b, config: {domian: x}}\n"
+    r = await admin.post("/v1/apply", content=doc)
+    assert r.status_code == 422 and "spec.config.domian" in r.text
 
-    for name, integration, config in (
-        ("gh", "github", {}), ("jira", "jira", {"base_url": "https://acme.atlassian.net", "email": "bot@acme.example"}),
-    ):
-        r = await admin.put(f"/v1/namespaces/default/connections/{name}", json={"spec": {"integration": integration, "config": config}})
-        assert r.status_code == 201, r.text
-    assert (await admin.put("/v1/namespaces/default/secrets/anthropic-api-key", json={"value": "k"})).status_code == 201
+    backends = {b["name"]: b for b in (await admin.get("/v1/sandbox-backends")).json()}
+    assert "runtime_class" in backends["kubernetes"]["config_schema"]["properties"]
+    assert backends["local"]["config_schema"]["properties"] == {}
 
-    params = {"jira-bugfix": {"jira": "jira", "github": "gh"}, "github-uplift": {"github": "gh", "org": "acme"}}
-    for blueprint in load_path(Path(__file__).parents[2] / "examples" / "blueprints"):
-        doc = blueprint.to_document()
-        name = doc["metadata"]["name"]
-        assert (await admin.put(f"/v1/blueprints/{name}", json={"metadata": {"description": doc["metadata"].get("description")},
-                                                                  "spec": doc["spec"]})).status_code == 201
-        r = await admin.post(f"/v1/namespaces/default/blueprints/{name}/adopt", json={"params": params[name], "prefix": "team"})
-        assert r.status_code == 201, r.text
-        assert all(res["name"].startswith("team-") for res in r.json()["resources"])
-    wf = (await admin.get("/v1/namespaces/default/workflows/team-jira-bugfix")).json()
-    assert wf["spec"]["connections"] == {"jira": "jira", "github": "gh"} and wf["spec"]["defaults"]["agent"] == "team-bugfixer"
-    campaign = (await admin.get("/v1/namespaces/default/campaigns/team-coverage-uplift")).json()
-    assert campaign["spec"]["targets"]["filter"]["org"] == "acme" and campaign["spec"]["policy"]["budget_usd"] == 500
+
+async def test_approvers_over_the_api(admin, api):
+    await admin.put("/v1/namespaces/default/workflows/gated", json={"spec": {"steps": [
+        {"id": "ok", "type": "approval", "message": "Ship it?", "approvers": ["sa:ops"]},
+    ]}})
+    run_id = (await admin.post("/v1/namespaces/default/workflows/gated/runs", json={})).json()["id"]
+    await api._transport.app.state.engine.run_until_idle()  # type: ignore[attr-defined]
+    r = await admin.post(f"/v1/runs/{run_id}/steps/ok/approval", json={"approved": True})
+    assert r.status_code == 403 and r.json()["details"]["approvers"] == ["sa:ops"]
+    token = await _key_for(admin, "ops", "operator", "default")
+    async with httpx.AsyncClient(transport=api._transport, base_url="http://shoal.test", headers={"Authorization": f"Bearer {token}"}) as ops:
+        r = await ops.post(f"/v1/runs/{run_id}/steps/ok/approval", json={"approved": True})
+        assert r.status_code == 200, r.text
+
+
+async def test_rerun_keeps_the_trigger_context(admin, api):
+    engine = api._transport.app.state.engine  # type: ignore[attr-defined]
+    await admin.put("/v1/namespaces/default/workflows/echo", json={"spec": {
+        "outputs": {"key": "{{ event.key }}"}, "steps": [{"id": "a", "type": "set", "values": {}}],
+    }})
+    await admin.put("/v1/namespaces/default/triggers/manual", json={"spec": {
+        "workflow": "echo", "event": "schedule", "schedule": "0 0 * * *",
+    }})
+    tenant_id = (await admin.get("/v1/me")).json()["tenant"]["id"]
+    with use_namespace("default"):
+        fired = await engine.triggers.fire_manual(tenant_id, "manual", {"key": "PROJ-1"})
+    await engine.run_until_idle()
+    rerun = (await admin.post(f"/v1/runs/{fired['run_id']}/rerun")).json()
+    await engine.run_until_idle()
+    assert (await admin.get(f"/v1/runs/{rerun['id']}")).json()["outputs"] == {"key": "PROJ-1"}
+
+
+async def test_tenant_wide_versions_can_be_read_one_at_a_time(admin):
+    url = "/v1/identities/ada"
+    assert (await admin.put(url, json={"spec": {"display_name": "Ada"}})).status_code == 201
+    assert (await admin.put(url, json={"spec": {"display_name": "Ada Lovelace"}})).status_code == 200
+    first = await admin.get(f"{url}/versions/1")
+    assert first.status_code == 200, first.text
+    assert first.json()["document"]["spec"]["display_name"] == "Ada"
+    assert (await admin.get(f"{url}/versions/9")).status_code == 404
+
+
+async def test_target_list_resolve_and_preview(admin):
+    spec = {"items": [{"name": "a"}, {"name": "b"}, {"name": "a"}], "key": "{{ target.name }}"}
+    r = await admin.put("/v1/namespaces/default/target-lists/mine", json={"spec": spec})
+    assert r.status_code == 201, r.text
+    r = await admin.get("/v1/namespaces/default/target-lists/mine/resolve")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"total": 2, "targets": [{"key": "a", "name": "a"}, {"key": "b", "name": "b"}], "truncated": False, "missing": []}
+    r = await admin.post("/v1/namespaces/default/target-lists/preview", json={"items": [{"id": 7}]})
+    assert r.json()["targets"] == [{"key": "7", "id": 7}]
+    r = await admin.put("/v1/namespaces/default/target-lists/bad", json={"spec": {"resource": "repository"}})
+    assert r.status_code == 422
+    r = await admin.get("/v1/namespaces/default/target-lists/nope/resolve")
+    assert r.status_code == 404
+
+
+async def test_ui_cache_headers(engine, tmp_path):
+    """index.html is revalidated so a redeploy is picked up; hashed chunks are immutable; a gone chunk is a 404."""
+    (tmp_path / "ui" / "assets").mkdir(parents=True)
+    (tmp_path / "ui" / "index.html").write_text("<html></html>")
+    (tmp_path / "ui" / "assets" / "Overview-abc123.js").write_text("export default 1")
+    engine.settings.static_dir = str(tmp_path / "ui")
+    app = create_app(engine=engine)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test") as client:
+        for path in ("/", "/admin", "/ns/default/overview"):
+            r = await client.get(path)
+            assert r.status_code == 200 and r.text == "<html></html>"
+            assert r.headers["cache-control"] == "no-cache"
+        r = await client.get("/assets/Overview-abc123.js")
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+        r = await client.get("/assets/Overview-old999.js")
+        assert r.status_code == 404

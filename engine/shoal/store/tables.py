@@ -57,6 +57,8 @@ class Tenant(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     slug: Mapped[str] = mapped_column(String(63), unique=True)
     name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active | suspended
     settings: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -73,12 +75,30 @@ class Namespace(Base):
     created_by: Mapped[str | None] = mapped_column(String(200))
 
 
+class Account(Base):
+    """A person across the whole instance: one sign-in, linked to a user row in each tenant they belong to."""
+
+    __tablename__ = "accounts"
+    __table_args__ = (UniqueConstraint("oidc_issuer", "oidc_subject"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    oidc_issuer: Mapped[str] = mapped_column(String(500))
+    oidc_subject: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(String(320), index=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    instance_role: Mapped[str | None] = mapped_column(String(40), doc="instance-admin | instance-auditor")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column()
+    revoked_sessions: Mapped[dict[str, Any]] = mapped_column(default=dict, doc="session id -> expiry, for signed-out sessions")
+
+
 class User(Base):
     """A human (OIDC / SCIM) or a service account (owns API keys for automation)."""
 
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "username"),
+        UniqueConstraint("tenant_id", "account_id"),
         Index("ix_users_subject", "tenant_id", "oidc_issuer", "oidc_subject"),
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -90,6 +110,9 @@ class User(Base):
     external_id: Mapped[str | None] = mapped_column(String(200), doc="SCIM externalId from the IdP.")
     oidc_issuer: Mapped[str | None] = mapped_column(String(500))
     oidc_subject: Mapped[str | None] = mapped_column(String(200))
+    account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL"), index=True, doc="The instance account this tenant user belongs to."
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     attributes: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
@@ -172,7 +195,7 @@ class LoginState(Base):
 
     __tablename__ = "login_states"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)  # the `state` parameter
-    tenant_id: Mapped[str] = mapped_column(String(40))
+    tenant_id: Mapped[str | None] = mapped_column(String(40))  # None: the instance sign-in
     provider: Mapped[str] = mapped_column(String(63))
     nonce: Mapped[str] = mapped_column(String(64))
     code_verifier: Mapped[str] = mapped_column(String(128))
@@ -236,6 +259,9 @@ class Run(Base):
     __table_args__ = (
         Index("ix_runs_claim", "status", "next_wake_at"),
         Index("ix_runs_tenant_created", "tenant_id", "created_at"),
+        Index("ix_runs_idempotency", "tenant_id", "idempotency_key", unique=True),
+        Index("ix_runs_tenant_status", "tenant_id", "status"),
+        Index("ix_runs_lease", "lease_expires_at"),
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
@@ -259,12 +285,23 @@ class Run(Base):
     parent_run_id: Mapped[str | None] = mapped_column(String(40), index=True)
     parent_step_id: Mapped[str | None] = mapped_column(String(64))
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    lane: Mapped[str] = mapped_column(
+        String(20), default="standard", server_default="standard",
+        doc="Which workers take this run: 'agent' when the workflow calls models, else 'standard'.",
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(200), doc="Client key from the Idempotency-Key header: a retried start returns this run."
+    )
     orchestrator: Mapped[str] = mapped_column(
         String(20), default="builtin", server_default="builtin", doc="What drives this run (see shoal.runtime.orchestrator)."
     )
     next_wake_at: Mapped[datetime | None] = mapped_column()
     lease_owner: Mapped[str | None] = mapped_column(String(100))
     lease_expires_at: Mapped[datetime | None] = mapped_column()
+    lease_losses: Mapped[int] = mapped_column(
+        default=0, server_default="0",
+        doc="Leases taken over in a row from a worker that never released them (it crashed mid-pass).",
+    )
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column()
     finished_at: Mapped[datetime | None] = mapped_column()
@@ -293,6 +330,7 @@ class StepRun(Base):
 
 class RunEvent(Base):
     __tablename__ = "run_events"
+    __table_args__ = (Index("ix_run_events_created", "created_at"),)
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     tenant_id: Mapped[str] = mapped_column(String(40), index=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
@@ -300,6 +338,17 @@ class RunEvent(Base):
     type: Mapped[str] = mapped_column(String(60))
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class LimiterLease(Base):
+    """A unit of a shared limit (a model call in flight, a request this minute), held until it expires or is released."""
+
+    __tablename__ = "limiter_leases"
+    __table_args__ = (Index("ix_limiter_key_expires", "key", "expires_at"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    key: Mapped[str] = mapped_column(String(200))
+    weight: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime] = mapped_column()
 
 
 class WaitSubscription(Base):
@@ -349,6 +398,24 @@ class UserCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class WebhookInbox(Base):
+    """A verified webhook delivery waiting for a worker (the API acknowledges it before processing)."""
+
+    __tablename__ = "webhook_inbox"
+    __table_args__ = (Index("ix_webhook_inbox_due", "status", "next_attempt_at"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    webhook_id: Mapped[str] = mapped_column(String(40))
+    headers: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    body: Mapped[str] = mapped_column(Text, doc="The raw body, base64.")
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(default=utcnow)
+    lease_expires_at: Mapped[datetime | None] = mapped_column()
+    result: Mapped[dict[str, Any] | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class WebhookEndpoint(Base):
     __tablename__ = "webhook_endpoints"
     __table_args__ = (UniqueConstraint("tenant_id", "namespace", "connection_name"),)
@@ -358,6 +425,33 @@ class WebhookEndpoint(Base):
     connection_name: Mapped[str] = mapped_column(String(63))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     last_received_at: Mapped[datetime | None] = mapped_column()
+
+
+class WebhookRegistration(Base):
+    """A webhook Shoal registered with a provider for one trigger, and what the provider said about it."""
+
+    __tablename__ = "webhook_registrations"
+    __table_args__ = (UniqueConstraint("tenant_id", "namespace", "trigger_name"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # also the last segment of its callback URL
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    namespace: Mapped[str] = mapped_column(String(63), default="default")
+    trigger_name: Mapped[str] = mapped_column(String(63))
+    connection_name: Mapped[str] = mapped_column(String(63))
+    integration: Mapped[str] = mapped_column(String(63))
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | active | error | removing
+    fingerprint: Mapped[str | None] = mapped_column(String(64))  # of what was last registered
+    secret: Mapped[str] = mapped_column(Text)  # encrypted signing secret for deliveries
+    state: Mapped[dict[str, Any]] = mapped_column(default=dict)  # the integration's remote state (webhook ids, ...)
+    registered_by: Mapped[str | None] = mapped_column(String(200))  # actor whose credential registered it
+    error: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column()
+    next_attempt_at: Mapped[datetime | None] = mapped_column()
+    lease_expires_at: Mapped[datetime | None] = mapped_column()
+    last_synced_at: Mapped[datetime | None] = mapped_column()
+    last_received_at: Mapped[datetime | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class TriggerState(Base):
@@ -453,6 +547,17 @@ class BlueprintAdoption(Base):
     resources: Mapped[list[Any]] = mapped_column(default=list, doc="[{kind, name}] it applied.")
     created_by: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class InstanceSetting(Base):
+    """Instance-wide settings changed from the instance console (e.g. the orchestrator), one row per key."""
+
+    __tablename__ = "instance_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    revision: Mapped[int] = mapped_column(Integer, default=1, doc="Bumped on every save, so every process notices.")
+    updated_by: Mapped[str | None] = mapped_column(String(200))
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 

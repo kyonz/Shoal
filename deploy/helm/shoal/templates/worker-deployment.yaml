@@ -1,19 +1,28 @@
 {{- if .Values.worker.enabled }}
+{{- /* With worker.agentPool.enabled, runs that call models go to their own worker pool. */}}
+{{- $pools := list (dict "component" "worker" "lanes" (ternary (list "standard") (list "standard" "agent") .Values.worker.agentPool.enabled) "replicas" .Values.worker.replicaCount "autoscaling" .Values.worker.autoscaling.enabled "concurrency" .Values.config.workerConcurrency "resources" .Values.worker.resources "scheduler" .Values.worker.scheduler) }}
+{{- if .Values.worker.agentPool.enabled }}
+{{- $ap := .Values.worker.agentPool }}
+{{- $pools = append $pools (dict "component" "agent-worker" "lanes" (list "agent") "replicas" $ap.replicaCount "autoscaling" false "concurrency" $ap.concurrency "resources" $ap.resources "scheduler" false) }}
+{{- end }}
+{{- range $pool := $pools }}
+{{- with $ }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "shoal.fullname" . }}-worker
+  name: {{ include "shoal.fullname" . }}-{{ $pool.component }}
   labels:
     {{- include "shoal.labels" . | nindent 4 }}
-    app.kubernetes.io/component: worker
+    app.kubernetes.io/component: {{ $pool.component }}
 spec:
-  {{- if not .Values.worker.autoscaling.enabled }}
-  replicas: {{ .Values.worker.replicaCount }}
+  {{- if not $pool.autoscaling }}
+  replicas: {{ $pool.replicas }}
   {{- end }}
   selector:
     matchLabels:
       {{- include "shoal.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: worker
+      app.kubernetes.io/component: {{ $pool.component }}
   template:
     metadata:
       annotations:
@@ -23,7 +32,7 @@ spec:
         {{- end }}
       labels:
         {{- include "shoal.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: worker
+        app.kubernetes.io/component: {{ $pool.component }}
         {{- with .Values.worker.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -65,15 +74,19 @@ spec:
         - name: worker
           image: {{ include "shoal.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["worker"{{ if not .Values.worker.scheduler }}, "--no-scheduler"{{ end }}]
+          args: ["worker"{{ if not $pool.scheduler }}, "--no-scheduler"{{ end }}]
           env:
             {{- include "shoal.env" . | nindent 12 }}
+            - name: SHOAL_WORKER_LANES
+              value: {{ $pool.lanes | toJson | quote }}
+            - name: SHOAL_WORKER_CONCURRENCY
+              value: {{ $pool.concurrency | quote }}
           envFrom:
             {{- include "shoal.envFrom" . | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
-            {{- toYaml .Values.worker.resources | nindent 12 }}
+            {{- toYaml $pool.resources | nindent 12 }}
           volumeMounts:
             {{- include "shoal.volumeMounts" . | nindent 12 }}
       volumes:
@@ -94,4 +107,6 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

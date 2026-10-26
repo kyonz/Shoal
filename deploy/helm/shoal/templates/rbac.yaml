@@ -1,7 +1,8 @@
 {{- if .Values.kubernetesSandboxes.enabled }}
 {{- $rules := list
   (dict "apiGroups" (list "") "resources" (list "pods") "verbs" (list "create" "get" "list" "watch" "delete"))
-  (dict "apiGroups" (list "") "resources" (list "pods/exec" "pods/log") "verbs" (list "create" "get")) }}
+  (dict "apiGroups" (list "") "resources" (list "pods/exec" "pods/log") "verbs" (list "create" "get"))
+  (dict "apiGroups" (list "networking.k8s.io") "resources" (list "networkpolicies") "verbs" (list "create" "get" "delete")) }}
 {{- if .Values.kubernetesSandboxes.clusterWide }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

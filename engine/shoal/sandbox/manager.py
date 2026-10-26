@@ -7,7 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from shoal.core.models import SandboxProfileSpec
+from shoal.core.errors import NotFound, StepError
+from shoal.core.models import RunStatus, SandboxProfileSpec
 from shoal.sandbox.base import Sandbox, SandboxBackend, SandboxSpec
 
 if TYPE_CHECKING:
@@ -55,6 +56,8 @@ class SandboxManager:
         """Yield a sandbox for a step. Run-scoped sandboxes outlive the step."""
         name, profile = await self.profile(run.tenant_id, profile_name)
         backend = self.backend(profile.backend)
+        if gap := backend.network_gap(profile.network):
+            raise StepError(f"sandbox profile '{name}': {gap}; use a backend that can, or relax the profile's network policy")
         spec = self.spec_for(profile, run, env)
         if profile.scope == "step":
             sandbox = await backend.create(spec)
@@ -90,6 +93,48 @@ class SandboxManager:
             sandboxes[name] = record
         run.state = {**run.state, "sandboxes": sandboxes}
         await self.engine.store.update_run(run.id, state=run.state)
+
+    async def reap_orphans(self, *, min_age_seconds: float = 300) -> int:
+        """Delete sandboxes that no live run owns, in every place a sandbox profile puts them (best effort)."""
+        scopes: set[tuple[str, str]] = set()
+        for row in await self.engine.store.list_resources_all_tenants("SandboxProfile"):
+            spec = (row.document or {}).get("spec") or {}
+            try:
+                backend = self.backend(spec.get("backend", "local"))
+            except Exception:  # an uninstalled backend plugin: nothing of ours can be running there
+                continue
+            scope = backend.reap_scope(spec.get("config") or {}, row.tenant_id)
+            if scope:
+                scopes.add((backend.name, scope))
+
+        # Another deployment may share a namespace: only sandboxes labelled with one of our tenants are ours.
+        tenants = {tenant.id for tenant in await self.engine.store.list_tenants()}
+        states: dict[str, str] = {}
+
+        async def run_state(tenant_id: str | None, run_id: str | None) -> str:
+            if tenant_id not in tenants:
+                return "foreign"
+            if not run_id:
+                return "over"
+            if run_id not in states:
+                try:
+                    run = await self.engine.store.get_run(None, run_id)
+                    states[run_id] = "over" if RunStatus(run.status).terminal else "active"
+                except NotFound:
+                    states[run_id] = "over"
+            return states[run_id]
+
+        removed = 0
+        for backend_name, scope in sorted(scopes):
+            try:
+                count = await self.backend(backend_name).reap(scope, run_state, min_age_seconds=min_age_seconds)
+            except Exception:  # pragma: no cover - best effort; the next sweep tries again
+                log.exception("failed to reap %s sandboxes in %s", backend_name, scope)
+                continue
+            if count:
+                log.info("reaped %d orphaned %s sandboxes in %s", count, backend_name, scope)
+            removed += count
+        return removed
 
     async def suspend_run(self, run: Run) -> None:
         """Called when a run starts a long wait: park sandboxes that support it."""

@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
 from shoal.agents.providers.base import ModelRequest, ModelResponse, ProviderUnavailable, ToolDef
 from shoal.agents.providers.openai_compat import OpenAICompatibleProvider, to_openai_messages
@@ -193,6 +194,39 @@ async def test_jev_provider_maps_wire_format(engine, tenant):
     assert result.usage["cost_usd"] == round(1000 * 0.042 / 1e6, 8)
 
 
+async def test_jev_provider_against_the_real_sdk(engine, tenant):
+    """The installed typesafe-sdk, its HTTP layer stubbed: request shape and response parsing end to end."""
+    httpx2 = pytest.importorskip("httpx2")
+    typesafe_sdk = pytest.importorskip("typesafe_sdk")
+    sent: list[dict[str, Any]] = []
+
+    def api(request):
+        sent.append(json.loads(request.content))
+        return httpx2.Response(200, json={"model": "jev-1", "usage": {"input_tokens": 120, "output_tokens": 3}, "answers": {
+            "kind": {"type": "choice", "choice": "bug", "confidence": 0.9, "probabilities": {"bug": 0.9, "feature": 0.1}},
+            "sev": {"type": "score", "score": 1.7, "confidence": 0.8, "legend": {"0": "low", "1": "mid", "2": "high"},
+                    "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}},
+            "repro": {"type": "noul", "noul": 0.8}}})
+
+    def client(config):
+        return typesafe_sdk.TypeSafeClient(api_key=config["api_key"], transport=httpx2.MockTransport(api))
+
+    engine.registry.register("decision_providers", "jev", JevProvider(client_factory=client))
+    await engine.secrets.writable().put(tenant.id, "jev-key", "ts-key")
+    questions = {
+        "kind": DecisionQuestion(type="choice", instructions="What is it?", options={"bug": "A defect", "feature": "A request"}),
+        "sev": DecisionQuestion(type="score", instructions="How bad?", levels=["low", "mid", "high"]),
+        "repro": DecisionQuestion(type="boolean", instructions="Has steps."),
+    }
+    result = await engine.decisions.decide(tenant.id, "Crash on save", questions, provider="jev",
+                                           config={"api_key_secret": "jev-key"})
+    assert sent[0]["questions"]["sev"] == {"type": "score", "instructions": "How bad?", "criteria": ["low", "mid", "high"]}
+    a = result.answers
+    assert (a["kind"].value, a["kind"].confidence) == ("bug", 0.9)
+    assert a["sev"].value == "high" and a["sev"].probabilities == {"low": 0.1, "mid": 0.1, "high": 0.8}
+    assert a["repro"].value is True and result.usage["decision_input_tokens"] == 120
+
+
 # --------------------------------------------------------------------------- model routing
 
 
@@ -259,6 +293,43 @@ async def test_model_policy_fallback_and_tenant_deny_list(engine, tenant):
 
     await _agent_workflow(engine, tenant, "forbidden-model")
     run = await run_wf(engine, tenant, "code")
+    assert run.status == "failed" and "not permitted" in run.error["message"]
+
+
+async def test_model_policy_keeps_agent_settings_and_skips_broken_gateways(engine, tenant):
+    seen: list[ModelRequest] = []
+
+    def ok(request: ModelRequest) -> ModelResponse:
+        seen.append(request)
+        return _finisher({})(request)
+
+    set_script_function("ok", ok)
+    await engine.store.apply_resource(tenant.id, res("Gateway", "nokey", {"type": "scripted", "api_key_secret": "missing-key"}))
+    await engine.store.apply_resource(tenant.id, res("Gateway", "gw", {"type": "scripted", "config": {"function": "ok"}}))
+    await engine.store.apply_resource(tenant.id, res("ModelPolicy", "coding", {"rules": [{"name": "all", "candidates": [
+        {"model": "big", "gateway": "nokey"}, {"model": "medium", "gateway": "gw"}]}]}))
+    await engine.store.apply_resource(tenant.id, res("Agent", "coder", {
+        "provider": "anthropic", "model": "policy:coding", "tools": [], "provider_config": {"temperature": 0.2, "effort": "high"}}))
+    await engine.store.apply_resource(
+        tenant.id, res("Workflow", "code", {"steps": [{"id": "work", "type": "agent", "agent": "coder", "prompt": "Go"}]}))
+    run = await run_wf(engine, tenant, "code")
+    assert run.status == "succeeded", run.error
+    assert seen[0].model == "medium" and seen[0].config["temperature"] == 0.2 and seen[0].config["effort"] == "high"
+    fallback = next(e.data for e in await events(engine, tenant, run.id) if e.type == "model.fallback")
+    assert fallback["gateway"] == "nokey" and "missing-key" in fallback["reason"]
+
+    await engine.store.apply_resource(tenant.id, res("ModelPolicy", "coding", {"rules": [{"name": "all", "candidates": [
+        {"model": "big", "gateway": "nokey"}]}]}))
+    run = await run_wf(engine, tenant, "code")
+    assert run.status == "failed" and "no usable candidate" in run.error["message"] and "missing-key" in run.error["message"]
+
+
+async def test_llm_decisions_respect_the_tenant_model_policy(engine, tenant):
+    await engine.store.apply_resource(tenant.id, res("ModelPolicy", "default", {"deny_models": ["tiny"], "rules": [{"name": "any", "candidates": [{"model": "x"}]}]}))
+    await engine.store.apply_resource(tenant.id, res("Workflow", "triage", {"steps": [{
+        "id": "classify", "type": "decide", "provider": "llm", "provider_config": {"gateway": "scripted", "model": "tiny"},
+        "state": "x", "questions": {"repro": {"type": "boolean", "instructions": "Has steps."}}}]}))
+    run = await run_wf(engine, tenant, "triage")
     assert run.status == "failed" and "not permitted" in run.error["message"]
 
 

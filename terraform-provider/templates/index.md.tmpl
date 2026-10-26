@@ -7,8 +7,8 @@ description: |-
 # Shoal Provider
 
 The Shoal provider manages a [Shoal](https://github.com/kyonz/ai-workflow-manager) tenant through its `/v1` API:
-namespaces, workflows, agents, skills, connections, triggers, campaigns, sandbox profiles, model gateways and
-policies, evals, blueprints, secrets, and who can do what (users, groups, service accounts, roles, role bindings,
+namespaces, workflows, agents, skills, connections, triggers, campaigns, sandbox profiles, cloud identities,
+model gateways and policies, evals, blueprints, secrets, and who can do what (users, groups, service accounts, roles, role bindings,
 API keys and single sign-on).
 
 Every resource maps one-to-one onto an API object and uses the same field names, so the
@@ -31,7 +31,8 @@ With the operator token (self-hosted bootstrap) also set `tenant` / `SHOAL_TENAN
 ## How resources are shaped
 
 * **Declarative resources** (`shoal_workflow`, `shoal_agent`, `shoal_skill`, `shoal_connection`, `shoal_trigger`,
-  `shoal_campaign`, `shoal_sandbox_profile`, `shoal_gateway`, `shoal_model_policy`, `shoal_eval`) share one shape:
+  `shoal_campaign`, `shoal_sandbox_profile`, `shoal_cloud_identity`, `shoal_gateway`, `shoal_model_policy`,
+  `shoal_eval`) share one shape:
   `name`, `namespace`, `description`, `labels` and `spec`. `spec` is a plain object, so it can be written inline in
   HCL or loaded from the YAML the visual builder exports:
 

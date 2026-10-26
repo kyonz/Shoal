@@ -98,6 +98,8 @@ async def test_agents_use_mcp_tools(engine, tenant, server):
     assert step.status == "succeeded", step.error
     assert step.output["result"] == "created From agent as team-token"
     assert server.calls == [("create-issue", {"title": "From agent"})]
+    actions = [e.data for e in await engine.store.list_events(tenant.id, run.id) if e.type == "agent.action"]
+    assert actions == [{"action": "mcp.create_issue", "connection": "tickets", "params": {"title": "From agent"}}]
 
 
 async def test_mcp_rejects_clear_text_auth_headers(engine, tenant, server):

@@ -111,6 +111,14 @@ class EvalSink(abc.ABC):
     @abc.abstractmethod
     async def import_dataset(self, name: str, config: dict[str, Any], *, limit: int | None = None) -> list[EvalCase]: ...
 
+    async def test_connection(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Check the settings and credentials with a cheap call; ``{"ok": bool, ...}``. Optional."""
+        raise NotImplementedError
+
+    async def list_datasets(self, config: dict[str, Any]) -> list[str]:
+        """Dataset names, for pickers. Optional."""
+        raise NotImplementedError
+
 
 async def resolve_config(engine: Engine, tenant_id: str, config: dict[str, Any]) -> dict[str, Any]:
     """Replace ``<field>_secret`` entries with ``<field>`` holding the secret's value."""

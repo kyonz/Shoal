@@ -1,0 +1,44 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile (printf "examples/resources/%s/resource.tf" .Name) }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## `spec` fields
+
+An integration the organisation registers itself: a remote service speaking the Shoal
+integration protocol (``url``) or an installed Python package (``package``). Shoal pulls its
+manifest (connection settings, auth, actions, resources, events) so connecting to it works like
+a built-in. Tenant-wide and managed by tenant admins; the token is a secret in ``shared``.
+
+These are the top-level fields of the CustomIntegration spec, the same as `spec:` in YAML. Nested objects are described in the
+server's JSON Schema at `GET /v1/schemas` (also used by the UI builder for validation).
+
+| Field | Type | | Description |
+|---|---|---|---|
+| `source` | one of `remote`, `package` | **required** | remote: an HTTP service; package: an installed Python package. |
+| `title` | string | optional | Display name (defaults to the manifest's). |
+| `description` | string | optional |  |
+| `url` | string | optional | remote: base URL of the integration service (https). |
+| `token_secret` | string | optional | remote: secret in `shared` holding the bearer token Shoal presents. |
+| `timeout_seconds` | number | optional |  Default: `30.0`. |
+| `allow_insecure` | bool | optional | remote: permit plain http to a non-loopback host. Default: `false`. |
+| `package` | string | optional | package: the installed plugin (entry point name in `shoal.integrations`), its distribution (e.g. shoal-linear), or `module:Class` when the server allows importing integration modules. |
+| `connection_scopes` | list of one of `org`, `namespace` | optional | Where connections may live: `org` (shared to namespaces) and/or `namespace` (one team's). Empty: whatever the integration declares; otherwise narrows it. |
+| `namespaces` | list of string | optional | Namespaces that may see and connect it (empty: all). |
+| `enabled` | bool | optional |  Default: `true`. |
+
+## Import
+
+{{ codefile "shell" (printf "examples/resources/%s/import.sh" .Name) }}

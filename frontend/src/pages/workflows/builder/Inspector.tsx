@@ -2,7 +2,7 @@ import { AlertTriangle, CircleAlert, Copy, Sparkles, Trash2, X } from "lucide-re
 import { useMemo } from "react";
 import { useResource, useStepSchema, type JsonSchema } from "@/api/hooks";
 import { useNs } from "@/lib/ns";
-import { Badge, Button, CodeEditor, Field, Input, NativeSelect, Segmented, Switch, Tooltip } from "@/components/ui";
+import { Badge, Button, CodeEditor, Field, Input, NativeSelect, ReadOnlyContext, Segmented, Switch, Tooltip } from "@/components/ui";
 import { KeyValueInput, SchemaForm, TagInput } from "@/components/forms/SchemaForm";
 import { dependencies } from "@/features/workflow/graph";
 import { ExpressionInput } from "@/features/workflow/ExpressionInput";
@@ -17,7 +17,7 @@ import { useBuilder } from "./store";
 
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : String(v));
 
-export function Inspector({ stepId, issues }: { stepId: string; issues: Issue[] }) {
+export function Inspector({ stepId, issues, readOnly }: { stepId: string; issues: Issue[]; readOnly?: boolean }) {
   const step = useBuilder((s) => s.spec.steps.find((x) => x.id === stepId));
   const spec = useBuilder((s) => s.spec);
   const { updateStep, rename, remove, duplicate, select, setDeps } = useBuilder.getState();
@@ -45,90 +45,100 @@ export function Inspector({ stepId, issues }: { stepId: string; issues: Issue[] 
           <div className="text-[11px] font-medium" style={{ color: info.color }}>
             {info.label}
           </div>
-          <RenameInput
-            value={step.id}
-            onRename={(to) => STEP_ID.test(to) && rename(step.id, to)}
-            className="-ml-1.5 h-7 text-[14px] font-semibold"
-          />
+          {readOnly ? (
+            <div className="h-7 truncate font-mono text-[14px] leading-7 font-semibold">{step.id}</div>
+          ) : (
+            <RenameInput
+              value={step.id}
+              onRename={(to) => STEP_ID.test(to) && rename(step.id, to)}
+              className="-ml-1.5 h-7 text-[14px] font-semibold"
+            />
+          )}
         </div>
-        <Tooltip content="Duplicate (⌘D)">
-          <Button variant="ghost" size="icon-sm" onClick={() => duplicate(step.id)} aria-label="Duplicate step">
-            <Copy className="size-3.5" />
-          </Button>
-        </Tooltip>
-        <Tooltip content="Delete (Del)">
-          <Button variant="ghost" size="icon-sm" onClick={() => remove([step.id])} aria-label="Delete step">
-            <Trash2 className="size-3.5" />
-          </Button>
-        </Tooltip>
+        {!readOnly && (
+          <>
+            <Tooltip content="Duplicate (⌘D)">
+              <Button variant="ghost" size="icon-sm" onClick={() => duplicate(step.id)} aria-label="Duplicate step">
+                <Copy className="size-3.5" />
+              </Button>
+            </Tooltip>
+            <Tooltip content="Delete (Del)">
+              <Button variant="ghost" size="icon-sm" onClick={() => remove([step.id])} aria-label="Delete step">
+                <Trash2 className="size-3.5" />
+              </Button>
+            </Tooltip>
+          </>
+        )}
         <Button variant="ghost" size="icon-sm" onClick={() => select(null)} aria-label="Close inspector">
           <X className="size-4" />
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {mine.length > 0 && (
-          <div className="space-y-1 border-b border-border px-4 py-3">
-            {mine.map((i, n) => (
-              <div key={n} className={`flex items-start gap-2 text-xs ${i.level === "error" ? "text-bad" : "text-warn"}`}>
-                {i.level === "error" ? <CircleAlert className="mt-0.5 size-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />}
-                <span>
-                  {i.message}
-                  {i.source === "server" && <Badge className="ml-1.5">server</Badge>}
-                </span>
+      <ReadOnlyContext.Provider value={!!readOnly}>
+        <fieldset disabled={readOnly} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+            {mine.length > 0 && (
+              <div className="space-y-1 border-b border-border px-4 py-3">
+                {mine.map((i, n) => (
+                  <div key={n} className={`flex items-start gap-2 text-xs ${i.level === "error" ? "text-bad" : "text-warn"}`}>
+                    {i.level === "error" ? <CircleAlert className="mt-0.5 size-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />}
+                    <span>
+                      {i.message}
+                      {i.source === "server" && <Badge className="ml-1.5">server</Badge>}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-        <Section title="Step">
-          <div className="space-y-3">
-            <Field label="Display name" hint="optional">
-              <Input value={str(step.name)} placeholder={step.id} onChange={(e) => set({ name: e.target.value })} />
-            </Field>
-            <p className="text-xs text-faint">{info.description}</p>
-          </div>
-        </Section>
-        <TypeEditor step={step} set={set} />
-        <Section title="Flow" description="When this step runs and what happens if it fails.">
-          <div className="space-y-3">
-            <Field label="Runs after" description="Drag between nodes on the canvas to connect steps.">
-              <div className="flex flex-wrap gap-1.5">
-                {spec.steps
-                  .filter((s) => s.id !== step.id)
-                  .map((s) => {
-                    const on = deps.includes(s.id);
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setDeps(step.id, on ? deps.filter((d) => d !== s.id) : [...deps, s.id])}
-                        className={`h-6 rounded-md border px-2 font-mono text-[11px] transition-colors ${on ? "border-accent/40 bg-accent-soft text-accent" : "border-border text-faint hover:text-fg"}`}
-                      >
-                        {s.id}
-                      </button>
-                    );
-                  })}
-                {spec.steps.length < 2 && <span className="text-xs text-faint">No other steps yet.</span>}
+            )}
+            <Section title="Step">
+              <div className="space-y-3">
+                <Field label="Display name" hint="optional">
+                  <Input value={str(step.name)} placeholder={step.id} onChange={(e) => set({ name: e.target.value })} />
+                </Field>
+                <p className="text-xs text-faint">{info.description}</p>
               </div>
-            </Field>
-            <Field label="Run only if" description="Expression; the step is skipped when it is false.">
-              <ExpressionInput value={str(step.if)} onChange={(v) => set({ if: v }, `step:${step.id}:if`)} placeholder="{{ steps.fix.output.tests_passed }}" />
-            </Field>
-            <div className="grid grid-cols-2 gap-2.5">
-              <Field label="On error">
-                <NativeSelect value={str(step.on_error) || "fail"} onChange={(e) => set({ on_error: e.target.value === "fail" ? undefined : e.target.value })}>
-                  <option value="fail">Fail the run</option>
-                  <option value="continue">Continue</option>
-                </NativeSelect>
-              </Field>
-              <Field label="Timeout" hint="e.g. 30m, 2h">
-                <Input mono value={str(step.timeout)} placeholder="none" onChange={(e) => set({ timeout: e.target.value })} />
-              </Field>
-            </div>
-            <RetryEditor value={(step.retry as Record<string, unknown>) ?? {}} onChange={(r) => set({ retry: Object.keys(r).length ? r : undefined })} />
-          </div>
-        </Section>
-      </div>
+            </Section>
+            <TypeEditor step={step} set={set} />
+            <Section title="Flow" description="When this step runs and what happens if it fails.">
+              <div className="space-y-3">
+                <Field label="Runs after" description="Drag between nodes on the canvas to connect steps.">
+                  <div className="flex flex-wrap gap-1.5">
+                    {spec.steps
+                      .filter((s) => s.id !== step.id)
+                      .map((s) => {
+                        const on = deps.includes(s.id);
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => setDeps(step.id, on ? deps.filter((d) => d !== s.id) : [...deps, s.id])}
+                            className={`h-6 rounded-md border px-2 font-mono text-[11px] transition-colors ${on ? "border-accent/40 bg-accent-soft text-accent" : "border-border text-faint hover:text-fg"}`}
+                          >
+                            {s.id}
+                          </button>
+                        );
+                      })}
+                    {spec.steps.length < 2 && <span className="text-xs text-faint">No other steps yet.</span>}
+                  </div>
+                </Field>
+                <Field label="Run only if" description="Expression; the step is skipped when it is false.">
+                  <ExpressionInput value={str(step.if)} onChange={(v) => set({ if: v }, `step:${step.id}:if`)} placeholder="{{ steps.fix.output.tests_passed }}" />
+                </Field>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <Field label="On error">
+                    <NativeSelect value={str(step.on_error) || "fail"} onChange={(e) => set({ on_error: e.target.value === "fail" ? undefined : e.target.value })}>
+                      <option value="fail">Fail the run</option>
+                      <option value="continue">Continue</option>
+                    </NativeSelect>
+                  </Field>
+                  <Field label="Timeout" hint="e.g. 30m, 2h">
+                    <Input mono value={str(step.timeout)} placeholder="none" onChange={(e) => set({ timeout: e.target.value })} />
+                  </Field>
+                </div>
+                <RetryEditor value={(step.retry as Record<string, unknown>) ?? {}} onChange={(r) => set({ retry: Object.keys(r).length ? r : undefined })} />
+              </div>
+            </Section>
+        </fieldset>
+      </ReadOnlyContext.Provider>
     </div>
   );
 }
@@ -335,6 +345,9 @@ function ScriptEditor({ step, set }: { step: StepDoc; set: SetFn }) {
               <Input mono value={str(step.workdir)} placeholder="/workspace" onChange={(e) => set({ workdir: e.target.value })} />
             </Field>
           </div>
+          <Field label="Cloud identities" description="Short-lived cloud credentials (e.g. AWS) the script gets as environment variables.">
+            <ResourceTags plural="cloud-identities" value={(step.cloud_identities as string[]) ?? []} onChange={(v) => set({ cloud_identities: v })} />
+          </Field>
           <Field label="Environment variables">
             <KeyValueInput value={(step.env as Record<string, string>) ?? {}} onChange={(v) => set({ env: Object.keys(v).length ? v : undefined })} keyPlaceholder="NAME" />
           </Field>
@@ -495,6 +508,12 @@ function ApprovalEditor({ step, set }: { step: StepDoc; set: SetFn }) {
             </NativeSelect>
           </Field>
         </div>
+        <Field label="When rejected" description="Stop the run, or continue with approved: false so later steps can branch with if.">
+          <NativeSelect value={str(step.on_reject) || "fail"} onChange={(e) => set({ on_reject: e.target.value === "fail" ? undefined : e.target.value })}>
+            <option value="fail">Stop the run</option>
+            <option value="continue">Continue</option>
+          </NativeSelect>
+        </Field>
       </div>
     </Section>
   );

@@ -9,6 +9,7 @@ login and, when they linked it, their own GitHub OAuth token.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 from shoal.core.models import Identity
@@ -22,10 +23,19 @@ HINT_FIELDS = ("github", "jira_account_id", "email", "slack_id")
 class IdentityService:
     def __init__(self, engine: Engine):
         self.engine = engine
+        # Identities change rarely and every run start reads them: keep them briefly per tenant.
+        self._cache: dict[str, tuple[int, float, list[Identity]]] = {}
 
     async def _identities(self, tenant_id: str) -> list[Identity]:
-        rows = await self.engine.store.list_resources(tenant_id, "Identity")
-        return [Identity.model_validate(r.document) for r in rows]
+        store = self.engine.store
+        cached = self._cache.get(tenant_id)
+        if cached and cached[0] == store.resource_generation and time.monotonic() < cached[1]:
+            return cached[2]
+        generation = store.resource_generation
+        rows = await store.list_resources(tenant_id, "Identity")
+        identities = [Identity.model_validate(r.document) for r in rows]
+        self._cache[tenant_id] = (generation, time.monotonic() + self.engine.settings.auth_cache_seconds, identities)
+        return identities
 
     async def find(self, tenant_id: str, *, actor: str | None = None, **hints: Any) -> Identity | None:
         hints = {k: v for k, v in hints.items() if k in HINT_FIELDS and v}

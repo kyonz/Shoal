@@ -120,7 +120,9 @@ class EngineHarness:
         for doc in documents:
             text = doc if isinstance(doc, str) else json.dumps(doc)
             for resource in load_text(text):
-                await self.engine.store.apply_resource(self.tenant_id, resource)
+                row, _ = await self.engine.store.apply_resource(self.tenant_id, resource)
+                if row.kind == "Trigger":  # register (or remove) its provider webhook, as the API does
+                    await self.engine.webhooks.sync(self.tenant_id, row.namespace, row.name, changed=True)
 
     async def connect(
         self, name: str, integration: str, *, config: dict[str, Any] | None = None, secrets: dict[str, str] | None = None
@@ -149,6 +151,24 @@ class EngineHarness:
         """Deliver a webhook to the connection's URL, exactly as the HTTP endpoint would."""
         url = await self.engine.integrations.webhook_url(self.tenant_id, connection)
         return await self.engine.integrations.handle_webhook(url.rsplit("/", 1)[-1], headers, _bytes(body))
+
+    async def deliver(self, url: str, headers: dict[str, str], body: bytes | dict[str, Any]) -> dict[str, Any]:
+        """Deliver to any Shoal webhook URL (a connection's, or a registered trigger webhook's ``.../<id>``)."""
+        prefix = f"{self.engine.settings.public_url.rstrip('/')}/v1/hooks/"
+        assert url.startswith(prefix), f"not a Shoal webhook URL: {url}"
+        webhook_id, _, registration_id = url[len(prefix):].partition("/")
+        return await self.engine.integrations.handle_webhook(webhook_id, headers, _bytes(body), registration_id=registration_id or None)
+
+    async def flush(self, provider: Any) -> list[dict[str, Any]]:
+        """Deliver everything a stateful mock (``MockJira``) has queued, until it queues nothing more."""
+        results = []
+        for _ in range(100):
+            deliveries = provider.take()
+            if not deliveries:
+                return results
+            for delivery in deliveries:
+                results.append(await self.deliver(delivery.url, delivery.headers, delivery.body))
+        raise AssertionError("deliveries kept coming: a trigger loop?")
 
     async def runs(self) -> list[Any]:
         return await self.engine.store.list_runs(self.tenant_id)

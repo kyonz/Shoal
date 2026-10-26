@@ -181,6 +181,62 @@ async def test_mock_http_fails_loudly_on_unmocked_calls():
     assert route.last.path == "/files/a/b/c.txt"
 
 
+async def test_built_in_webhooks_reject_unsigned_deliveries_without_a_secret():
+    body = b'{"action": "opened", "pull_request": {"number": 1}}'
+    github = IntegrationHarness(GitHubIntegration, config={"token": "t"})
+    assert not await github.verify_webhook({"X-GitHub-Event": "pull_request"}, body)
+    generic = IntegrationHarness(WebhookIntegration)
+    assert not await generic.verify_webhook({}, body)
+    assert await IntegrationHarness(WebhookIntegration, config={"allow_unsigned": True}).verify_webhook({}, body)
+
+
+def test_contract_flags_webhooks_that_are_never_verified():
+    class Unverified(TicketsIntegration):
+        key = "unverified"
+        verify_webhook = Integration.verify_webhook
+
+    assert any("verify_webhook is not" in p for p in check_integration(Unverified))
+
+
+async def test_unreachable_services_are_retryable_errors():
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    harness = IntegrationHarness(TicketsIntegration, config={"api_token": "t"}, http=down)
+    with pytest.raises(IntegrationError, match="unreachable") as err:
+        await harness.call("open_ticket", {"title": "Bug"})
+    assert err.value.retryable
+
+    app = create_app(TicketsIntegration, token=SERVICE_TOKEN, http_transport=httpx.MockTransport(down))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as client:
+        r = await client.post(
+            "/resources/ticket/query", json={"connection": {"api_token": "t"}}, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
+        )
+    assert r.status_code == 502 and r.json()["error"]["retryable"] is True
+
+
+async def test_jira_writes_say_who_requested_them():
+    api = MockHTTP(host="acme.atlassian.net")
+    comment = api.post("/rest/api/3/issue/{key}/comment", json={"id": "10"})
+    created = api.post("/rest/api/3/issue", json={"key": "OPS-2"})
+    config = {"base_url": "https://acme.atlassian.net", "email": "bot@acme.test", "api_token": "t"}
+    dana = {"display_name": "Dana", "jira_account_id": "acc-1"}
+    harness = IntegrationHarness(JiraIntegration, config=config, http=api, initiator=dana)
+
+    await harness.call("add_comment", {"key": "OPS-1", "body": "Fixed in #12"})
+    await harness.call("create_issue", {"project": "OPS", "summary": "Flaky test", "labels": ["ci"]})
+
+    last = comment.last.json["body"]["content"][-1]["content"]
+    assert last == [{"type": "text", "text": "Requested by: "}, {"type": "mention", "attrs": {"id": "acc-1", "text": "@Dana"}}]
+    assert created.last.json["fields"]["labels"] == ["ci", "shoal-automated"]
+
+    server_api = MockHTTP(host="acme.atlassian.net")
+    plain = server_api.post("/rest/api/2/issue/{key}/comment", json={"id": "11"})
+    server = IntegrationHarness(JiraIntegration, config={**config, "api_version": "2"}, http=server_api, initiator=dana)
+    await server.call("add_comment", {"key": "OPS-1", "body": "Done"})
+    assert plain.last.json["body"] == "Done\n\nRequested by: Dana"
+
+
 async def test_harness_webhook_verification():
     harness = IntegrationHarness(TicketsIntegration, config={"api_token": "t", "webhook_secret": "s3"})
     headers, body = signed_webhook("s3", {"action": "closed", "id": "T-4"})
@@ -229,6 +285,31 @@ def test_remote_urls_must_be_https_except_loopback():
     with pytest.raises(IntegrationError, match="embed credentials"):
         check_url("https://user:pw@svc.example")
     assert check_url("http://svc.internal", allow_insecure=True) == "http://svc.internal"
+
+
+async def test_connections_cannot_reach_the_metadata_service():
+    reached: list[str] = []
+
+    def anything(request: httpx.Request) -> httpx.Response:
+        reached.append(str(request.url))
+        return httpx.Response(200, json={"protocol": "shoal.integration/v1", "key": "x", "title": "X"})
+
+    async with engine_harness(http=httpx.MockTransport(anything)) as world:
+        for name, url in (("imds", "http://169.254.169.254/latest/meta-data/iam?x="), ("imds6", "http://[fd00:ec2::254]/")):
+            await world.connect(name, "remote", config={"url": url, "allow_insecure": True})
+            ctx = await world.engine.integrations.connection(world.tenant_id, name)
+            with pytest.raises(IntegrationError, match="blocked address"):
+                await ctx.integration.test_connection(ctx)
+        await world.connect("ok", "remote", config={"url": "https://svc.test"})
+        ctx = await world.engine.integrations.connection(world.tenant_id, "ok")
+        assert (await ctx.integration.test_connection(ctx))["ok"]
+        assert reached == ["https://svc.test/manifest"]
+
+        world.engine.settings.integration_blocked_networks = ["10.0.0.0/8"]  # operators can widen it
+        await world.connect("private", "remote", config={"url": "http://10.1.2.3", "allow_insecure": True})
+        ctx = await world.engine.integrations.connection(world.tenant_id, "private")
+        with pytest.raises(IntegrationError, match="blocked address"):
+            await ctx.integration.test_connection(ctx)
 
 
 async def test_remote_connection_end_to_end():
@@ -291,7 +372,7 @@ async def test_registered_remote_integration_behaves_like_a_builtin():
     async with engine_harness(http=transport) as world:
         cls = await register_remote_integration(world.engine.registry, "https://svc.test", SERVICE_TOKEN, transport=transport)
         assert cls.key == "tickets"
-        catalog = {c["key"]: c for c in world.engine.integrations.catalog()}
+        catalog = {c["key"]: c for c in await world.engine.integrations.catalog()}
         assert catalog["tickets"]["remote"]["url"] == "https://svc.test"
         assert catalog["tickets"]["actions"][0]["input_schema"]["required"] == ["title"]
         assert "remote" in catalog  # the generic adapter is listed too
@@ -373,6 +454,22 @@ def test_scaffold_creates_a_working_project(tmp_path):
         new_integration("service-now", project)
 
 
+def test_scaffolded_multi_word_project_tests_pass(tmp_path):
+    """Header, host and connection names must stay valid when the key has several words."""
+    project = new_integration("acme-tickets", tmp_path / "shoal-acme-tickets", title="Acme Tickets")
+    source = (project / "src/shoal_acme_tickets/integration.py").read_text()
+    assert 'key = "acme_tickets"' in source
+    assert '"x-acme-tickets-signature"' in source and "https://api.acme-tickets.example" in source
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(project / "tests")],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project / "src")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_template_project_tests_pass():
     template = ROOT / "templates/integration"
     result = subprocess.run(
@@ -394,4 +491,18 @@ async def test_operator_remote_integrations_register_at_start():
             RemoteIntegration(url="https://down.test"),  # unreachable: logged, start carries on
         ]
         await world.engine.start()
-        assert "tickets" in {c["key"] for c in world.engine.integrations.catalog()}
+        assert "tickets" in {c["key"] for c in await world.engine.integrations.catalog()}
+
+
+async def test_cli_checks_a_remote_service(node_service):
+    shoal = str(Path(sys.executable).with_name("shoal"))
+    ok = await asyncio.create_subprocess_exec(shoal, "integrations", "check", node_service, "--token", SERVICE_TOKEN,
+                                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, _ = await ok.communicate()
+    assert ok.returncode == 0, out.decode()
+    assert "passes the integration contract" in out.decode()
+
+    bad = await asyncio.create_subprocess_exec(shoal, "integrations", "check", node_service, "--token", "wrong",
+                                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, _ = await bad.communicate()
+    assert bad.returncode == 1 and "FAIL" in out.decode()

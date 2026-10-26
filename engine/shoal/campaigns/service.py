@@ -6,11 +6,12 @@ import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from shoal.campaigns.target_lists import Resolved, _keyed
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest
 from shoal.core.expressions import render
 from shoal.core.ids import new_id
-from shoal.core.models import Campaign, CampaignSpec, CampaignStatus, RunStatus, TargetStatus
+from shoal.core.models import Campaign, CampaignSpec, CampaignStatus, RunStatus, TargetList, TargetStatus
 from shoal.core.scope import current_namespace, use_namespace
 from shoal.store import tables as t
 
@@ -56,6 +57,11 @@ class CampaignService:
         else:
             await self.store.get_resource_version(tenant_id, "Workflow", spec.workflow, spec.workflow_version)
 
+        # Resolve targets before recording the launch, so a launch that cannot start leaves nothing behind.
+        try:
+            items = await self.resolve_targets(tenant_id, spec)
+        except Exception as exc:
+            raise InvalidRequest(f"could not resolve campaign targets: {exc}") from exc
         row = t.CampaignRow(
             id=new_id("cmp"),
             tenant_id=tenant_id,
@@ -68,35 +74,38 @@ class CampaignService:
             initiator=initiator or await self.engine.identities.resolve(tenant_id, actor=started_by, source="campaign"),
         )
         await self.store.create_campaign(row)
-        try:
-            await self.plan(row)
-        except Exception as exc:
-            await self.store.update_campaign(row.id, status=CampaignStatus.cancelled, error={"message": str(exc)})
-            raise InvalidRequest(f"could not resolve campaign targets: {exc}") from exc
+        await self.plan(row, items)
         if start:
             await self.start(tenant_id, row.id)
         return await self.store.get_campaign(tenant_id, row.id)
 
-    async def plan(self, row: t.CampaignRow) -> int:
-        """Resolve and snapshot targets."""
-        spec = CampaignSpec.model_validate(row.spec)
+    async def resolve_targets(self, tenant_id: str, spec: CampaignSpec) -> Resolved:
+        """The target set, keyed and de-duplicated; ``missing`` names listed targets a list's lookup did not find."""
         sel = spec.targets
-        if sel.items is not None:
-            items = list(sel.items)
+        if sel.list_:
+            resolved = await self.engine.target_lists.resolve(tenant_id, sel.list_)
+        elif sel.items is not None:
+            resolved = Resolved(targets=_keyed(list(sel.items), sel.key))
         else:
-            items = await self.engine.integrations.query_all(row.tenant_id, sel.connection, sel.resource, sel.filter)
+            items = await self.engine.integrations.query_all(tenant_id, sel.connection, sel.resource, sel.filter)
+            resolved = Resolved(targets=_keyed(items, sel.key))
         if sel.limit:
-            items = items[: sel.limit]
-        targets = []
-        seen: set[str] = set()
-        for item in items:
-            key = str(render(sel.key, {"target": item}))
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            targets.append(
-                t.CampaignTarget(id=new_id("tgt"), campaign_id=row.id, tenant_id=row.tenant_id, key=key, data=item)
+            resolved.targets = dict(list(resolved.targets.items())[: sel.limit])
+        return resolved
+
+    async def plan(self, row: t.CampaignRow, items: Resolved) -> int:
+        """Snapshot resolved targets; listed targets that could not be found are recorded as skipped."""
+        now = clock.now()
+        targets = [
+            t.CampaignTarget(id=new_id("tgt"), campaign_id=row.id, tenant_id=row.tenant_id, key=key, data=item)
+            for key, item in items.targets.items()
+        ] + [
+            t.CampaignTarget(
+                id=new_id("tgt"), campaign_id=row.id, tenant_id=row.tenant_id, key=key, data={},
+                status=TargetStatus.skipped, result={"error": "not found by the target list's lookup"}, finished_at=now,
             )
+            for key in items.missing
+        ]
         added = await self.store.add_targets(targets)
         await self.refresh_stats(row.id)
         return added
@@ -106,7 +115,8 @@ class CampaignService:
         if row.status not in (CampaignStatus.draft, CampaignStatus.paused):
             raise Conflict(f"campaign is {row.status}")
         await self.store.update_campaign(
-            row.id, status=CampaignStatus.running, started_at=row.started_at or clock.now(), next_tick_at=clock.now()
+            row.id, status=CampaignStatus.running, started_at=row.started_at or clock.now(), next_tick_at=clock.now(),
+            error=None,
         )
 
     async def pause(self, tenant_id: str, campaign_id: str, reason: str | None = None) -> None:
@@ -116,6 +126,16 @@ class CampaignService:
         await self.store.update_campaign(row.id, status=CampaignStatus.paused, error={"message": reason} if reason else None)
 
     async def resume(self, tenant_id: str, campaign_id: str) -> None:
+        """Continue a paused campaign. Failures so far are accepted: ``max_failures`` counts new ones from here."""
+        row = await self.store.get_campaign(tenant_id, campaign_id)
+        if row.status == CampaignStatus.paused:
+            policy = CampaignSpec.model_validate(row.spec).policy
+            stats = await self.refresh_stats(row.id)
+            if policy.budget_usd is not None and stats["cost_usd"] >= policy.budget_usd:
+                raise Conflict(
+                    f"the budget of ${policy.budget_usd} is spent; launch the campaign again with a higher budget"
+                )
+            await self.store.update_campaign(row.id, stats={**stats, "accepted_failures": stats["failed"]})
         await self.start(tenant_id, campaign_id)
 
     async def cancel(self, tenant_id: str, campaign_id: str) -> None:
@@ -142,12 +162,17 @@ class CampaignService:
     async def add_targets(self, tenant_id: str, campaign_id: str, items: list[dict[str, Any]]) -> int:
         row = await self.store.get_campaign(tenant_id, campaign_id)
         spec = CampaignSpec.model_validate(row.spec)
+        key = spec.targets.key
+        if spec.targets.list_:  # keyed the way the list keys its targets
+            key = TargetList.model_validate(
+                (await self.store.get_resource_row(tenant_id, "TargetList", spec.targets.list_)).document
+            ).spec.key
         targets = [
             t.CampaignTarget(
                 id=new_id("tgt"),
                 campaign_id=row.id,
                 tenant_id=tenant_id,
-                key=str(render(spec.targets.key, {"target": item})),
+                key=str(render(key, {"target": item})),
                 data=item,
             )
             for item in items
@@ -162,10 +187,14 @@ class CampaignService:
 
     async def refresh_stats(self, campaign_id: str) -> dict[str, Any]:
         counts = await self.store.target_counts(campaign_id)
+        previous = (await self.store.get_campaign(None, campaign_id)).stats or {}
+        failed = counts.get(TargetStatus.failed.value, 0)
         stats = {
             "total": sum(counts.values()),
             **{s.value: counts.get(s.value, 0) for s in TargetStatus},
             "cost_usd": round(await self.store.campaign_cost(campaign_id), 4),
+            # failures a resume accepted (fewer once failed targets are retried)
+            "accepted_failures": min(previous.get("accepted_failures", 0), failed),
         }
         await self.store.update_campaign(campaign_id, stats=stats)
         return stats
@@ -190,7 +219,7 @@ class CampaignService:
         stats = await self.refresh_stats(row.id)
         now = clock.now()
 
-        if policy.max_failures and stats["failed"] >= policy.max_failures:
+        if policy.max_failures and stats["failed"] - stats["accepted_failures"] >= policy.max_failures:
             await self.store.update_campaign(
                 row.id, status=CampaignStatus.paused, error={"message": f"paused after {stats['failed']} failures"}
             )

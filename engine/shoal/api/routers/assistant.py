@@ -8,9 +8,10 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
+from shoal.agents.claude_code import sign_in
 from shoal.api.deps import CtxDep
 from shoal.assistant.chat import Assistant
-from shoal.core.errors import Forbidden, InvalidRequest, ShoalError
+from shoal.core.errors import CredentialRequired, Forbidden, InvalidRequest, ShoalError
 from shoal.core.requestctx import current_request
 from shoal.llm.router import DEFAULT_POLICY, ModelClient, ModelRouter
 
@@ -42,6 +43,10 @@ class ChatIn(BaseModel):
     decisions: dict[str, Decision] = Field(default_factory=dict, description="Pending action id -> decision.")
     auto_approve: bool = Field(False, description="Make changes without asking (the caller's permissions still apply).")
     page: str | None = Field(None, max_length=500, description="The UI route the user is on, for context.")
+    context: str | None = Field(
+        None, max_length=60_000,
+        description="What the user sees that the API can't show, e.g. a workflow open in the builder with unsaved edits.",
+    )
 
 
 class PendingAction(BaseModel):
@@ -70,29 +75,87 @@ class AssistantInfo(BaseModel):
     enabled: bool
     gateway: str
     model: str
+    effort: str
+    server: dict[str, str] = Field(default_factory=dict, description="The server's values (SHOAL_ASSISTANT_*).")
+    instance: dict[str, str] = Field(default_factory=dict, description="What instance admins set in the instance console.")
+    defaults: dict[str, str] = Field(
+        default_factory=dict, description="What applies where the tenant sets nothing: the instance setting, else the server's."
+    )
+    overrides: dict[str, str] = Field(default_factory=dict, description="What the tenant's admins set in the admin console.")
 
 
-@router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled, and its model")
-async def assistant_info(ctx: CtxDep) -> AssistantInfo:
+class AssistantSettingsIn(BaseModel):
+    gateway: str | None = Field(None, max_length=200, description="Gateway resource or provider plugin; null inherits.")
+    model: str | None = Field(None, max_length=200, description="Model name; null inherits.")
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+
+
+SETTING_FIELDS = ("gateway", "model", "effort")
+INSTANCE_SETTING_KEY = "assistant"
+
+
+def _own(values: dict[str, Any] | None) -> dict[str, str]:
+    return {k: str(v) for k, v in (values or {}).items() if k in SETTING_FIELDS and v}
+
+
+async def instance_assistant(engine: Any) -> dict[str, str]:
+    row = await engine.store.get_instance_setting(INSTANCE_SETTING_KEY)
+    return _own(row.value if row else None)
+
+
+async def assistant_config(ctx: CtxDep) -> AssistantInfo:
+    """The assistant's settings for the calling tenant: SHOAL_ASSISTANT_*, then the instance console, then the tenant."""
     s = ctx.engine.settings
-    return AssistantInfo(enabled=s.assistant_enabled, gateway=s.assistant_gateway, model=s.assistant_model)
+    server = {"gateway": s.assistant_gateway, "model": s.assistant_model, "effort": s.assistant_effort}
+    instance = await instance_assistant(ctx.engine)
+    tenant = await ctx.engine.store.get_tenant(ctx.tenant_id)
+    own = _own((tenant.settings or {}).get("assistant"))
+    defaults = {**server, **instance}
+    return AssistantInfo(enabled=s.assistant_enabled, **{**defaults, **own}, server=server, instance=instance,
+                         defaults=defaults, overrides=own)
+
+
+@router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled, and its gateway and model")
+async def assistant_info(ctx: CtxDep) -> AssistantInfo:
+    return await assistant_config(ctx)
+
+
+@router.put("/settings", response_model=AssistantInfo, summary="Choose the assistant's gateway, model and effort for this tenant")
+async def put_assistant_settings(body: AssistantSettingsIn, ctx: CtxDep) -> AssistantInfo:
+    await ctx.require("tenant:manage")
+    own = body.model_dump(exclude_none=True)
+    if own.get("gateway") and await ctx.engine.store.find_resource(ctx.tenant_id, "Gateway", own["gateway"]) is None \
+            and own["gateway"] not in ctx.engine.registry.names("providers"):
+        raise InvalidRequest(f"no gateway or provider named '{own['gateway']}'")
+    await ctx.engine.store.update_tenant_settings(ctx.tenant_id, assistant=own or None)
+    await ctx.audit("assistant.settings", "assistant", **own)
+    return await assistant_config(ctx)
 
 
 @router.post("/chat", response_model=ChatOut, summary="Send a message or approval decisions to the assistant")
 async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
     settings = ctx.engine.settings
+    config = await assistant_config(ctx)
     if not settings.assistant_enabled:
         raise AssistantUnavailable("the assistant is disabled on this server (SHOAL_ASSISTANT_ENABLED)")
     namespace = await ctx.namespace(body.namespace, "workflows:read")
     if not (body.message or body.decisions or body.messages):
         raise InvalidRequest("send a message")
     tenant = ctx.tenant_id
-    if not ModelRouter.permitted(settings.assistant_model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
-        raise Forbidden(f"model '{settings.assistant_model}' is not permitted by the tenant's model policy")
+    if not ModelRouter.permitted(config.model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
+        raise Forbidden(f"model '{config.model}' is not permitted by the tenant's model policy")
     try:
         target = await ctx.engine.models.gateway_target(
-            tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
+            tenant, config.gateway, config.model, effort=config.effort
         )
+        # A claude-code gateway on people's own plans runs the chat on the plan of the person chatting.
+        owner = ctx.actor if ctx.actor.startswith("user:") else None
+        await sign_in(ctx.engine, tenant, target, owner, who=ctx.principal.display_name)
+    except CredentialRequired as exc:
+        raise AssistantUnavailable(
+            f"assistant gateway: {exc.message}" + (". Link your Claude subscription under Settings, Connected accounts." if exc.owner else ""),
+            details={**exc.details, "connect_url": "/settings/credentials?connection=" + f"{exc.namespace}/{exc.connection}"},
+        ) from exc
     except ShoalError as exc:
         raise AssistantUnavailable(f"assistant gateway: {exc.message}") from exc
 
@@ -106,7 +169,8 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
                                  timeout=120) as api:
         assistant = Assistant(
             ModelClient([target]), api, request.app.openapi(), namespace=namespace,
-            actor=ctx.principal.display_name or ctx.actor, page=body.page, max_turns=settings.assistant_max_turns,
+            actor=ctx.principal.display_name or ctx.actor, page=body.page, context=body.context,
+            max_turns=settings.assistant_max_turns,
             auto_approve=body.auto_approve,
         )
         try:

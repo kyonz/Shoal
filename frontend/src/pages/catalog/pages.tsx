@@ -4,7 +4,10 @@ import ResourceListPage from "./ResourceListPage";
 import { agentExtension, gatewayExtension, modelPolicyExtension, sandboxExtension, skillExtension } from "./extensions";
 import { cloudIdentityExtension } from "./cloudIdentities";
 import { evalExtension } from "./evals/EvalExtension";
+import { evalPlatformExtension } from "./evals/Platforms";
 import { blueprintExtension } from "./blueprints/blueprintExtension";
+import { customIntegrationExtension } from "./customIntegrations";
+import { targetListExtension } from "./targetLists";
 
 const EXT = {
   agents: agentExtension,
@@ -14,8 +17,11 @@ const EXT = {
   gateways: gatewayExtension,
   "model-policies": modelPolicyExtension,
   evals: evalExtension,
+  "target-lists": targetListExtension,
   blueprints: blueprintExtension,
   "skill-sources": {},
+  "eval-platforms": evalPlatformExtension,
+  "custom-integrations": customIntegrationExtension,
 };
 
 export type CatalogPlural = keyof typeof EXT;

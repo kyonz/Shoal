@@ -1,4 +1,4 @@
-import { Check, ChevronsUpDown, CloudOff, Lock, RefreshCw, ShieldQuestion, X, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plus, Search, Sun, UserRound } from "lucide-react";
+import { Building2, Check, ChevronsUpDown, ShieldCheck, CloudOff, Lock, RefreshCw, ShieldQuestion, X, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plus, Search, Sun, UserRound } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
@@ -7,11 +7,12 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { nsPath, rememberNamespace, useNs, useSwitchNamespace } from "@/lib/ns";
 import { useTheme } from "@/lib/theme";
-import { Button, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Popover, Tooltip } from "@/components/ui";
+import { TenantSwitcher } from "./TenantSwitcher";
+import { Button, EmptyState, Kbd, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Popover, Tooltip } from "@/components/ui";
 import { AssistantLauncher, AssistantPanel } from "@/features/assistant/AssistantPanel";
 import { CommandPalette, useCommandPalette } from "./CommandPalette";
 import { NAV } from "./nav";
-import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, federationMessage, useFederatedLink, useFederationState } from "@/lib/federation";
+import { FEDERATION_DISCONNECTED, FEDERATION_READ_ONLY, FEDERATION_REVOKED, federationMessage, useFederatedLink, useFederationState } from "@/lib/federation";
 import shoalIcon from "@/assets/brand/shoal-icon.svg";
 import shoalLogo from "@/assets/brand/shoal-logo.svg";
 import shoalLogoDark from "@/assets/brand/shoal-logo-dark.svg";
@@ -54,7 +55,7 @@ function useCollapsed(): [boolean, (v: boolean) => void] {
 export function AppShell() {
   const ns = useNs();
   const location = useLocation();
-  const { can } = useAuth();
+  const { can, me, instance } = useAuth();
   const [savedCollapsed, setCollapsed] = useCollapsed();
   const palette = useCommandPalette();
 
@@ -77,17 +78,14 @@ export function AppShell() {
           collapsed ? "w-14" : "w-60",
         )}
       >
-        <div className={cn("flex h-12 items-center gap-2 border-b border-border", collapsed ? "justify-center px-0" : "px-3")}>
-          <ShoalMark className={cn("shrink-0", collapsed ? "h-5" : "h-6")} />
-          {!collapsed && (
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] leading-tight font-semibold tracking-tight">Shoal</div>
-              <TenantName />
-            </div>
-          )}
+        <div className={cn("flex h-12 shrink-0 items-center border-b border-border", collapsed ? "justify-center px-0" : "px-3")}>
+          {collapsed ? <ShoalMark className="h-5" /> : <ShoalLogo className="h-7" />}
+        </div>
+        <div className={cn("flex items-center border-b border-border py-2", collapsed ? "justify-center px-0" : "px-3")}>
+          <TenantSwitcher collapsed={collapsed} />
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-2">
-          {NAV.map((group, gi) => {
+          {(me?.tenant ? NAV : []).map((group, gi) => {
             const items = group.items.filter((i) => !i.permission || can(i.permission, i.namespaced ? ns : undefined));
             if (!items.length) return null;
             return (
@@ -126,6 +124,7 @@ export function AppShell() {
               </div>
             );
           })}
+          {instance.reader && <NavItemLink to="/instance" label="Instance console" icon={ShieldCheck} collapsed={collapsed} first={!me?.tenant} />}
         </nav>
         <div className={cn("border-t border-border p-2", collapsed && "flex justify-center")}>
           <Button
@@ -142,7 +141,7 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-panel/80 px-4 backdrop-blur">
-          <NamespaceSwitcher />
+          {me?.tenant && <NamespaceSwitcher />}
           <div className="flex-1" />
           <button
             onClick={() => palette.setOpen(true)}
@@ -152,13 +151,13 @@ export function AppShell() {
             <span className="flex-1 text-left">Search or jump to…</span>
             <Kbd>⌘K</Kbd>
           </button>
-          <AssistantLauncher />
+          {me?.tenant && <AssistantLauncher />}
           <ThemeToggle />
           <UserMenu />
         </header>
         <FederationBanner />
         <main className={cn("min-h-0 flex-1", fullBleed ? "overflow-hidden" : "overflow-y-auto")}>
-          <Outlet />
+          {me?.tenant || OUTSIDE_TENANT.test(location.pathname) ? <Outlet /> : <NoTenant />}
         </main>
       </div>
       <AssistantPanel />
@@ -167,20 +166,63 @@ export function AppShell() {
   );
 }
 
-function TenantName() {
-  const { me } = useAuth();
-  return <div className="truncate text-[11px] text-faint">{me?.tenant?.name ?? (me?.is_system_admin ? "System admin" : "")}</div>;
+/** Pages that work without a tenant (instance admins outside every tenant); `/` redirects to the console. */
+const OUTSIDE_TENANT = /^\/$|^\/(instance|docs)(\/|$)/;
+
+function NoTenant() {
+  const { instance } = useAuth();
+  const navigate = useNavigate();
+  return (
+    <EmptyState
+      className="h-full"
+      icon={<Building2 className="size-5" />}
+      title="You're not in a tenant"
+      description="Workflows, runs and the admin console belong to a tenant. Pick one from the switcher at the top left."
+      action={instance.reader ? <Button icon={<ShieldCheck className="size-4" />} onClick={() => navigate("/instance")}>Instance console</Button> : undefined}
+    />
+  );
+}
+
+function NavItemLink({ to, label, icon: Icon, collapsed, first }: { to: string; label: string; icon: typeof ShieldCheck; collapsed: boolean; first?: boolean }) {
+  const link = (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        cn(
+          "group flex h-8 items-center gap-2.5 rounded-lg text-[13px] font-medium transition-colors",
+          collapsed ? "justify-center" : "px-2",
+          isActive ? "bg-accent-soft text-accent" : "text-muted hover:bg-subtle hover:text-fg",
+        )
+      }
+    >
+      <Icon className="size-4 shrink-0" />
+      {!collapsed && <span className="truncate">{label}</span>}
+    </NavLink>
+  );
+  return (
+    <div className={cn(!first && "mt-3")}>
+      {!first && (collapsed ? <div className="mx-2 my-2 h-px bg-border" /> : <div className="px-2 pb-1 text-[10.5px] font-semibold tracking-wider text-faint uppercase">Instance</div>)}
+      {collapsed ? (
+        <Tooltip content={label} side="right">
+          {link}
+        </Tooltip>
+      ) : (
+        link
+      )}
+    </div>
+  );
 }
 
 function NamespaceSwitcher() {
   const ns = useNs();
   const { data } = useNamespaces();
-  const { me, can } = useAuth();
+  const { me, perms, can } = useAuth();
   const switchTo = useSwitchNamespace();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const visible = new Set(me?.namespaces ?? []);
+  // For a federated tenant the member decides: /v1/me/permissions is answered by it, /v1/me by the hub.
+  const visible = new Set([...(me?.namespaces ?? []), ...Object.keys(perms?.namespaces ?? {})]);
   const list = (data ?? []).filter((n) => me?.is_system_admin || visible.has(n.name) || can("namespaces:create"));
   const filtered = list.filter((n) => !q || n.name.includes(q.toLowerCase()) || n.display_name.toLowerCase().includes(q.toLowerCase()));
   const current = list.find((n) => n.name === ns);
@@ -266,7 +308,7 @@ function ThemeToggle() {
 }
 
 function UserMenu() {
-  const { me, signOut } = useAuth();
+  const { me, instance, signOut } = useAuth();
   const navigate = useNavigate();
   const name = me?.display_name || me?.email || me?.actor || "?";
   const initials = name
@@ -289,8 +331,9 @@ function UserMenu() {
         </div>
         <MenuSeparator />
         <MenuLabel>Account</MenuLabel>
-        <MenuItem onSelect={() => navigate("/admin/api-keys")}>My API keys</MenuItem>
+        {me?.tenant && <MenuItem onSelect={() => navigate("/admin/api-keys")}>My API keys</MenuItem>}
         {me?.actor?.startsWith("user:") && <MenuItem onSelect={() => navigate("/settings/credentials")}>Connected accounts</MenuItem>}
+        {instance.reader && <MenuItem onSelect={() => navigate("/instance")}>Instance console</MenuItem>}
         <MenuItem onSelect={() => navigate("/docs")}>Documentation</MenuItem>
         <MenuSeparator />
         <MenuItem icon={<LogOut />} onSelect={() => void signOut()}>
@@ -304,9 +347,18 @@ function UserMenu() {
 /** Tenant-wide state of a federated organisation: member offline, or a read-only link. */
 function FederationBanner() {
   const qc = useQueryClient();
-  const { me } = useAuth();
-  const { disconnected, forbidden, readOnly, dismissedReadOnly, dismissReadOnly } = useFederationState();
-  const link = useFederatedLink(!!me?.is_system_admin, me?.tenant?.slug);
+  const { me, instance } = useAuth();
+  const { disconnected, revoked, forbidden, readOnly, dismissedReadOnly, dismissReadOnly } = useFederationState();
+  const link = useFederatedLink(instance.reader, me?.tenant?.slug);
+  if (revoked)
+    return (
+      <div role="status" className="flex items-center gap-2.5 border-b border-warn/25 bg-warn-soft px-4 py-2 text-[13px] text-warn">
+        <CloudOff className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">Link revoked.</b> {federationMessage(FEDERATION_REVOKED)}
+        </span>
+      </div>
+    );
   if (disconnected)
     return (
       <div role="status" className="flex items-center gap-2.5 border-b border-warn/25 bg-warn-soft px-4 py-2 text-[13px] text-warn">

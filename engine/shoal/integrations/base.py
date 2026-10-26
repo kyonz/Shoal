@@ -8,7 +8,10 @@ An integration (``github``, ``jira``, ...) declares three capabilities:
   campaign target selection and UI pickers;
 * **events** - webhook / poll events that fire triggers and wake waits.
 
-A tenant configures a *connection* (credentials + settings) per integration.
+A tenant configures a *connection* (credentials + settings) per integration,
+either for the whole organisation (``org``: stored in the ``shared`` namespace
+and shared to namespaces) or for one namespace (``namespace``); each
+integration declares which of those it supports in ``connection_scopes``.
 """
 
 from __future__ import annotations
@@ -16,13 +19,33 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args, get_origin
 
 import httpx
 from pydantic import BaseModel, Field, SecretStr
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
+
+
+ConnectionScope = Literal["org", "namespace"]
+CONNECTION_SCOPES: tuple[ConnectionScope, ...] = ("org", "namespace")
+
+
+class Interaction(BaseModel):
+    """A person acting on something Shoal sent them (a button, a form).
+
+    The engine resolves the event's ``actor`` to a Shoal user, checks their
+    permission on the run, then records the approval decision or sends the signal.
+    """
+
+    kind: Literal["approval", "signal"]
+    run_id: str
+    step_id: str | None = Field(None, description="approval: the approval step.")
+    approved: bool | None = Field(None, description="approval: the decision.")
+    comment: str | None = None
+    signal: str | None = Field(None, description="signal: the signal name.")
+    payload: Any = Field(None, description="signal: the signal payload.")
 
 
 class IntegrationEvent(BaseModel):
@@ -34,8 +57,50 @@ class IntegrationEvent(BaseModel):
     wake_keys: list[str] = Field(default_factory=list, description="Wait-subscription keys this event satisfies.")
     actor: dict[str, Any] = Field(
         default_factory=dict,
-        description="Who caused the event: identity hints such as github, jira_account_id, email, display_name.",
+        description="Who caused the event: identity hints such as github, jira_account_id, slack_id, email, display_name.",
     )
+    interaction: Interaction | None = Field(
+        None, description="Set when the event is a person answering an approval or sending a run a signal."
+    )
+
+
+class ApprovalRequest(BaseModel):
+    """An approval step asking people for a decision through an integration (``notify`` on the step)."""
+
+    run_id: str
+    step_id: str
+    workflow: str
+    namespace: str
+    message: str
+    to: str | None = Field(None, description="Where to ask: a channel or a person, in the integration's terms.")
+    options: dict[str, Any] = Field(default_factory=dict, description="Integration-specific options (`with`).")
+    approvers: list[str] = Field(default_factory=list)
+    deadline: str | None = None
+    run_url: str
+    initiator: str | None = Field(None, description="Display name of the person the run acts for.")
+
+
+class SetupPermission(BaseModel):
+    name: str
+    why: str
+
+
+class SetupFeature(BaseModel):
+    """Something an app can do, with the permissions (OAuth scopes) and event subscriptions it needs and why."""
+
+    key: str
+    title: str
+    description: str
+    scopes: list[SetupPermission] = Field(default_factory=list)
+    events: list[SetupPermission] = Field(default_factory=list)
+    required: bool = False
+
+
+class WebhookReply(BaseModel):
+    """The HTTP answer to a webhook delivery, for services that read it (Slack challenges, modal errors)."""
+
+    status: int = 200
+    body: Any = None
 
 
 class Page(BaseModel):
@@ -83,6 +148,24 @@ def describe_actions(actions: dict[str, ActionDef]) -> list[dict[str, Any]]:
 
 def describe_resources(resources: dict[str, ResourceDef]) -> list[dict[str, Any]]:
     return [{"name": r.name, "description": r.description, "filter_schema": r.filter_model.model_json_schema()} for r in resources.values()]
+
+
+@dataclass
+class WebhookRegistration:
+    """One webhook Shoal registers with the provider on behalf of a trigger.
+
+    The integration turns it into provider API calls in ``register_webhook``; ``state`` is whatever
+    the integration returned last time (provider webhook ids, expiry, resolved filters) and comes
+    back on every later call for the same trigger.
+    """
+
+    id: str
+    url: str  # the callback URL deliveries must be sent to
+    name: str  # a readable name for the provider's UI, e.g. "Shoal default/jira-ready-for-ai"
+    event: str  # the trigger's event pattern, e.g. "issue_updated"
+    config: Any  # instance of Integration.webhook_model
+    secret: str  # signing secret Shoal generated for this registration
+    state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -137,6 +220,7 @@ class ConnectionContext:
     integration: Integration
     initiator: dict[str, Any] | None = None
     run_id: str | None = None
+    step_id: str | None = None  # the workflow step making the call (action step or agent step), when there is one
     acting_as: str | None = None  # the user whose own credential this context holds (None: the connection's)
 
     def http(self, **kwargs: Any) -> httpx.AsyncClient:
@@ -144,6 +228,12 @@ class ConnectionContext:
         kwargs.setdefault("timeout", httpx.Timeout(30.0, connect=10.0))
         if transport is not None:
             kwargs["transport"] = transport
+        settings = getattr(self.engine, "settings", None)  # None outside the engine (shoal.sdk.server, harness)
+        if settings is not None and settings.integration_blocked_networks:
+            from shoal.integrations.egress import guard, networks
+
+            hooks = kwargs.setdefault("event_hooks", {})
+            hooks["request"] = [*hooks.get("request", []), guard(networks(settings.integration_blocked_networks))]
         return httpx.AsyncClient(**kwargs)
 
 
@@ -160,6 +250,9 @@ class Integration:
     description: ClassVar[str] = ""
     connection_model: ClassVar[type[BaseModel]]
     events: ClassVar[list[EventDef]] = []
+    webhook_model: ClassVar[type[BaseModel] | None] = None  # set to support `Trigger.spec.webhook` registration
+    # Where connections may live: "org" (the shared namespace, shared to namespaces) and/or "namespace".
+    connection_scopes: ClassVar[tuple[ConnectionScope, ...]] = CONNECTION_SCOPES
 
     actions: ClassVar[dict[str, ActionDef]]
     resources: ClassVar[dict[str, ResourceDef]]
@@ -198,8 +291,134 @@ class Integration:
     ) -> list[IntegrationEvent]:
         return []
 
+    async def webhook_reply(
+        self, ctx: ConnectionContext, headers: dict[str, str], body: bytes, result: dict[str, Any]
+    ) -> WebhookReply | None:
+        """Answer the delivery yourself; ``result`` holds the events and each interaction's outcome.
+
+        ``None`` (the default) answers ``202`` with the processing summary.
+        """
+        return None
+
     def webhook_setup_instructions(self, url: str) -> str:
         return f"Send webhooks to {url}"
+
+    # --- webhook registration (optional; needs ``webhook_model``) ---------------
+
+    async def register_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:
+        """Create the provider webhook, or update the one in ``registration.state``; return the new state.
+
+        A state may carry ``expires_at`` (ISO 8601) for providers whose webhooks expire; Shoal then calls
+        ``refresh_webhook`` before that time.
+        """
+        raise IntegrationError(f"{self.key} cannot register webhooks")
+
+    async def unregister_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> None:
+        """Delete the provider webhook in ``registration.state``. A webhook that is already gone is not an error."""
+
+    async def refresh_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:
+        """Extend an expiring webhook; returns the new state. Defaults to registering it again."""
+        return await self.register_webhook(ctx, registration)
+
+    async def verify_registered_webhook(
+        self, ctx: ConnectionContext, registration: WebhookRegistration, headers: dict[str, str], body: bytes
+    ) -> bool:
+        """Check a delivery to a registration's own URL (signed with ``registration.secret``, typically)."""
+        return await self.verify_webhook(ctx, headers, body)
+
+    def registered_event_matches(self, registration: WebhookRegistration, event: IntegrationEvent) -> bool:
+        """Conditions the provider cannot filter on itself (checked before the trigger's own filter)."""
+        return True
+
+    def describe_webhook(self, registration: WebhookRegistration) -> dict[str, Any]:
+        """What ``register_webhook`` would ask the provider for (shown in the UI before saving)."""
+        return {}
+
+    # --- guided app setup --------------------------------------------------------
+
+    setup_features: ClassVar[list[SetupFeature]] = []  # what the app can do, each with the permissions it needs
+
+    def setup_manifest(
+        self, webhook_url: str, install_redirect_url: str, connection: str, *, config: Any = None,
+        features: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """An app manifest for the service with Shoal's URLs filled in (Slack app manifests), if it has one.
+
+        ``features`` are the ``setup_features`` keys to ask permissions for (None: the connection's choice).
+        """
+        return None
+
+    def setup_create_url(self, manifest: dict[str, Any]) -> str | None:
+        """A link that opens the service's "create app" page prefilled with ``manifest``, if it has one."""
+        return None
+
+    def enabled_features(self, config: Any = None, features: list[str] | None = None) -> list[str]:
+        """The setup features in effect: ``features`` if given, else the connection's ``features`` setting,
+        else all of them; required ones are always on."""
+        chosen = features if features is not None else getattr(config, "features", None)
+        keys = [f.key for f in self.setup_features]
+        if chosen is None:
+            return keys
+        return [f.key for f in self.setup_features if f.required or f.key in chosen]
+
+    def setup_permissions(self, features: list[str]) -> tuple[list[str], list[str]]:
+        """(scopes, events) the given features need, in a stable order without duplicates."""
+        scopes: dict[str, None] = {}
+        events: dict[str, None] = {}
+        for feature in self.setup_features:
+            if feature.key in features:
+                scopes.update((p.name, None) for p in feature.scopes)
+                events.update((p.name, None) for p in feature.events)
+        return list(scopes), list(events)
+
+    def features_used(self, triggers: list[Any], workflows: list[Any]) -> dict[str, list[str]]:
+        """Which setup features the connection's triggers and workflows rely on: feature key -> reasons
+        (e.g. ``"trigger help-bot"``), so the setup guide can recommend them."""
+        return {}
+
+    # --- trigger filters --------------------------------------------------------
+
+    trigger_filter_model: ClassVar[type[BaseModel] | None] = None  # the shape of `Trigger.spec.match`
+
+    async def trigger_matches(self, ctx: ConnectionContext, event: IntegrationEvent, options: BaseModel | None) -> str | None:
+        """Apply a trigger's structured ``match`` filters (parsed with ``trigger_filter_model``; None when the
+        integration has none). Return None to fire, or why the event does not match.
+
+        Called for every trigger on the connection, also those without ``match``, so defaults apply
+        (Slack ignores other bots unless asked).
+        """
+        return None
+
+    # --- approvals -----------------------------------------------------------
+
+    supports_approvals: ClassVar[bool] = False
+
+    async def request_approval(self, ctx: ConnectionContext, request: ApprovalRequest) -> dict[str, Any]:
+        """Ask for a decision (e.g. a message with Approve / Reject buttons); returns a reference to it.
+
+        Answers come back as webhook events carrying an ``Interaction``.
+        """
+        raise IntegrationError(f"{self.key} cannot ask for approvals")
+
+    async def approval_resolved(
+        self, ctx: ConnectionContext, request: ApprovalRequest, ref: dict[str, Any], outcome: dict[str, Any]
+    ) -> None:
+        """The step was decided (here, in the UI or API) or timed out: show the outcome where it was asked.
+
+        ``outcome`` is the step output: ``approved``, ``by``, ``comment``, ``timed_out``.
+        """
+
+    # --- workspace install (OAuth) ---------------------------------------------
+
+    install_fields: ClassVar[list[str]] = []  # connection fields an install fills in (e.g. bot_token)
+
+    def install_url(self, config: Any, redirect_uri: str, state: str) -> str:
+        """Where to send an admin to install the app; ``config`` is the connection's (possibly partial) settings."""
+        raise IntegrationError(f"{self.key} has no app install")
+
+    async def complete_install(self, ctx: ConnectionContext, code: str, redirect_uri: str) -> dict[str, str]:
+        """Exchange the install code; returns values for ``install_fields`` (stored as the connection's secrets)."""
+        raise IntegrationError(f"{self.key} has no app install")
 
     async def actions_for(self, ctx: ConnectionContext) -> dict[str, ActionDef]:
         """Actions available on one connection; dynamic integrations (remote) override this."""
@@ -215,7 +434,10 @@ class Integration:
         if definition is None:
             raise IntegrationError(f"{self.key} has no action '{name}'")
         payload = definition.input_model.model_validate(params)
-        result = await getattr(self, definition.method)(ctx, payload)
+        try:
+            result = await getattr(self, definition.method)(ctx, payload)
+        except httpx.HTTPError as exc:
+            raise _network_error(self, exc) from exc
         if isinstance(result, BaseModel):
             return result.model_dump(mode="json")
         return result if isinstance(result, dict) else {"result": result}
@@ -227,7 +449,10 @@ class Integration:
         if definition is None:
             raise IntegrationError(f"{self.key} has no resource '{name}'")
         parsed = definition.filter_model.model_validate(filter)
-        return await getattr(self, definition.method)(ctx, parsed, cursor, limit)
+        try:
+            return await getattr(self, definition.method)(ctx, parsed, cursor, limit)
+        except httpx.HTTPError as exc:
+            raise _network_error(self, exc) from exc
 
     @classmethod
     def catalog(cls) -> dict[str, Any]:
@@ -238,16 +463,31 @@ class Integration:
             "description": cls.description,
             "connection_schema": connection_schema,
             "secret_fields": cls.secret_fields(),
+            "connection_scopes": list(cls.connection_scopes),
             "actions": describe_actions(cls.actions),
             "resources": describe_resources(cls.resources),
             "events": [{"name": e.name, "description": e.description, "example": e.example} for e in cls.events],
+            "webhook_schema": cls.webhook_model.model_json_schema() if cls.webhook_model else None,
+            "approvals": cls.supports_approvals,
+            "trigger_filter_schema": cls.trigger_filter_model.model_json_schema() if cls.trigger_filter_model else None,
+            "install": bool(cls.install_fields),
+            "setup_features": [f.model_dump() for f in cls.setup_features],
         }
+
+
+def _network_error(integration: Integration, exc: httpx.HTTPError) -> IntegrationError:
+    """A failure to reach the service (DNS, refused, timeout) is transient: retry it like a 5xx."""
+    try:
+        where = f" ({exc.request.method} {exc.request.url.host})"
+    except RuntimeError:  # no request attached
+        where = ""
+    return IntegrationError(f"{integration.title} is unreachable{where}: {type(exc).__name__}: {exc}", retryable=True)
 
 
 def raise_for_status(response: httpx.Response, service: str) -> None:
     if response.is_success:
         return
-    retryable = response.status_code in (408, 409, 425, 429) or response.status_code >= 500
+    retryable = response.status_code in (408, 425, 429) or response.status_code >= 500
     detail = response.text[:500]
     raise IntegrationError(
         f"{service} API {response.request.method} {response.request.url.path} failed: "

@@ -2,6 +2,7 @@ import { lazy } from "react";
 import type { RouteObject } from "react-router";
 import { Lazy } from "@/App";
 import { adminCatalogRoutes } from "@/pages/catalog/routes";
+import { orgConnectRoutes } from "@/pages/connect/routes";
 import { AdminLayout } from "./AdminLayout";
 
 const Overview = lazy(() => import("./Overview"));
@@ -16,6 +17,7 @@ const ApiKeys = lazy(() => import("./ApiKeys"));
 const Identities = lazy(() => import("./Identities"));
 const Audit = lazy(() => import("./Audit"));
 const Federation = lazy(() => import("./Federation"));
+const AssistantSettings = lazy(() => import("./AssistantSettings"));
 
 /** Admin console: /admin/* */
 export const adminRoutes: RouteObject[] = [
@@ -28,6 +30,14 @@ export const adminRoutes: RouteObject[] = [
         element: (
           <Lazy>
             <Overview />
+          </Lazy>
+        ),
+      },
+      {
+        path: "assistant",
+        element: (
+          <Lazy>
+            <AssistantSettings />
           </Lazy>
         ),
       },
@@ -120,6 +130,7 @@ export const adminRoutes: RouteObject[] = [
         ),
       },
       ...adminCatalogRoutes,
+      ...orgConnectRoutes,
     ],
   },
 ];

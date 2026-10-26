@@ -47,8 +47,40 @@ history against the current workflow code.
 
 ## Setting it up
 
-1. Install the extra: `pip install 'shoal[temporal]'`. The container image already
-   includes it.
+You can connect Temporal from the instance console or with environment variables.
+A setting saved in the console wins over the environment.
+
+### From the instance console
+
+Instance admins open **Instance console → Orchestrator**:
+
+![The orchestrator page: built-in or Temporal, with the Temporal connection form](assets/screenshots/tenancy/orchestrator.png)
+
+1. Enter the frontend address, the namespace and a task queue for this installation.
+2. For Temporal Cloud or mTLS, choose a tenant and pick secrets from its `shared`
+   namespace: an API key, or a client certificate and key, and a CA when the server
+   certificate is not publicly trusted. Only the secret names are saved. The values
+   are read when the setting is applied, so save again after rotating a secret. That
+   tenant's admins can change those secrets, so use a tenant your platform team runs.
+3. **Test connection** reaches the namespace and tells you how many workers poll the
+   task queue.
+4. Choose **Temporal** under "New runs start on" and save. Shoal checks the connection
+   again before switching.
+
+Every API server and worker picks up the change within a few seconds, with no restart.
+Runs already going keep the orchestrator they started on. Switching back to built-in
+leaves the connection saved, so Temporal keeps driving its runs until they finish.
+Shoal refuses to drop the connection while runs still need it. **Use environment
+settings** forgets the console setting. The same is available as
+`GET/PUT/DELETE /v1/instance/orchestrator` and `POST /v1/instance/orchestrator/test`.
+
+Workers still need the `temporal` extra (the container image has it). Versioning,
+timeouts and the reconcile interval stay environment settings.
+
+### With environment variables
+
+1. Install the extra: `pip install './engine[temporal]'` (or `uv sync --extra temporal` in
+   `engine/`). The container image already includes it.
 2. Point every Shoal process (API servers and workers) at your cluster. API servers
    need it too, because they start and wake runs.
 
@@ -69,7 +101,8 @@ history against the current workflow code.
 | `SHOAL_TEMPORAL_VERSIONING_BEHAVIOR` | `auto-upgrade` | Or `pinned` |
 
 Activity heartbeats use `SHOAL_LEASE_SECONDS` as their timeout, and
-`SHOAL_WORKER_CONCURRENCY` caps concurrent passes per worker.
+`SHOAL_WORKER_CONCURRENCY` caps concurrent passes per worker. A run whose pass keeps killing its worker fails after
+`SHOAL_MAX_LOST_LEASES` attempts in a row, as it does without Temporal.
 
 **docker compose.** Set the variables in `deploy/.env`, or try it against a throwaway
 dev server:
@@ -99,8 +132,10 @@ For Temporal Cloud, put the API key in a Secret and set
   The same check repairs a lost signal or a workflow terminated by hand.
 - **Switching orchestrators** only affects new runs. Each run records the orchestrator
   that drives it, and workers keep running built-in runs alongside Temporal ones, so
-  you can turn Temporal on without draining. To switch back, let the Temporal runs
-  finish (or cancel them) first, because built-in workers do not pick them up.
+  you can turn Temporal on without draining. Switching back in the instance console
+  keeps Temporal driving its runs while the connection stays saved. With
+  `SHOAL_ORCHESTRATOR`, let the Temporal runs finish (or cancel them) before
+  switching back, because built-in workers do not pick them up.
 - **Several installations** can share a Temporal namespace if each has its own task
   queue. Otherwise one installation's workers take the other's passes and cannot find
   the runs in their database.

@@ -51,6 +51,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-postgresql" (include "shoal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "shoal.pgbouncer.fullname" -}}
+{{- printf "%s-pgbouncer" (include "shoal.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* True when Shoal reaches Postgres through a transaction-mode pooler. */}}
+{{- define "shoal.pgbouncer.inUse" -}}
+{{- if .Values.postgresql.enabled }}{{ .Values.pgbouncer.enabled }}{{ else }}{{ .Values.database.pgbouncer }}{{ end }}
+{{- end }}
+
 {{/* Environment shared by the API and worker containers. */}}
 {{- define "shoal.env" -}}
 - name: SHOAL_SECRET_KEY
@@ -59,12 +68,27 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_ADMIN_TOKEN}}
 - name: SHOAL_DATABASE_URL
   valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_DATABASE_URL}}
+- name: SHOAL_DATABASE_DIRECT_URL
+  valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: SHOAL_DATABASE_DIRECT_URL, optional: true}}
 - name: SHOAL_WORKER_ID
   valueFrom: {fieldRef: {fieldPath: metadata.name}}
 {{- with .Values.orchestrator.temporal.apiKeySecret }}
 {{- if and (eq $.Values.orchestrator.type "temporal") .name }}
 - name: SHOAL_TEMPORAL_API_KEY
   valueFrom: {secretKeyRef: {name: {{ .name }}, key: {{ .key }}}}
+{{- end }}
+{{- end }}
+{{- with .Values.instance.oidc }}
+{{- if .issuer }}
+- name: SHOAL_INSTANCE_OIDC
+  value: {{ dict "issuer" .issuer "client_id" .clientId "display_name" .displayName "allowed_domains" .allowedDomains | toJson | quote }}
+{{- if .clientSecretRef.name }}
+- name: SHOAL_INSTANCE_OIDC_CLIENT_SECRET
+  valueFrom: {secretKeyRef: {name: {{ .clientSecretRef.name }}, key: {{ .clientSecretRef.key }}}}
+{{- else if .clientSecret }}
+- name: SHOAL_INSTANCE_OIDC_CLIENT_SECRET
+  valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" $ }}, key: SHOAL_INSTANCE_OIDC_CLIENT_SECRET}}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- with .Values.extraEnv }}

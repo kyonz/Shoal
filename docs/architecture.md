@@ -62,6 +62,7 @@ first release must satisfy.
 | **Trigger** | A binding: event source (webhook / schedule / poll) + filter → workflow inputs. |
 | **Blueprint** | A versioned, parameterised package of resources others install and wire up. |
 | **Campaign** | A managed fan-out of one workflow across a target set, with policies. |
+| **Target list** | A named, shared set of targets (e.g. the repos a team owns) that campaigns run over and trigger filters check. |
 | **Identity** | A person mapped across systems (email, GitHub login, Jira account) for attribution. |
 | **Cloud identity** | A cloud role a namespace brings (an AWS IAM role), granted to specific workflows and agents; steps get short-lived credentials for it. |
 | **Sandbox profile** | Which sandbox backend to use plus image, resources, network policy, TTL. |
@@ -110,8 +111,8 @@ because self-hosters should be able to run Shoal with just Postgres. Scheduling
 sits behind the `Orchestrator` protocol (`shoal.runtime.orchestrator`): it decides
 when and where a run is advanced, the executor decides what advancing means.
 Each run records the orchestrator that drives it. Besides the built-in one,
-Shoal ships an optional Temporal orchestrator (`SHOAL_ORCHESTRATOR=temporal`, the
-`temporal` extra) for operators who already run Temporal: each run is a Temporal
+Shoal ships an optional Temporal orchestrator (`SHOAL_ORCHESTRATOR=temporal` or the
+instance console, and the `temporal` extra) for operators who already run Temporal: each run is a Temporal
 workflow whose passes are activities, while the store stays the source of truth
 ([guide](temporal.md)). Other backends plug in through the `shoal.orchestrators`
 entry point group.
@@ -190,7 +191,7 @@ spec:
 | `action` | Call an integration action (e.g. `github.create_pull_request`, `jira.transition`). |
 | `script` | Run deterministic code in a sandbox: a shell `run:` line, or a `code:` program in Python, Node, sh or bash with typed `inputs` (JSON in `$SHOAL_INPUTS`) and validated `outputs` (`$SHOAL_OUTPUTS`). See §5.2. |
 | `wait` | Durable wait: for a duration, until a time, until a condition/event (polled or event-driven), or for a **signal** carrying data, with a timeout. |
-| `approval` | Human-in-the-loop gate, resolved via API/UI with optional assignees. |
+| `approval` | Human-in-the-loop gate, resolved via API/UI with optional `approvers`, or from Slack buttons (`notify`, §9.2). |
 | `condition` | Branch on an expression (`if`/`then`/`else` step lists). |
 | `map` | Fan out a sub-list of steps over a list with a concurrency limit. |
 | `workflow` | Call another workflow as a child run. |
@@ -313,11 +314,30 @@ step:  pending → running → waiting? → succeeded | failed | skipped | cance
   conditions.
 - Long-running agent steps heartbeat; if a worker dies its lease expires and
   another worker resumes from the last checkpoint (the agent step restarts its
-  attempt; sandbox state is reattached when the backend supports it).
+  attempt; sandbox state is reattached when the backend supports it). A run whose
+  worker dies on every pass (out of memory, a crash) fails after
+  `SHOAL_MAX_LOST_LEASES` passes in a row (default 5) instead of taking down
+  worker after worker; a pass that finishes resets the count.
 
 The scheduler loop (in every worker, coordinated by leases) fires timers, polls
 poll-based triggers and wait conditions, ticks campaigns, and recovers expired
 leases.
+
+- Workers claim due runs with `FOR UPDATE SKIP LOCKED`, taking turns across
+  tenants and respecting each tenant's `max_concurrent_runs`. Runs whose
+  workflow calls models (`agent`, `decide`, `grade`) go to the **agent lane**,
+  so a worker pool for long, I/O-bound agent runs can be scaled apart from the
+  pool that runs short steps.
+- By default the runs table is the queue and workers poll it. With a
+  **dispatch queue** such as Amazon SQS (`SHOAL_DISPATCH_QUEUE=sqs`), every
+  write of a run's `next_wake_at` also sends a wake-up message, and workers
+  long-poll the queue and claim those runs with the same lease, fairness and
+  caps, sweeping the database only now and then for lost messages. See
+  [Dispatch queues](dispatch-queues.md).
+- A pass writes its step results, events, waits and the lease release in as few
+  transactions as it can, and every event insert sends a Postgres `NOTIFY` so
+  live views wake at once instead of polling. See
+  [Running Shoal at high throughput](scaling.md).
 
 ---
 
@@ -510,6 +530,13 @@ quality is measured, not assumed.
   grader score), production runs export as traces, and datasets import as
   cases (live via `spec.dataset`, or into a new Eval version via
   `POST …/evals/{name}/import`). A failed export never fails the eval.
+  An `EvalPlatform` (tenant-wide, kept in `shared`, managed with
+  `eval-platforms:manage`) holds one sink's settings once, with its secrets
+  named from `shared` (clear-text credentials are rejected). Datasets, eval
+  sinks and the import / export endpoints then say `platform: <name>`, and
+  any inline `config` is merged over the platform's. `POST
+  /v1/eval-platforms/{name}/test` checks the credentials and `GET
+  …/datasets` lists dataset names for pickers.
 - **Inline quality gates.** A `grade` step type scores an upstream output with
   a rubric inside a workflow, so a run can retry, escalate to a human or stop
   when quality is below a threshold.
@@ -531,7 +558,10 @@ replace them.
   rubric) and `boolean` (Jev's *noul*: probability a statement is true).
   Providers: `jev` (TypeSafe API via its SDK, or via OpenRouter / Vercel AI
   Gateway where configured) and `llm` (any model through the gateways in
-  §7.3 using structured output) as the self-hostable fallback.
+  §7.3 using structured output) as the self-hostable fallback. Jev needs
+  the `typesafe-sdk` package (`pip install 'shoal[jev]'`; the container
+  image includes it) and an API key from a secret named by
+  `provider_config.api_key_secret`, or `TYPESAFE_API_KEY` on the worker.
 - **`decide` step.** A workflow step that asks typed questions about any
   expression (issue text, diff summary, prior outputs) and exposes
   `answer`, `probabilities` and `confidence` for branching with `if`. A
@@ -617,7 +647,7 @@ class Integration(Protocol):
 
 - **Actions** have pydantic input/output models, so they are simultaneously
   workflow `action` steps, agent tools (JSON schema from the model) and API
-  operations (`POST /v1/connections/{id}/actions/{action}`).
+  operations (`POST /v1/namespaces/{namespace}/connections/{name}/actions/{action}`).
 - **Triggers**: `webhook` (signature-verified, one URL per connection
   `/v1/hooks/{webhook_id}`), `poll` (cursor persisted) and **`schedule`**
   (cron expressions with time zones, e.g. `0 9 * * MON-FRI` in
@@ -627,12 +657,16 @@ class Integration(Protocol):
   fires exactly once across workers.
   A trigger has a **filter** (expression over the event, e.g. "issue moved to
   column *Ready for AI*") and an **input mapping** into workflow inputs, plus
-  dedupe keys and concurrency (e.g. one run per issue).
+  dedupe keys and concurrency (e.g. one run per issue). Integrations can add
+  structured **`match`** filters on top (`trigger_filter_model` /
+  `trigger_matches`; Slack's channels, mentions, words, regex, people, threads),
+  and a **`rate_limit`** (`{max, per, key}`) caps how often a trigger fires,
+  recording the rest as `rate_limited` deliveries.
 - **Metadata** (`resources`) powers campaign target selection and UI pickers,
   e.g. `github.repository` filtered by `owner`, `topic`, `language`,
   `permission: admin`.
-- Built-in integrations in v1: `github`, `jira`, `webhook` (generic, HMAC),
-  `schedule`, `http`. Slack/Linear/GitLab follow the same contract.
+- Built-in integrations in v1: `github`, `jira`, `slack`, `mcp`, `webhook`
+  (generic, HMAC), `remote` and `schedule`. Linear/GitLab follow the same contract.
 
 ### 9.1 Open integrations platform (SDK)
 
@@ -667,6 +701,35 @@ contract, so they double as reference implementations.
 
 ---
 
+### 9.2 Approvals and input from other tools (Slack)
+
+An `approval` step can also ask through an integration that supports it
+(`notify: [{integration: slack, to: "#deploys"}]`). The integration posts the
+request (Slack: a message with Approve / Reject buttons) and returns a
+reference kept in the step state. Answers come back as webhook events carrying
+an `Interaction` (an approval decision, or a signal for a run). The engine, not
+the integration, decides whether to act on one:
+
+1. the webhook is verified by the integration (Slack signing secret, five-minute
+   replay window);
+2. the actor is resolved to a person: identity hints (`slack_id`, `email` from
+   `users.info`) match an `Identity`, whose `actors` (`user:<username>`) or email
+   find the directory user, and a `Principal` is built for them;
+3. `engine.authz` checks `runs:approve` (or `runs:signal`) in the run's
+   namespace, and the step's `approvers` list (identity names, usernames,
+   emails, `group:<name>`);
+4. only then the decision is recorded (`by` is the person's name, audited as
+   their actor, `via: slack`) or the signal is sent; refusals are shown to the
+   person privately and audited as `access.denied`.
+
+Whatever decides the step (a click, the UI, the API, a timeout), the approval
+handler calls `approval_resolved` on every notification so the message shows the
+outcome. A click is only accepted for approvals that were sent through the same
+connection. Integrations can also answer the webhook themselves
+(`webhook_reply`: Slack URL challenges, slash command answers, modal errors) and
+offer an app install (`install_url` / `complete_install`: "Add to Slack" stores
+the bot token as the connection's secret).
+
 ## 10. Campaigns
 
 A campaign = **workflow** × **target selector** × **policies**.
@@ -699,6 +762,40 @@ spec:
   adding targets later.
 - Progress: per-target status, aggregate counts, cost, and outcome summaries
   (`steps.*.output`) shown in a dashboard.
+
+### Target lists
+
+A **TargetList** names a set of targets once so several campaigns and triggers
+can share it, e.g. "the repos the platform team owns".
+
+```yaml
+apiVersion: shoal.dev/v1
+kind: TargetList
+metadata: {name: core-repos}
+spec:
+  connection: github-acme        # optional: look the items up through a query
+  resource: repository
+  filter: {org: acme, archived: false}
+  key: "{{ target.full_name }}"
+  items:                         # optional: exactly these targets
+    - {full_name: acme/api}
+    - {full_name: acme/web}
+```
+
+- `items` alone are the targets as written. `connection` + `resource` alone are
+  a saved query, run each time the list is used. With both, the listed targets
+  are looked up through the query, so each carries the integration's details
+  (default branch, language, …); a listed target the query does not return
+  (renamed, archived, no access) is reported as missing.
+- A campaign uses it with `targets: {list: core-repos}`. Missing targets become
+  `skipped` targets with a reason, so they show up on the dashboard.
+- Trigger `filter`, `inputs` and `dedupe_key` expressions see the keys of the
+  lists they name as `lists['core-repos']` (or `lists.core_repos`), e.g.
+  `{{ event.repository.full_name in lists['core-repos'] }}`. Trigger evaluation
+  caches a resolved list for 60 seconds; a list that does not exist is a
+  delivery error.
+- `GET /v1/namespaces/{ns}/target-lists/{name}/resolve` returns what a list
+  resolves to now; `POST …/target-lists/preview` resolves an unsaved spec.
 
 ## 10.1 Blueprints and the marketplace
 
@@ -740,8 +837,16 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **Catalogue.** Searchable within the tenant, with categories, integration
   filters, which namespaces have adopted it, success rates and eval scores
   from real runs, and the README.
-- The two acceptance journeys ship as the first blueprints:
-  **GitHub org uplift** and **Jira bugfix with writeback**.
+- **Bundled blueprints.** Shoal ships blueprints for the common scenarios
+  (`engine/shoal/blueprints/library`, listed in [blueprints/bundled.md](blueprints/bundled.md)),
+  starting with the two acceptance journeys, **GitHub org uplift** and **Jira
+  bugfix with writeback**. They are put in every new tenant's catalogue
+  (`SHOAL_DEFAULT_BLUEPRINTS`, on by default) labelled `shoal.dev/bundled`.
+  `POST /v1/blueprints/defaults {dry_run}` (`blueprints:publish` and
+  `blueprints:feature`) adds them to an existing tenant: it creates missing ones
+  and upgrades bundled copies with an older version, keeping their status.
+  A tenant's own blueprint with the same name is never touched. Federating a
+  tenant removes them from the hub, since the member has its own catalogue. (Built.)
 
 ---
 
@@ -752,13 +857,44 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
   construction, Postgres row-level security as defence in depth). Inside a
   tenant, **namespaces** group the things a team owns: agents, skills,
   workflows, connections, triggers, campaigns, sandbox profiles, secrets and
-  runs all live in exactly one namespace (gateways, model policies, identities
-  and blueprints are tenant-wide, stored in `shared`) (`default` exists in every
+  runs all live in exactly one namespace (gateways, model policies, identities,
+  skill sources, custom integrations and blueprints are tenant-wide, stored in
+  `shared`, and managed in the admin console) (`default` exists in every
   tenant). Users and groups are added to a namespace as members with a role, so
   a platform team can own `platform` while product teams get their own
   namespaces. Resource names are unique per (tenant, namespace, kind).
   Lookups fall back from the run's namespace to a tenant-wide `shared`
   namespace, so platform teams can publish shared connections and skills that other namespaces use without being able to see their secrets.
+  Connections are either organisation connections (in `shared`, offered to
+  every namespace or only those in `spec.namespaces`) or namespace connections;
+  each integration declares which levels it allows (`connection_scopes`), and
+  organisations register their own integrations as `CustomIntegration`
+  resources (see [integrations.md](integrations.md)).
+- **Many tenants on one instance.** One deployment hosts any number of
+  tenants (federation adds tenants on other deployments, §11.2). A person has
+  one **account** on the instance, keyed by their identity provider's
+  `(issuer, sub)`, linked to at most one user in each tenant they belong to;
+  roles stay per tenant. A session belongs to the account and points at one
+  tenant at a time: `GET /v1/me/tenants` lists the tenants to switch to and
+  `POST /v1/me/tenant` issues a session for another one (the UI's tenant
+  switcher). People sign in either through the **instance sign-in**
+  (`SHOAL_INSTANCE_OIDC`, one IdP for everyone) or through a tenant's own
+  providers; both link the account to tenant users with the same identity.
+  Only the instance sign-in links by verified email and applies the
+  `SHOAL_INSTANCE_ADMINS` bootstrap, because tenant admins configure their own
+  providers and those must not vouch for people in other tenants.
+- **Instance admins and tenant admins.** Accounts can hold an instance role:
+  `instance-admin` (create, rename, suspend, resume and delete tenants; give
+  people roles in any tenant; grant instance roles; act as tenant admin in any
+  tenant, audited as `account:<email>`) or `instance-auditor` (read-only
+  everywhere, including audit). Tenant admins (`tenant-admin` role) run their
+  own tenant as before. Instance admins work at `/v1/instance/*` and
+  `/v1/tenants/*`; instance-level events (tenants created or suspended,
+  instance roles, instance sign-ins) go to the instance audit log
+  (`GET /v1/instance/audit`). Suspending a tenant refuses its members' calls and
+  new runs, keeps its data, and leaves running work to finish. Nobody can change
+  their own instance role, and the last instance admin cannot be removed unless
+  the break-glass `SHOAL_ADMIN_TOKEN` is set.
 - **Users, groups and service accounts.** Users come from OIDC sign-in or SCIM
   provisioning; groups come from SCIM or from an OIDC `groups` claim. Service
   accounts are non-human principals that own API keys.
@@ -776,9 +912,11 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **OIDC sign-in.** Generic OpenID Connect (Okta, Microsoft Entra ID, Google,
   Keycloak, Auth0, Dex): authorization-code flow with PKCE, ID tokens verified
   against the provider's JWKS (issuer, audience, expiry, nonce), short-lived
-  Shoal session tokens afterwards. Claims map to the user record and optionally
+  Shoal session tokens afterwards; signing out revokes the session token
+  itself, not only the cookie. Claims map to the user record and optionally
   to role bindings (`groups` claim → group membership). Configured per tenant
-  (several providers allowed) plus a bootstrap admin token for first setup.
+  (several providers allowed) and optionally once for the whole instance, plus
+  a break-glass admin token for first setup.
 - **SCIM 2.0 provisioning.** `/scim/v2/Users`, `/scim/v2/Groups`,
   `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` with filtering
   (`userName eq "…"`) and PATCH, authenticated by a per-tenant SCIM bearer
@@ -787,11 +925,28 @@ published. It is not a shared, cross-tenant marketplace for the Shoal service
 - **API keys**: `shoal_<prefix>_<secret>`, stored as SHA-256 hashes, owned by a
   user or service account, restricted to namespaces and a role (never more
   than the owner holds), with expiry, last-used, and revocation.
+  `SHOAL_API_KEY_MAX_DAYS` caps how long a key may live (keys created without
+  an expiry get the cap). A key
+  limited to namespaces keeps only the tenant-level `:read` permissions of its
+  owner, never tenant administration.
+- **Nobody hands out more than they hold.** Granting a role, changing a custom
+  role's permissions, changing a group that has role bindings, choosing an
+  OIDC provider's default role, minting a key for a service account, and
+  managing (deactivating, deleting, editing) a user or service account all
+  need the caller to hold every permission involved. Nobody can deactivate or
+  delete themselves.
 - **Secrets**: pluggable `SecretProvider` (`env`, `db` encrypted with a
   KEK, `kubernetes`, Vault later). Workflows reference secrets by name; they
   are injected at the last moment and redacted from events and logs.
-- **Quotas**: per-tenant concurrency, sandbox minutes and token budgets.
+- **Quotas**: per-tenant request rate (429 with `Retry-After`), runs waiting
+  to start, and runs in progress, with server-wide defaults that the system
+  admin overrides per tenant (`PUT /v1/tenants/{slug}/quotas`). Gateways carry
+  their own concurrency, request and token limits, shared by every worker.
+  See [Running Shoal at high throughput](scaling.md).
 - **Audit log**: every mutating API call and every agent tool call is recorded.
+  Behind reverse proxies, `SHOAL_TRUSTED_PROXIES` (addresses or CIDRs) makes
+  the log record the client address from `X-Forwarded-For` instead of the
+  proxy's.
 
 ---
 
@@ -833,18 +988,25 @@ credential performed it*, and lets policy decide what the run may do.
     own. It requires an approval from someone who does have write access
     (checked per reviewer), and optionally an *agent-assisted merge check*:
     a reviewer agent step that checks the diff against policy and posts its
-    verdict as a review before merge. Policies can also require labels or
+    verdict as a review before merge. The step that opened the pull request
+    cannot record that verdict itself (`independent_merge_check`, on by
+    default), so an authoring agent cannot certify its own change. Policies can also require labels or
     block merging entirely (`elevation: deny | qualified_approval | allow`).
 
 ## 12. API
 
 - REST + JSON under `/v1`, generated OpenAPI 3.1 spec, cursor pagination,
-  `Idempotency-Key` header support on POSTs, problem+json errors.
+  problem+json errors. Starting a run accepts an `Idempotency-Key` header: a
+  retry with the same key returns the run the first request started. Over a
+  quota the API answers `429` with `Retry-After`, and a process
+  that is already working on as many requests as it allows answers `503` with
+  `Retry-After`.
 - Resources: `tenants`, `api-keys`, `agents`, `skills`, `workflows`
   (+versions), `runs` (+steps, events, cancel, approve), `connections`
   (+actions, resources), `triggers`, `campaigns` (+targets, pause/resume),
   `sandbox-profiles`, `evals` (+runs, scores, import), `eval-runs`
-  (+results, compare, export, cancel), `eval-sinks`, `hooks/{trigger_id}`.
+  (+results, compare, export, cancel), `eval-sinks`, `eval-platforms`
+  (+test, datasets), `hooks/{trigger_id}`.
 - Live updates: `GET /v1/runs/{id}/events` (SSE).
 - Outbound: tenant-configurable webhooks for run/campaign lifecycle events.
 
@@ -877,7 +1039,8 @@ one control plane, and a federated deployment can also sit next to the hub.
   (Built. Long-poll over HTTPS was chosen over a WebSocket because it is
   proxy-friendly, and because the queue lives in the hub's database, any hub
   replica can take the call and any replica can serve the poll.)
-- **Enrollment.** An operator creates a federated tenant on the hub, which
+- **Enrollment.** An instance admin creates a federated tenant on the hub
+  (Instance console › Federation, which instance auditors can read), which
   returns a single-use enrollment token. The member's admin runs
   `shoal federation join <hub-url> --token … --max-mode read_write --namespace …
   --grant tenant-admin=hub_group:platform`, choosing the **maximum access** it
@@ -885,7 +1048,12 @@ one control plane, and a federated deployment can also sit next to the hub.
   people. The hub stores the link (`shoal federation link <tenant>` creates it
   and `shoal federation links` shows connection health), never the member's
   data or secrets. Only an empty tenant can be federated; a revoked link can be
-  replaced by linking the tenant again. Operators can manage links as code with
+  replaced by linking the tenant again. Until then the hub refuses the tenant's
+  calls with `503 federation_revoked` instead of serving it as an empty hosted
+  tenant, and the member's Federation page says the hub rejected its link.
+  A member that leaves (`shoal federation leave`) tells the hub, which marks
+  the link `left` and refuses the same way, and removes the role bindings it
+  gave hub people and groups. Operators can manage links as code with
   the Terraform `shoal_federation_link` resource.
 - **Access modes per link.**
   - `read`: the hub can list and view resources, runs, events, campaigns,
@@ -898,9 +1066,10 @@ one control plane, and a federated deployment can also sit next to the hub.
     can also expose only some namespaces and choose `metadata` visibility,
     which hides step outputs, prompts and logs from the hub.
 - **Member is the source of truth.** Requests for a federated tenant are
-  forwarded live through the tunnel; data is not replicated to the hub. The
-  hub keeps only link status, health and small rollups (run counts, spend,
-  eval scores) for its dashboards. When the hub is unreachable the member
+  forwarded live through the tunnel; data is not replicated to the hub. A
+  forwarded call waits in the hub's queue encrypted, and is deleted as soon as
+  it is answered or times out. The hub keeps only link status and the
+  member's version (rollups such as run counts and spend are planned). When the hub is unreachable the member
   keeps running on its own; the hub shows the tenant as disconnected.
 - **One API.** Clients (UI, CLI, Terraform, A2A) talk to the hub with the
   same `/v1` API for hosted and federated tenants; the hub routes by tenant.
@@ -910,8 +1079,10 @@ one control plane, and a federated deployment can also sit next to the hub.
   (HS256). It names the user, their hub groups, the request id, and the
   method and path it was issued for, so it cannot be replayed against
   another call. The member authorises it again with its own
-  RBAC, where hub principals appear as `hub:user:<email>` and `hub:group:<name>`
-  and are bound to roles like any subject. A call succeeds only if the hub
+  RBAC, where hub people act as `hub:user:<email>` and are bound to roles like
+  any subject, by `hub_user` (email or service actor) or `hub_group` (hub group name).
+  The member reads its ceiling afresh for every call, so lowering it applies at once,
+  and a member that exposes only some namespaces shows the hub only their audit entries. A call succeeds only if the hub
   allows it, the link mode allows it, and the member's RBAC allows it. The
   hub's operator token gets no rights in a member by default: a member that
   wants operators to browse binds `hub_user` `system:admin` explicitly. (Decided.)
@@ -936,7 +1107,16 @@ one control plane, and a federated deployment can also sit next to the hub.
 ### 11.4 Where secrets live
 
 Every credential is encrypted at rest, write-only through the API, resolved at
-the moment of use and redacted from run logs. There are four scopes:
+the moment of use and redacted from run logs. The `env` provider reads
+`SHOAL_SECRET_<TENANT>__<NAME>` and then `SHOAL_SECRET_<NAME>`; the second is
+readable by every tenant, so instances shared by several organisations set
+`SHOAL_SECRET_ENV_SHARED=false`. Variables that configure Shoal itself
+(`SHOAL_SECRET_KEY`, `SHOAL_SECRET_PROVIDERS`) are never handed out as
+secrets, and names that would contain `__` are not looked up (so tenant
+`acme` cannot read tenant `acme--ops`'s variables); env secrets are
+tenant-wide, readable from every namespace. Deleting a namespace deletes its secrets, role bindings and
+personal credentials; deleting a user deletes their personal credentials.
+There are four scopes:
 
 | Scope | Holds | Managed by |
 |---|---|---|
@@ -956,7 +1136,9 @@ who has not connected it, the step **waits** (event `credential.required`
 with a link to connect) and resumes as soon as they save the credential,
 rather than failing. People connect under `/v1/me/credentials` (paste a token,
 or `oauth:` on the connection runs an authorization-code flow with PKCE and
-refreshes access tokens before they expire) or with `shoal credentials
+refreshes access tokens before they expire; the callback only saves the
+grant in the browser that started the flow or one signed in as that person,
+so an authorize link sent to someone else cannot collect their account) or with `shoal credentials
 set|connect`. Every set, removal and revocation is audited. This applies to
 every integration, MCP servers included.
 

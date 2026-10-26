@@ -22,17 +22,17 @@ function ToAdmin({ plural }: { plural: string }) {
   return <Navigate to={`/admin/${plural}${name ? `/${encodeURIComponent(name)}` : ""}`} replace />;
 }
 
-const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "cloud-identities", "evals"];
-const admin: CatalogPlural[] = ["gateways", "model-policies", "skill-sources"];
+const generic: CatalogPlural[] = ["agents", "skills", "sandbox-profiles", "cloud-identities", "evals", "target-lists"];
+const admin: CatalogPlural[] = ["gateways", "model-policies", "skill-sources", "eval-platforms", "custom-integrations"];
 
-/** Tenant-wide kinds edited in the admin console: /admin/gateways, /admin/model-policies, /admin/skill-sources. */
+/** Tenant-wide kinds edited in the admin console: gateways, model policies, skill sources, eval platforms, custom integrations. */
 export const adminCatalogRoutes: RouteObject[] = admin.flatMap((plural): RouteObject[] => [
   { path: plural, element: <Lazy><List plural={plural} /></Lazy> },
   { path: `${plural}/new`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },
   { path: `${plural}/:name`, element: <Lazy><KeyedEditor plural={plural} /></Lazy> },
 ]);
 
-/** Namespaced: agents, skills, sandbox-profiles, cloud-identities, evals, blueprints, skill-marketplace. */
+/** Namespaced: agents, skills, sandbox-profiles, cloud-identities, evals, target-lists, blueprints, skill-marketplace. */
 export const catalogRoutes: RouteObject[] = [
   ...admin.flatMap((plural): RouteObject[] => [
     { path: plural, element: <ToAdmin plural={plural} /> },

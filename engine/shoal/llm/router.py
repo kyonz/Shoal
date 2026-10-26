@@ -13,22 +13,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import random
+import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
-from shoal.core.errors import StepError
+from shoal.core.errors import CredentialRequired, StepError
 from shoal.core.models import (
     GATEWAY_ONLY,
     AgentSpec,
+    GatewayLimits,
     ModelCandidate,
     ModelPolicySpec,
     ModelRule,
     credential_fields,
 )
 from shoal.core.scope import SHARED_NAMESPACE, use_namespace
+from shoal.limits import GatewayLimiter
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
@@ -47,6 +51,8 @@ class ModelTarget:
     model: str
     config: dict[str, Any] = field(default_factory=dict)
     rule: str | None = None
+    limits: GatewayLimits | None = None
+    limit_scope: str = ""  # the tenant whose gateway this is
 
     def describe(self) -> dict[str, Any]:
         return {"gateway": self.gateway, "provider": self.provider_name, "model": self.model, "rule": self.rule}
@@ -70,12 +76,27 @@ class ModelClient:
     since they are only valid for the model that produced them.
     """
 
-    def __init__(self, targets: list[ModelTarget], on_fallback: Any = None):
+    def __init__(
+        self,
+        targets: list[ModelTarget],
+        on_fallback: Any = None,
+        *,
+        retries: int = 0,
+        backoff: float = 1.0,
+        max_backoff: float = 60.0,
+        limiter: GatewayLimiter | None = None,
+    ):
         if not targets:
             raise StepError("no model candidates")
         self.targets = targets
         self.index = 0
         self.on_fallback = on_fallback
+        # When every candidate is rate limited or down, wait and go round again this many times
+        # (honouring Retry-After) before failing the step.
+        self.retries = retries
+        self.backoff = backoff
+        self.max_backoff = max_backoff
+        self.limiter = limiter
         self._last_used: int | None = None
 
     @property
@@ -84,29 +105,72 @@ class ModelClient:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         errors: list[str] = []
+        attempt = waits = 0
+        deadline: float | None = None
+        while True:
+            response, retry_after, at_capacity = await self._round(request, errors)
+            if response is not None:
+                return response
+            if at_capacity:  # every candidate is at its gateway limits: wait for room, not a retry
+                deadline = deadline or time.monotonic() + self._max_wait()
+                if time.monotonic() < deadline:
+                    await GatewayLimiter.pause(waits)
+                    waits += 1
+                    continue
+                errors.append("gateway limits: no capacity freed up in time")
+            if attempt >= self.retries:
+                break
+            delay = min(self.max_backoff, max(retry_after or 0.0, self.backoff * 2**attempt))
+            await asyncio.sleep(delay * random.uniform(0.8, 1.2))
+            attempt += 1
+        raise StepError("all model candidates failed", retryable=True, details={"errors": errors[-10:]})
+
+    def _max_wait(self) -> float:
+        waits = [t.limits.max_wait.total_seconds() for t in self.targets[self.index:] if t.limits]
+        return max(waits, default=0.0)
+
+    async def _round(
+        self, request: ModelRequest, errors: list[str]
+    ) -> tuple[ModelResponse | None, float | None, bool]:
+        """One pass over the candidates: (response, Retry-After hint, whether only capacity stopped us)."""
+        retry_after: float | None = None
+        at_capacity = failed = False
         for index in range(self.index, len(self.targets)):
             target = self.targets[index]
             messages = request.messages
             if self._last_used is not None and self.targets[self._last_used].model != target.model:
                 messages = _strip_thinking(messages)
             config = {**request.config, **target.config}
+            permit = await self.limiter.try_acquire(target) if self.limiter else None
+            if self.limiter and permit is None:
+                at_capacity = True
+                continue
+            tokens = 0
             try:
                 response = await target.provider.complete(
                     replace(request, model=target.model, messages=messages, config=config)
                 )
+                tokens = int(response.usage.get("input_tokens", 0) + response.usage.get("output_tokens", 0))
             except ProviderUnavailable as exc:
+                failed = True
                 errors.append(f"{target.gateway}/{target.model}: {exc}")
+                if exc.retry_after is not None:
+                    retry_after = max(retry_after or 0.0, exc.retry_after)
                 await self._fallback(target, str(exc))
                 continue
+            finally:
+                if permit is not None and self.limiter is not None:
+                    await self.limiter.release(permit, tokens)
             if response.stop_reason == "refusal" and index + 1 < len(self.targets):
+                failed = True
                 errors.append(f"{target.gateway}/{target.model}: refusal")
                 await self._fallback(target, "refusal")
                 continue
             self.index = index
             self._last_used = index
             response.usage = {**response.usage, "model_calls": 1}
-            return response
-        raise StepError("all model candidates failed", retryable=True, details={"errors": errors})
+            return response, None, False
+        return None, retry_after, at_capacity and not failed
 
     async def _fallback(self, target: ModelTarget, reason: str) -> None:
         if self.on_fallback is not None:
@@ -132,9 +196,11 @@ class ModelRouter:
     ) -> ModelTarget:
         resource = await self.engine.store.find_resource(tenant_id, "Gateway", gateway)
         config: dict[str, Any] = {}
+        limits: GatewayLimits | None = None
         if resource is not None:
             spec = resource.spec  # type: ignore[attr-defined]
             provider_name = spec.type
+            limits = spec.limits
             config.update(spec.config)
             if spec.base_url:
                 config["base_url"] = spec.base_url
@@ -157,7 +223,13 @@ class ModelRouter:
         if effort:
             config["effort"] = effort
         provider = self.engine.plugin("providers", provider_name)
-        return ModelTarget(gateway, provider_name, provider, model, config, rule)
+        if resource is not None and provider_name == "claude-code" and spec.config.get("mode") == "shared_account":
+            from shoal.agents.claude_code import shared_account_token
+
+            # One Claude account for every caller: decisions, graders and service accounts too.
+            config.pop("api_key", None)
+            config["oauth_token"] = await shared_account_token(self.engine, tenant_id, gateway, spec, redactor)
+        return ModelTarget(gateway, provider_name, provider, model, config, rule, limits=limits, limit_scope=tenant_id)
 
     async def _secret(self, tenant_id: str, gateway: str, name: str, redactor: Redactor | None) -> str:
         value = await self.engine.secrets.get(tenant_id, name)
@@ -166,6 +238,24 @@ class ModelRouter:
         if redactor is not None:
             redactor.add(value)
         return value
+
+    async def _sign_in(self, ctx: StepContext, targets: list[ModelTarget]) -> list[ModelTarget]:
+        """Sign claude-code targets in for the run's initiator; one that can't be falls back while others remain."""
+        from shoal.agents.claude_code import sign_in
+
+        owner = await self.engine.user_credentials.owner_for(ctx.tenant_id, ctx.run.initiator)
+        who = (ctx.run.initiator or {}).get("display_name")
+        usable: list[ModelTarget] = []
+        for index, target in enumerate(targets):
+            try:
+                await sign_in(self.engine, ctx.tenant_id, target, owner, who=who, redactor=ctx.redactor)
+            except (StepError, CredentialRequired) as exc:
+                if usable or index + 1 < len(targets):
+                    await ctx.emit("model.fallback", {**target.describe(), "reason": exc.message[:500]})
+                    continue
+                raise
+            usable.append(target)
+        return usable
 
     # ------------------------------------------------------------------ policies
 
@@ -239,20 +329,30 @@ class ModelRouter:
                 raise StepError(f"no rule in model policy '{policy_name}' matched", details=info)
             seed = f"{ctx.run.id}:{ctx.step.id}:{ctx.attempt}"
             effort = provider_config.get("effort")
+            skipped: list[str] = []
             for candidate in self.order(rule, seed):
                 if not self.permitted(candidate.model, default_policy, policy):
                     continue
-                targets.append(
-                    await self.gateway_target(
+                gateway = candidate.gateway or agent.provider
+                try:
+                    target = await self.gateway_target(
                         tenant,
-                        candidate.gateway or agent.provider,
+                        gateway,
                         candidate.model,
                         effort=candidate.effort or effort,
+                        overrides=provider_config,
                         redactor=ctx.redactor,
                         rule=f"{policy_name}/{rule.name}",
                     )
-                )
+                except StepError as exc:  # a misconfigured candidate falls back like an unavailable one
+                    skipped.append(f"{gateway}/{candidate.model}: {exc}")
+                    await ctx.emit("model.fallback", {"gateway": gateway, "model": candidate.model,
+                                                      "rule": f"{policy_name}/{rule.name}", "reason": str(exc)[:500]})
+                    continue
+                targets.append(target)
             info["policy"] = policy_name
+            if skipped and not targets:
+                raise StepError(f"no usable candidate in model policy '{policy_name}': {'; '.join(skipped)}", details=info)
         else:
             if self.permitted(agent.model, default_policy):
                 targets.append(
@@ -262,9 +362,15 @@ class ModelRouter:
                 )
         if not targets:
             raise StepError(f"model '{agent.model}' is not permitted by the tenant's model policy", details=info)
+        targets = await self._sign_in(ctx, targets)
         await ctx.emit("model.routed", {**info, "candidates": [t.describe() for t in targets]})
 
         async def on_fallback(target: ModelTarget, reason: str) -> None:
             await ctx.emit("model.fallback", {**target.describe(), "reason": reason[:500]})
 
-        return ModelClient(targets, on_fallback)
+        settings = self.engine.settings
+        return ModelClient(
+            targets, on_fallback, retries=settings.model_retries,
+            backoff=settings.model_retry_backoff_seconds, max_backoff=settings.model_retry_max_backoff_seconds,
+            limiter=self.engine.gateway_limiter,
+        )

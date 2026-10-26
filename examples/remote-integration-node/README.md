@@ -7,7 +7,7 @@ that integrations can be written in any language. It implements the
 ```bash
 SHOAL_INTEGRATION_TOKEN=change-me node server.mjs
 # check it against the contract every integration must pass
-python -m shoal.sdk.testing.contract http://127.0.0.1:8080 --token change-me
+shoal integrations check http://127.0.0.1:8080 --token change-me
 ```
 
 Connect it to a tenant:

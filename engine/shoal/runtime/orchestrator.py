@@ -1,7 +1,8 @@
 """Orchestrators decide when and where a run is advanced; the executor decides what advancing means.
 
 Every run records the orchestrator that drives it (``runs.orchestrator``), chosen
-from ``SHOAL_ORCHESTRATOR`` when the run starts:
+when the run starts from ``SHOAL_ORCHESTRATOR`` or the instance console (see
+``shoal.runtime.orchestrators``):
 
 - ``builtin`` (default): the store is the scheduler. A run's ``next_wake_at`` says
   when it is due, workers claim due runs with a lease and advance them, and a wake

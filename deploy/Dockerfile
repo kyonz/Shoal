@@ -26,7 +26,7 @@ FROM python:${PYTHON_VERSION}-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
-ARG SHOAL_EXTRAS="--extra postgres --extra kubernetes --extra docker --extra temporal"
+ARG SHOAL_EXTRAS="--extra postgres --extra kubernetes --extra docker --extra temporal --extra jev"
 # Dependencies first: this layer is reused until uv.lock changes.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=engine/uv.lock,target=uv.lock \
@@ -49,6 +49,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir /var/lib/shoal shoal \
     && install -d -o shoal -g shoal /var/lib/shoal/sandboxes
+# Optional: the Claude Code CLI, for signing in to Claude subscriptions from the UI and for
+# claude-code agents in local sandboxes (docs/claude-code.md). Build with --build-arg CLAUDE_CODE=1.
+ARG CLAUDE_CODE=0
+RUN if [ "$CLAUDE_CODE" = 1 ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+      curl -fsSL https://claude.ai/install.sh | bash && cp -L /root/.local/bin/claude /usr/local/bin/claude && rm -rf /root/.local; \
+    fi
 COPY --from=build /app/.venv /app/.venv
 COPY --from=ui /out /app/ui
 ENV PATH="/app/.venv/bin:$PATH" \
