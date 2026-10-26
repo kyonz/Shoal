@@ -199,7 +199,10 @@ class Toolbox:
             name = await engine.integrations.resolve_name(
                 run_ctx.tenant_id, integration_key, connection or run_ctx.connection_for(integration_key)
             )
-            conn = await engine.integrations.connection(run_ctx.tenant_id, name, initiator=run_ctx.run.initiator, run_id=run_ctx.run.id)
+            conn = await engine.integrations.connection(
+                run_ctx.tenant_id, name, initiator=run_ctx.run.initiator, run_id=run_ctx.run.id, step_id=run_ctx.step.id,
+                action="list tools",
+            )
             actions = await integration.actions_for(conn)
         names = list(actions) if action_name in ("*", "") else [action_name]
         for name in names:

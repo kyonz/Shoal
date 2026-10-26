@@ -454,6 +454,38 @@ class WebhookRegistration(Base):
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class ConnectionActivity(Base):
+    """A connection's usage history: deliveries to its webhook, and the runs, steps and people that used it.
+
+    ``kind``: ``delivery`` (an inbound webhook, accepted or rejected), ``use`` (one row per run step,
+    counting its calls), ``call`` (an action called from the API) or ``test``. Bounded by
+    ``connection_activity_retention_days`` and ``connection_activity_max_rows``.
+    """
+
+    __tablename__ = "connection_activity"
+    __table_args__ = (
+        Index("ix_connection_activity_list", "tenant_id", "namespace", "connection_name", "id"),
+        Index("ix_connection_activity_run", "run_id", "step_id"),
+        Index("ix_connection_activity_updated", "updated_at"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(40))
+    namespace: Mapped[str] = mapped_column(String(63))  # the connection's
+    connection_name: Mapped[str] = mapped_column(String(63))
+    kind: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20))  # delivery: queued | accepted | rejected | error; else ok | error
+    reason: Mapped[str | None] = mapped_column(String(500))
+    actor: Mapped[str | None] = mapped_column(String(200))
+    run_id: Mapped[str | None] = mapped_column(String(40))
+    run_namespace: Mapped[str | None] = mapped_column(String(63))
+    workflow_name: Mapped[str | None] = mapped_column(String(63))
+    step_id: Mapped[str | None] = mapped_column(String(64))
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class TriggerState(Base):
     __tablename__ = "trigger_state"
     __table_args__ = (UniqueConstraint("tenant_id", "namespace", "trigger_name"),)

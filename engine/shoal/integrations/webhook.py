@@ -55,6 +55,27 @@ class WebhookIntegration(Integration):
         expected = cfg.signature_prefix + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature or "", expected)
 
+    def webhook_auth(self, ctx: ConnectionContext, headers: dict[str, str]) -> str | None:
+        cfg: WebhookConnection = ctx.config
+        if headers.get("x-shoal-token"):
+            return "token"
+        if headers.get(cfg.signature_header.lower()):
+            return "signed"
+        return "unsigned"
+
+    def webhook_rejection(self, ctx: ConnectionContext, headers: dict[str, str]) -> str:
+        cfg: WebhookConnection = ctx.config
+        auth = self.webhook_auth(ctx, headers)
+        if auth == "unsigned":
+            if cfg.secret is None:
+                return "unsigned, and no secret is set while 'Allow unsigned' is off"
+            return f"unsigned: no {cfg.signature_header} signature or X-Shoal-Token, and 'Allow unsigned' is off"
+        if cfg.secret is None:
+            return f"carries a {'token' if auth == 'token' else 'signature'} but no secret is set to check it, and 'Allow unsigned' is off"
+        if auth == "token":
+            return "wrong token: X-Shoal-Token does not match the connection secret"
+        return f"bad signature: {cfg.signature_header} does not match an HMAC-SHA256 of the body with the connection secret"
+
     def webhook_setup_instructions(self, url: str) -> str:
         return (
             f"POST JSON to {url}. Sign each delivery with the connection's secret (an HMAC-SHA256 of the raw body), "

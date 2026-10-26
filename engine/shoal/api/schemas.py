@@ -596,6 +596,31 @@ class TriggerTestIn(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConnectionActivityOut(Out):
+    """One entry in a connection's usage history (see ``GET /connections/{name}/activity``)."""
+
+    id: int
+    kind: str = Field(description="delivery (to its webhook), use (by a run step), call (an action from the API) or test.")
+    status: str = Field(description="delivery: queued, accepted, rejected or error; otherwise ok or error.")
+    reason: str | None = None
+    actor: str | None = None
+    run_id: str | None = None
+    run_namespace: str | None = None
+    workflow_name: str | None = None
+    step_id: str | None = None
+    count: int = 1
+    data: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConnectionActivityPage(Page[ConnectionActivityOut]):
+    retention_days: int = 0
+    max_entries: int = 0
+    counts: dict[str, dict[str, int]] = {}
+    oldest: datetime | None = None
+
+
 class TriggerWebhookOut(BaseModel):
     """A webhook Shoal registered with the provider for a trigger (`spec.webhook`)."""
 

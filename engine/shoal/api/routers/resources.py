@@ -4,6 +4,7 @@ and connection / trigger operations."""
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import yaml
@@ -14,6 +15,8 @@ from shoal.api.deps import Ctx, CtxDep
 from shoal.api.schemas import (
     ActionCallIn,
     ApplyResult,
+    ConnectionActivityOut,
+    ConnectionActivityPage,
     DeliveryOut,
     QueryIn,
     ResourceIn,
@@ -546,12 +549,18 @@ async def _caller(ctx: Ctx) -> dict[str, Any]:
 async def test_connection(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
     await ctx.namespace(namespace, "connections:use")
     initiator = await _caller(ctx)
+    row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace)
     with use_namespace(namespace):
         conn = await ctx.engine.integrations.connection(ctx.tenant_id, name, initiator=initiator)
         try:
-            return await conn.integration.test_connection(conn)
+            result = await conn.integration.test_connection(conn)
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            result = {"ok": False, "error": str(exc)}
+    await ctx.engine.integrations.activity.call(
+        ctx.tenant_id, row.namespace, name, kind="test", actor=ctx.actor, ok=bool(result.get("ok", True)),
+        reason=None if result.get("ok", True) else str(result.get("error") or "test failed"),
+    )
+    return result
 
 
 @router.get("/namespaces/{namespace}/connections/{name}/webhook", tags=["connections"])
@@ -664,6 +673,41 @@ async def connection_webhooks(namespace: str, name: str, ctx: CtxDep) -> Any:
     return out
 
 
+@router.get("/namespaces/{namespace}/connections/{name}/activity", tags=["connections"], response_model=ConnectionActivityPage,
+            summary="The connection's usage history (newest first): webhook deliveries, and the runs, steps and people that used it")
+async def connection_activity(
+    namespace: str, name: str, ctx: CtxDep,
+    kind: str | None = Query(None, description="Comma-separated: delivery, use, call, test."),
+    status: str | None = Query(None, description="Comma-separated: queued, accepted, rejected, error, ok."),
+    since: datetime | None = None,
+    run_id: str | None = None,
+    before: int | None = Query(None, description="Cursor: entries older than this id."),
+    limit: int = Query(50, ge=1, le=200),
+) -> Any:
+    await ctx.namespace(namespace, "connections:read")
+    row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace)
+    store, settings = ctx.engine.store, ctx.engine.settings
+    rows = await store.list_connection_activity(
+        ctx.tenant_id, row.namespace, name, kind=kind, status=status, since=since, run_id=run_id, before=before, limit=limit + 1,
+    )
+    items, readable = [], {}
+    for entry in rows[:limit]:
+        out = ConnectionActivityOut.model_validate(entry)
+        ns = entry.run_namespace
+        if entry.run_id and ns and ns != namespace:
+            if ns not in readable:  # a shared connection's runs in namespaces the caller cannot see stay anonymous
+                readable[ns] = await ctx.engine.authz.allowed(ctx.principal, "runs:read", ns)
+            if not readable[ns]:
+                out = out.model_copy(update={"run_id": None, "workflow_name": None, "step_id": None, "actor": None})
+        items.append(out)
+    summary = await store.connection_activity_summary(ctx.tenant_id, row.namespace, name)
+    return ConnectionActivityPage(
+        items=items, next_cursor=str(rows[limit - 1].id) if len(rows) > limit else None,
+        retention_days=settings.connection_activity_retention_days, max_entries=settings.connection_activity_max_entries,
+        **summary,
+    )
+
+
 @router.get("/namespaces/{namespace}/connections/{name}/actions", tags=["connections"],
             summary="Actions and queryable resources this connection offers")
 async def list_actions(namespace: str, name: str, ctx: CtxDep) -> dict[str, Any]:
@@ -695,10 +739,17 @@ async def call_action(namespace: str, name: str, action: str, body: ActionCallIn
     definition = actions.get(action)
     if definition is None:
         raise NotFound(f"{conn.spec.integration} has no action '{action}'")
-    with use_namespace(namespace):
-        result = await ctx.engine.integrations.call(
-            ctx.tenant_id, f"{conn.spec.integration}.{action}", body.params, connection=name, initiator=initiator
-        )
+    row = await ctx.engine.store.get_resource_row(ctx.tenant_id, "Connection", name, namespace=namespace)
+    activity = ctx.engine.integrations.activity
+    try:
+        with use_namespace(namespace):
+            result = await ctx.engine.integrations.call(
+                ctx.tenant_id, f"{conn.spec.integration}.{action}", body.params, connection=name, initiator=initiator
+            )
+    except Exception as exc:
+        await activity.call(ctx.tenant_id, row.namespace, name, kind="call", actor=ctx.actor, ok=False, action=action, reason=str(exc))
+        raise
+    await activity.call(ctx.tenant_id, row.namespace, name, kind="call", actor=ctx.actor, ok=True, action=action)
     if definition.mutating:
         await ctx.audit("connection.action", f"{namespace}/{name}", namespace=namespace, called=action)
     return result
