@@ -603,6 +603,12 @@ def connections_webhook_url(
     console.print(result["url"], soft_wrap=True)
     if result.get("instructions"):
         console.print(escape(result["instructions"]), style="dim")
+    guide = result.get("guide") or {}
+    if guide.get("accepts"):
+        console.print(f"\nAccepts: {escape(guide['accepts'])}")
+    for example in guide.get("examples", []):
+        console.print(f"\n# {escape(example['title'])}: {escape(example['description'])}", style="dim")
+        console.print(escape(example["command"]), soft_wrap=True, highlight=False)
 
 
 @triggers_app.command("fire")
