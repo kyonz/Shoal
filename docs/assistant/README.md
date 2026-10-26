@@ -69,5 +69,9 @@ Operators configure the assistant with environment variables on the server:
 | `SHOAL_ASSISTANT_EFFORT` | `medium` | Reasoning effort. |
 | `SHOAL_ASSISTANT_MAX_TURNS` | `16` | Model calls per message before it stops and asks you to continue. |
 
+To run the assistant on Claude Code, set `SHOAL_ASSISTANT_GATEWAY` to a `claude-code` gateway. On a subscription
+gateway each person chats on their own Claude plan, once they have linked it under **Settings → Connected accounts**
+([Claude Code agents](../claude-code.md#use-it-as-a-model-gateway)).
+
 The tenant's `default` model policy applies. The API is
 `POST /v1/assistant/chat`.

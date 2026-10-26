@@ -98,6 +98,28 @@ The same endpoints are available to scripts: `GET /v1/me/claude-code`,
 `DELETE /v1/me/claude-code/{gateway}`. Admins see who has linked what under
 `GET /v1/users/{username}/credentials` and revoke it there.
 
+## Use it as a model gateway
+
+A `claude-code` gateway also works wherever Shoal calls a model: the in-app assistant
+(`SHOAL_ASSISTANT_GATEWAY=claude-max`), `tool-loop` agents (`provider: claude-max`) and model
+policy candidates. Each model call runs the CLI once on the Shoal server (API and workers need
+`claude` on PATH, e.g. the image built with `CLAUDE_CODE=1`), with Claude Code's own tools, MCP
+servers, skills and settings turned off. The conversation and the caller's tool definitions go
+into the prompt, and the next turn (text and tool calls) comes back through `--json-schema`, so
+Shoal still runs the tools itself.
+
+Who it signs in as follows the same rule as agents:
+
+- In subscription mode, the assistant uses the plan of the person chatting, and a `tool-loop`
+  agent uses the plan of the person who started the run (the step waits until they link one).
+  In a model policy, a candidate whose person has not linked a plan falls back to the next one.
+- Calls that act for nobody (service accounts, decisions, LLM graders) need an `api_key`
+  gateway.
+
+It is slower than calling the API directly (a CLI start per turn and the whole transcript sent
+each time) and ignores sampling settings such as temperature and effort. Prompt caching is up
+to Claude Code.
+
 ## Write an agent
 
 ```yaml

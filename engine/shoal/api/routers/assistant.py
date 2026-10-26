@@ -8,9 +8,10 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
+from shoal.agents.claude_code import sign_in
 from shoal.api.deps import CtxDep
 from shoal.assistant.chat import Assistant
-from shoal.core.errors import Forbidden, InvalidRequest, ShoalError
+from shoal.core.errors import CredentialRequired, Forbidden, InvalidRequest, ShoalError
 from shoal.core.requestctx import current_request
 from shoal.llm.router import DEFAULT_POLICY, ModelClient, ModelRouter
 
@@ -97,6 +98,14 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
         target = await ctx.engine.models.gateway_target(
             tenant, settings.assistant_gateway, settings.assistant_model, effort=settings.assistant_effort
         )
+        # A claude-code gateway on people's own plans runs the chat on the plan of the person chatting.
+        owner = ctx.actor if ctx.actor.startswith("user:") else None
+        await sign_in(ctx.engine, tenant, target, owner, who=ctx.principal.display_name)
+    except CredentialRequired as exc:
+        raise AssistantUnavailable(
+            f"assistant gateway: {exc.message}" + (". Link your Claude subscription under Settings, Connected accounts." if exc.owner else ""),
+            details={**exc.details, "connect_url": "/settings/credentials?connection=" + f"{exc.namespace}/{exc.connection}"},
+        ) from exc
     except ShoalError as exc:
         raise AssistantUnavailable(f"assistant gateway: {exc.message}") from exc
 

@@ -52,7 +52,7 @@ credentials, and a preview for the instructions. **YAML** and **History** work a
 | --- | --- | --- |
 | `provider` | `anthropic` | The [gateway](gateways.md) model calls go through. |
 | `model` | `claude-opus-5-5` | A model id, or `policy:<name>` to let a [model policy](gateways.md#model-policies) choose. |
-| `runtime` | `tool-loop` | `tool-loop`, `cli` or `a2a`. |
+| `runtime` | `tool-loop` | `tool-loop`, `cli`, `claude-code` or `a2a`. |
 | `instructions` | | The system prompt. |
 | `skills`, `tools`, `subagents` | | See below. |
 | `credentials` | | Integrations whose credentials go into the sandbox: `github`, or `github:github-acme`. |
@@ -121,6 +121,12 @@ spec:
 
 The command gets `$SHOAL_PROMPT_FILE`, `$SHOAL_OUTPUT_FILE` and `$SHOAL_MAX_TURNS`. Use it for long coding tasks where a
 purpose-built agent does better than a generic loop.
+
+### `claude-code`
+
+Runs Claude Code headless (`claude -p`) in the sandbox through a `claude-code` gateway, on an API key or on the Claude
+plan of the person who started the run, with its messages and tool calls streamed into the run. See
+[Claude Code agents](../claude-code.md).
 
 ### `a2a`
 

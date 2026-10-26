@@ -31,7 +31,7 @@ spec:
 
 | Field | Meaning |
 | --- | --- |
-| `type` | The provider plugin. `anthropic` speaks the Anthropic Messages API, directly or through any Anthropic-compatible proxy (LiteLLM, Portkey, Cloudflare AI Gateway). `openai-compatible` speaks the OpenAI Chat Completions API (OpenRouter, vLLM, Ollama, Azure OpenAI). |
+| `type` | The provider plugin. `anthropic` speaks the Anthropic Messages API, directly or through any Anthropic-compatible proxy (LiteLLM, Portkey, Cloudflare AI Gateway). `openai-compatible` speaks the OpenAI Chat Completions API (OpenRouter, vLLM, Ollama, Azure OpenAI). `claude-code` runs the Claude Code CLI, on an API key or on each person's own Claude plan ([Claude Code agents](../claude-code.md)). |
 | `base_url` | Where requests go. Empty means the provider's own API. |
 | `api_key_secret` | The API key, as the name of a secret in the tenant's `shared` namespace. |
 | `headers`, `secret_headers` | Extra headers; credential headers only as secret names. |
