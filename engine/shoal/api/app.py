@@ -340,6 +340,10 @@ async def _relay_run_events(request: Request, engine: Any, link_id: str, princip
     return EventSourceResponse(stream(), ping=15)
 
 
+IMMUTABLE = "public, max-age=31536000, immutable"
+REVALIDATE = "no-cache"
+
+
 def _mount_frontend(app: FastAPI, static_dir: str) -> None:
     root = Path(static_dir).resolve()
     index = root / "index.html"
@@ -348,11 +352,18 @@ def _mount_frontend(app: FastAPI, static_dir: str) -> None:
         return
 
     @app.get("/{path:path}", include_in_schema=False)
-    async def spa(path: str) -> FileResponse:
+    async def spa(path: str) -> Response:
         candidate = (root / path).resolve()
         if path and candidate.is_file() and candidate.is_relative_to(root):
-            return FileResponse(candidate)
-        return FileResponse(index)  # client-side routes (/runs/..., /docs/..., /admin/...)
+            # Build output under assets/ is content-hashed, so it never changes.
+            immutable = path.startswith("assets/")
+            return FileResponse(candidate, headers={"Cache-Control": IMMUTABLE if immutable else REVALIDATE})
+        if path.startswith("assets/"):
+            # A chunk from an older build: a 404 lets the page notice and reload, where index.html would not.
+            return Response(status_code=404, headers={"Cache-Control": "no-store"})
+        # Client-side routes (/runs/..., /docs/..., /admin/...). Always revalidated, so a
+        # redeploy is picked up instead of a cached page asking for chunks that are gone.
+        return FileResponse(index, headers={"Cache-Control": REVALIDATE})
 
 
 def create_app(

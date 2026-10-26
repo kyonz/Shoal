@@ -3,6 +3,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useRouteError, type RouteObject } from "react-router";
 import { useAuth } from "@/lib/auth";
 import { lastNamespace } from "@/lib/ns";
+import { isChunkLoadError, reloadForNewBuild } from "@/lib/stale";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button, EmptyState, Spinner } from "@/components/ui";
 import Login from "@/pages/Login";
@@ -58,6 +59,8 @@ function Home() {
 
 function RouteError() {
   const error = useRouteError() as Error | undefined;
+  // A page chunk from before a redeploy: load the new build rather than show the error.
+  if (isChunkLoadError(error) && reloadForNewBuild()) return <Splash />;
   return (
     <EmptyState
       className="h-full"
