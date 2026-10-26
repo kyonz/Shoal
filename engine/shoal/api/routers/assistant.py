@@ -76,26 +76,43 @@ class AssistantInfo(BaseModel):
     gateway: str
     model: str
     effort: str
-    defaults: dict[str, str] = Field(default_factory=dict, description="The server's values (SHOAL_ASSISTANT_*), used where the tenant sets none.")
+    server: dict[str, str] = Field(default_factory=dict, description="The server's values (SHOAL_ASSISTANT_*).")
+    instance: dict[str, str] = Field(default_factory=dict, description="What instance admins set in the instance console.")
+    defaults: dict[str, str] = Field(
+        default_factory=dict, description="What applies where the tenant sets nothing: the instance setting, else the server's."
+    )
     overrides: dict[str, str] = Field(default_factory=dict, description="What the tenant's admins set in the admin console.")
 
 
 class AssistantSettingsIn(BaseModel):
-    gateway: str | None = Field(None, max_length=200, description="Gateway resource or provider plugin; null uses the server default.")
-    model: str | None = Field(None, max_length=200, description="Model name; null uses the server default.")
+    gateway: str | None = Field(None, max_length=200, description="Gateway resource or provider plugin; null inherits.")
+    model: str | None = Field(None, max_length=200, description="Model name; null inherits.")
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
 
 
 SETTING_FIELDS = ("gateway", "model", "effort")
+INSTANCE_SETTING_KEY = "assistant"
+
+
+def _own(values: dict[str, Any] | None) -> dict[str, str]:
+    return {k: str(v) for k, v in (values or {}).items() if k in SETTING_FIELDS and v}
+
+
+async def instance_assistant(engine: Any) -> dict[str, str]:
+    row = await engine.store.get_instance_setting(INSTANCE_SETTING_KEY)
+    return _own(row.value if row else None)
 
 
 async def assistant_config(ctx: CtxDep) -> AssistantInfo:
-    """The assistant's settings for the calling tenant: admin-console overrides on top of SHOAL_ASSISTANT_*."""
+    """The assistant's settings for the calling tenant: SHOAL_ASSISTANT_*, then the instance console, then the tenant."""
     s = ctx.engine.settings
-    defaults = {"gateway": s.assistant_gateway, "model": s.assistant_model, "effort": s.assistant_effort}
+    server = {"gateway": s.assistant_gateway, "model": s.assistant_model, "effort": s.assistant_effort}
+    instance = await instance_assistant(ctx.engine)
     tenant = await ctx.engine.store.get_tenant(ctx.tenant_id)
-    own = {k: v for k, v in ((tenant.settings or {}).get("assistant") or {}).items() if k in SETTING_FIELDS and v}
-    return AssistantInfo(enabled=s.assistant_enabled, **{**defaults, **own}, defaults=defaults, overrides=own)
+    own = _own((tenant.settings or {}).get("assistant"))
+    defaults = {**server, **instance}
+    return AssistantInfo(enabled=s.assistant_enabled, **{**defaults, **own}, server=server, instance=instance,
+                         defaults=defaults, overrides=own)
 
 
 @router.get("", response_model=AssistantInfo, summary="Whether the assistant is enabled, and its gateway and model")

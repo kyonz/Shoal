@@ -317,3 +317,54 @@ def test_transcript_and_turns_round_trip():
                             "usage": {"input_tokens": 3}, "total_cost_usd": 1.0}, ["api_get"], "subscription", "m")
     assert [b["type"] for b in response.content] == ["text", "tool_use"] and response.stop_reason == "tool_use"
     assert "cost_usd" not in response.usage
+
+
+async def test_instance_admins_set_the_assistant_for_every_tenant(world):
+    engine, tenant, admin, client, calls = world
+    root = client(ADMIN)  # the break-glass instance admin
+    assert (await admin.put("/v1/instance/assistant", json={"gateway": "claude-max"})).status_code == 403
+    r = await root.put("/v1/instance/assistant", json={"gateway": "claude-max", "effort": "high"})
+    assert r.status_code == 200, r.text
+    assert r.json()["effective"] == {"gateway": "claude-max", "model": engine.settings.assistant_model, "effort": "high"}
+
+    info = (await admin.get("/v1/assistant")).json()
+    assert (info["gateway"], info["effort"]) == ("claude-max", "high") and info["overrides"] == {}
+    assert info["instance"] == {"gateway": "claude-max", "effort": "high"} and info["server"]["gateway"] == "anthropic"
+    # A tenant's own setting still wins over the instance's.
+    await admin.put("/v1/assistant/settings", json={"gateway": "anthropic"})
+    assert (await admin.get("/v1/assistant")).json()["gateway"] == "anthropic"
+
+    r = await root.put("/v1/instance/assistant", json={})
+    assert r.json()["instance"] == {} and r.json()["effective"]["gateway"] == "anthropic"
+
+
+async def test_shared_account_mode_signs_in_once_for_everyone(world):
+    engine, tenant, admin, client, calls = world
+    await admin.put("/v1/gateways/claude-code", json={"spec": {"type": "claude-code", "config": {"mode": "shared_account"}}})
+    step = await engine.store.get_step(await _run(engine, tenant, "sa:ci"), "look")
+    assert step.status == "failed" and "nobody has signed it in" in step.error["message"]
+
+    dana = client(await _person(engine, tenant, admin, "dana"))
+    assert (await dana.post("/v1/claude-code/gateways/claude-code/account/login")).status_code == 403
+    assert (await admin.get("/v1/claude-code/gateways/claude-code/account")).json()["signed_in"] is False
+    login = (await admin.post("/v1/claude-code/gateways/claude-code/account/login")).json()
+    assert login["url"].startswith("https://claude.com/cai/oauth/authorize")
+    r = await admin.post(f"/v1/claude-code/gateways/claude-code/account/login/{login['login_id']}", json={"code": "good#code"})
+    assert r.status_code == 200, r.text
+    assert r.json()["signed_in"] and r.json()["secret"] == "claude-code-claude-token" and TOKEN not in r.text
+    assert "more than one individual" in r.json()["note"]
+
+    # Every caller uses the one account: service accounts, people, the assistant.
+    step = await engine.store.get_step(await _run(engine, tenant, "sa:ci"), "look")
+    assert step.status == "succeeded", step.error
+    assert calls()[-1]["oauth"] == TOKEN and calls()[-1]["api_key"] is None
+    await admin.put("/v1/assistant/settings", json={"gateway": "claude-code"})
+    r = await dana.post("/v1/assistant/chat", json={"message": "hi"})
+    assert r.status_code == 200, r.text
+    assert calls()[-1]["oauth"] == TOKEN and "--tools" in calls()[-1]["args"]
+    # Direct model calls with no person (decisions, graders) work too.
+    target = await engine.models.gateway_target(tenant, "claude-code", "sonnet")
+    assert target.config["oauth_token"] == TOKEN
+
+    r = await admin.delete("/v1/claude-code/gateways/claude-code/account")
+    assert r.json()["signed_in"] is False

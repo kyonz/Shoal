@@ -20,8 +20,10 @@ from pydantic import BaseModel, Field
 
 from shoal.agents.claude_code import (
     GATEWAY_TYPE,
+    SHARED_ACCOUNT_NOTE,
     SUBSCRIPTION_TERMS,
     TOKEN_FIELD,
+    account_secret,
     gateway_mode,
     gateway_problem,
 )
@@ -30,7 +32,7 @@ from shoal.api.routers.credentials import _owner
 from shoal.core import clock
 from shoal.core.errors import InvalidRequest, NotFound, ShoalError
 from shoal.core.models import GatewaySpec
-from shoal.core.scope import SHARED_NAMESPACE
+from shoal.core.scope import SHARED_NAMESPACE, use_namespace
 
 router = APIRouter(prefix="/v1/me/claude-code", tags=["credentials"])
 
@@ -40,7 +42,7 @@ TOKEN_LIFETIME = timedelta(days=365)  # claude setup-token issues one-year token
 class ClaudeCodeGatewayOut(BaseModel):
     gateway: str
     description: str | None
-    mode: str = Field(description="api_key (the gateway's key) or subscription (each person's own Claude plan).")
+    mode: str = Field(description="api_key, subscription (each person's own Claude plan) or shared_account (one account for everyone).")
     problem: str | None = Field(None, description="Why the gateway cannot run yet, when it cannot.")
     linked: bool = Field(description="Subscription mode: whether you have linked your Claude subscription.")
     linked_at: Any = None
@@ -150,4 +152,87 @@ async def unlink(gateway: str, ctx: CtxDep) -> Response:
     if not await ctx.engine.user_credentials.delete(ctx.tenant_id, _owner(ctx), SHARED_NAMESPACE, gateway):
         raise NotFound("you have not linked a subscription for that gateway")
     await ctx.audit("credential.removed", f"{SHARED_NAMESPACE}/{gateway}", namespace=SHARED_NAMESPACE)
+    return Response(status_code=204)
+
+
+# --------------------------------------------------------------------------- shared account (admins)
+
+account_router = APIRouter(prefix="/v1/claude-code/gateways", tags=["gateways"])
+
+
+class SharedAccountOut(BaseModel):
+    gateway: str
+    mode: str
+    secret: str = Field(description="The shared secret that holds the account's token.")
+    signed_in: bool
+    note: str = SHARED_ACCOUNT_NOTE
+
+
+async def _shared_gateway(ctx: Ctx, gateway: str) -> GatewaySpec:
+    await ctx.require("gateways:manage")
+    spec = (await _gateways(ctx)).get(gateway)
+    if spec is None:
+        raise NotFound(f"no claude-code gateway '{gateway}'")
+    if spec.config.get("mode") != "shared_account":
+        raise InvalidRequest(f"gateway '{gateway}' is not in shared_account mode; set config.mode: shared_account first")
+    return spec
+
+
+async def _put_account_token(ctx: Ctx, gateway: str, spec: GatewaySpec, token: str, how: str) -> None:
+    with use_namespace(SHARED_NAMESPACE):
+        await ctx.engine.secrets.writable().put(ctx.tenant_id, account_secret(gateway, spec), token)
+    await ctx.audit("gateway.claude_account_signed_in", gateway, namespace=SHARED_NAMESPACE, via=how)
+
+
+async def _account(ctx: Ctx, gateway: str, spec: GatewaySpec) -> SharedAccountOut:
+    with use_namespace(SHARED_NAMESPACE):
+        value = await ctx.engine.secrets.get(ctx.tenant_id, account_secret(gateway, spec))
+    return SharedAccountOut(gateway=gateway, mode="shared_account", secret=account_secret(gateway, spec), signed_in=bool(value))
+
+
+@account_router.get("/{gateway}/account", response_model=SharedAccountOut, summary="Whether a shared-account gateway is signed in")
+async def get_account(gateway: str, ctx: CtxDep) -> Any:
+    return await _account(ctx, gateway, await _shared_gateway(ctx, gateway))
+
+
+@account_router.put("/{gateway}/account/token", response_model=SharedAccountOut, summary="Sign the gateway's shared account in with a token")
+async def put_account_token(gateway: str, body: TokenIn, ctx: CtxDep) -> Any:
+    spec = await _shared_gateway(ctx, gateway)
+    token = body.token.strip()
+    if not token.startswith("sk-ant-oat"):
+        raise InvalidRequest("that is not a Claude Code subscription token (they start with sk-ant-oat); run `claude setup-token`")
+    await _put_account_token(ctx, gateway, spec, token, "token")
+    return await _account(ctx, gateway, spec)
+
+
+@account_router.post("/{gateway}/account/login", response_model=LoginOut, summary="Start signing the gateway's shared account in")
+async def start_account_login(gateway: str, ctx: CtxDep) -> Any:
+    await _shared_gateway(ctx, gateway)
+    login = await ctx.engine.claude_logins.start(ctx.tenant_id, f"gateway:{ctx.actor}", gateway)
+    return LoginOut(login_id=login.id, url=login.url, expires_in=600)
+
+
+@account_router.post("/{gateway}/account/login/{login_id}", response_model=SharedAccountOut, summary="Finish signing the shared account in")
+async def finish_account_login(gateway: str, login_id: str, body: CodeIn, ctx: CtxDep) -> Any:
+    spec = await _shared_gateway(ctx, gateway)
+    linked_gateway, token = await ctx.engine.claude_logins.finish(ctx.tenant_id, f"gateway:{ctx.actor}", login_id, body.code)
+    if linked_gateway != gateway:
+        raise InvalidRequest("that sign-in was started for another gateway")
+    await _put_account_token(ctx, gateway, spec, token, "browser")
+    return await _account(ctx, gateway, spec)
+
+
+@account_router.delete("/{gateway}/account", response_model=SharedAccountOut, summary="Sign the shared account out")
+async def delete_account(gateway: str, ctx: CtxDep) -> Any:
+    spec = await _shared_gateway(ctx, gateway)
+    with use_namespace(SHARED_NAMESPACE):
+        await ctx.engine.secrets.writable().delete(ctx.tenant_id, account_secret(gateway, spec))
+    await ctx.audit("gateway.claude_account_signed_out", gateway, namespace=SHARED_NAMESPACE)
+    return await _account(ctx, gateway, spec)
+
+
+@account_router.delete("/{gateway}/account/login/{login_id}", status_code=204, summary="Cancel signing the shared account in")
+async def cancel_account_login(gateway: str, login_id: str, ctx: CtxDep) -> Response:
+    await _shared_gateway(ctx, gateway)
+    ctx.engine.claude_logins.cancel(ctx.tenant_id, f"gateway:{ctx.actor}", login_id)
     return Response(status_code=204)

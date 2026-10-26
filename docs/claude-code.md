@@ -98,6 +98,30 @@ The same endpoints are available to scripts: `GET /v1/me/claude-code`,
 `DELETE /v1/me/claude-code/{gateway}`. Admins see who has linked what under
 `GET /v1/users/{username}/credentials` and revoke it there.
 
+## One shared Claude account
+
+For a single-person instance, or for testing, a gateway can run everything on one Claude
+account instead:
+
+```yaml
+apiVersion: shoal.dev/v1
+kind: Gateway
+metadata: {name: claude-code}
+spec:
+  type: claude-code
+  config: {mode: shared_account}
+  # api_key_secret: my-claude-token   # where the token is kept (default: <gateway>-claude-token in `shared`)
+```
+
+Save it, then use **Sign in with Claude** on the gateway's page (Admin → Gateways). It is the
+same Claude Code sign-in link as above, or a pasted `claude setup-token` token. The token goes
+into a shared secret, and every call through the gateway uses it: people, schedules, service
+accounts, decisions, graders and the assistant. The API is under
+`/v1/claude-code/gateways/{gateway}/account` and needs `gateways:manage`.
+
+> **Note:** Anthropic's terms do not allow one person's Free, Pro or Max plan to be used by more
+> than one individual. Keep shared-account mode to instances only you use, and to testing.
+
 ## Use it as a model gateway
 
 A `claude-code` gateway also works wherever Shoal calls a model: the in-app assistant

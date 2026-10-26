@@ -53,10 +53,15 @@ from shoal.core.scope import SHARED_NAMESPACE
 from shoal.sandbox.base import shell_quote
 
 GATEWAY_TYPE = "claude-code"
-MODES = ("api_key", "subscription")
+MODES = ("api_key", "subscription", "shared_account")
 TOKEN_FIELD = "oauth_token"
 STATE_DIR = ".shoal/claude-code"
 DEFAULT_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
+SHARED_ACCOUNT_NOTE = (
+    "Shared account mode runs every call through this gateway, for everyone in the organisation, on the one Claude "
+    "account an admin signed in. Anthropic's terms do not allow one person's Free, Pro or Max plan to be used by "
+    "more than one individual, so keep it to single-person instances and testing."
+)
 SUBSCRIPTION_TERMS = (
     "Subscription mode uses each person's own Claude plan for the runs they start. Anthropic's terms do not allow "
     "routing Free, Pro or Max credentials on behalf of other people, and plan usage limits assume ordinary, "
@@ -239,7 +244,11 @@ async def sign_in(engine: Any, tenant_id: str, target: Any, owner: str | None, *
         raise StepError(f"'{GATEWAY_TYPE}' needs a Gateway resource of that type (admins create it under Gateways)")
     if problem := gateway_problem(spec):
         raise StepError(f"gateway '{target.gateway}': {problem}")
-    if gateway_mode(spec.config, has_api_key=bool(spec.api_key_secret)) == "subscription":
+    mode = gateway_mode(spec.config, has_api_key=bool(spec.api_key_secret))
+    if mode == "shared_account":
+        target.config.pop("api_key", None)
+        target.config["oauth_token"] = await shared_account_token(engine, tenant_id, target.gateway, spec, redactor)
+    elif mode == "subscription":
         token = await personal_token(engine, tenant_id, target.gateway, owner, who)
         if redactor is not None:
             redactor.add(token)
@@ -266,6 +275,26 @@ def gateway_problem(spec: Any) -> str | None:
     return None
 
 
+def account_secret(gateway: str, spec: Any) -> str:
+    """The shared secret holding a shared-account gateway's Claude Code token."""
+    return spec.api_key_secret or f"{gateway}-claude-token"
+
+
+async def shared_account_token(engine: Any, tenant_id: str, gateway: str, spec: Any, redactor: Any = None) -> str:
+    from shoal.core.scope import use_namespace
+
+    with use_namespace(SHARED_NAMESPACE):
+        token = await engine.secrets.get(tenant_id, account_secret(gateway, spec))
+    if not token:
+        raise StepError(
+            f"gateway '{gateway}' uses one shared Claude account and nobody has signed it in yet "
+            "(Admin, Gateways, then Sign in with Claude on the gateway)"
+        )
+    if redactor is not None:
+        redactor.add(token)
+    return token
+
+
 async def gateway_env(inv: AgentInvocation) -> tuple[str, dict[str, str]]:
     """The gateway's mode and the env that signs Claude Code in for this invocation."""
     ctx = inv.ctx
@@ -289,6 +318,10 @@ async def gateway_env(inv: AgentInvocation) -> tuple[str, dict[str, str]]:
     mode = gateway_mode(spec.config, has_api_key=bool(spec.api_key_secret))
     if mode == "api_key":
         env["ANTHROPIC_API_KEY"] = config["api_key"]
+        return mode, env
+    if mode == "shared_account":
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = config.get("oauth_token") or await shared_account_token(
+            ctx.engine, ctx.tenant_id, gateway, spec, ctx.redactor)
         return mode, env
     owner = await ctx.engine.user_credentials.owner_for(ctx.tenant_id, ctx.run.initiator)
     token = await personal_token(ctx.engine, ctx.tenant_id, gateway, owner, (ctx.run.initiator or {}).get("display_name"))

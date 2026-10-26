@@ -17,6 +17,7 @@ interface AssistantInfo {
   model: string;
   effort: string;
   defaults: Record<Setting, string>;
+  instance?: Partial<Record<Setting, string>>;
   overrides: Partial<Record<Setting, string>>;
 }
 
@@ -55,7 +56,7 @@ export default function AssistantSettings() {
       <PageHeader
         icon={<MessageSquareText className="size-4" />}
         title="Assistant"
-        description="The gateway, model and effort the in-app assistant uses for everyone in this organisation. Anything left blank uses the server's SHOAL_ASSISTANT_* setting."
+        description="The gateway, model and effort the in-app assistant uses for everyone in this organisation. Anything left blank uses the instance default (set in the instance console), else the server's SHOAL_ASSISTANT_* setting."
       />
       <Card>
         <CardHeader
@@ -63,9 +64,9 @@ export default function AssistantSettings() {
           actions={info.data && !info.data.enabled ? <Badge tone="warn">Turned off on this server (SHOAL_ASSISTANT_ENABLED)</Badge> : undefined}
         />
         <fieldset disabled={!write || !info.data} className="space-y-4 p-4">
-          <Field label="Gateway" description={<>Server default: <span className="font-mono">{defaults?.gateway ?? "…"}</span>. Gateways are managed under <Link to="/admin/gateways" className="text-accent hover:underline">Gateways</Link>.</>}>
+          <Field label="Gateway" description={<>Default: <span className="font-mono">{defaults?.gateway ?? "…"}</span>. Gateways are managed under <Link to="/admin/gateways" className="text-accent hover:underline">Gateways</Link>.</>}>
             <NativeSelect value={draft.gateway ?? ""} onChange={(e) => set("gateway", e.target.value)}>
-              <option value="">Server default ({defaults?.gateway ?? "…"})</option>
+              <option value="">Default ({defaults?.gateway ?? "…"})</option>
               <optgroup label="Gateways">
                 {(gateways.data ?? []).map((g) => (
                   <option key={g.metadata.name} value={g.metadata.name}>
@@ -88,12 +89,12 @@ export default function AssistantSettings() {
               <Link to="/settings/credentials" className="text-accent hover:underline">Connected accounts</Link>. Each reply starts the Claude Code CLI on the server, so it is slower than an API key gateway.
             </p>
           )}
-          <Field label="Model" description={`Server default: ${defaults?.model ?? "…"}`}>
+          <Field label="Model" description={`Default: ${defaults?.model ?? "…"}`}>
             <Input mono value={draft.model ?? ""} placeholder={defaults?.model} onChange={(e) => set("model", e.target.value)} />
           </Field>
-          <Field label="Effort" description={`Server default: ${defaults?.effort ?? "…"}`}>
+          <Field label="Effort" description={`Default: ${defaults?.effort ?? "…"}`}>
             <NativeSelect value={draft.effort ?? ""} onChange={(e) => set("effort", e.target.value)}>
-              <option value="">Server default ({defaults?.effort ?? "…"})</option>
+              <option value="">Default ({defaults?.effort ?? "…"})</option>
               {EFFORTS.map((e) => (
                 <option key={e} value={e}>
                   {e}
