@@ -9,6 +9,13 @@ import { create } from "zustand";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, client, unwrap } from "@/api/client";
 
+export type FederationMode = "read" | "read_write";
+export const MODE_LABEL: Record<FederationMode, string> = { read: "Read only", read_write: "Read and write" };
+export const MODE_OPTIONS = [
+  { value: "read" as FederationMode, label: "Read only" },
+  { value: "read_write" as FederationMode, label: "Read and write" },
+];
+
 export const FEDERATION_DISCONNECTED = "federation_disconnected";
 export const FEDERATION_READ_ONLY = "federation_read_only";
 export const FEDERATION_REVOKED = "federation_revoked";
@@ -51,15 +58,15 @@ export function noteFederationError(error: unknown) {
 }
 
 /**
- * The hub link for the tenant being viewed, when the viewer is the hub's
- * operator (only operators can list links). Members grant hub people access
+ * The hub link for the tenant being viewed, when the viewer is an instance
+ * admin or auditor (only they can list links). Members grant hub people access
  * themselves; the operator token gets no automatic rights there.
  */
-export function useFederatedLink(isOperator: boolean, tenantSlug: string | undefined) {
+export function useFederatedLink(isInstanceReader: boolean, tenantSlug: string | undefined) {
   const links = useQuery({
     queryKey: ["admin", "federation", "links"],
     queryFn: () => unwrap(client.GET("/v1/federation/links")),
-    enabled: isOperator && !!tenantSlug,
+    enabled: isInstanceReader && !!tenantSlug,
     staleTime: 60_000,
   });
   return links.data?.find((l) => l.tenant === tenantSlug && l.status !== "revoked" && l.status !== "left") ?? null;
