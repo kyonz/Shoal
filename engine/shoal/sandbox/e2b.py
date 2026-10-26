@@ -12,6 +12,8 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from shoal.sandbox.base import ExecResult, Sandbox, SandboxBackend, SandboxSpec, shell_quote
 
 if TYPE_CHECKING:
@@ -54,9 +56,18 @@ class E2BSandbox(Sandbox):
         await self.sbx.kill()
 
 
+class E2BConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key_secret: str | None = Field(None, description="Secret holding the E2B API key (default: E2B_API_KEY).")
+    domain: str | None = Field(None, description="E2B domain; point it at a SPACE E2B-compatibility host to run on SPACE.")
+
+
 class E2BBackend(SandboxBackend):
     name = "e2b"
     description = "E2B cloud or self-hosted sandboxes (also Perplexity SPACE through its E2B wrapper)."
+    network_controls = frozenset({"deny"})  # allow_internet_access=False
+    config_schema = E2BConfig
 
     def setup(self, engine: Engine) -> None:
         self.engine = engine

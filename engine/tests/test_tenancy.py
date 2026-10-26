@@ -84,6 +84,20 @@ async def test_shared_connection_events_fire_triggers_in_team_namespaces(engine,
     assert run.namespace == "team-a"
 
 
+async def test_org_connections_limited_to_namespaces_only_fire_their_triggers(engine, tenant):
+    from shoal.integrations.base import IntegrationEvent
+
+    spec = {"integration": "webhook", "namespaces": ["team-a"]}
+    await engine.store.apply_resource(tenant.id, res("Connection", "hooks", spec, namespace="shared"))
+    for ns in ("team-a", "team-b"):
+        await engine.store.ensure_namespace(tenant.id, ns)
+        await engine.store.apply_resource(tenant.id, res("Workflow", "w", WF, namespace=ns))
+        await engine.store.apply_resource(tenant.id, res("Trigger", "t", {"workflow": "w", "connection": "hooks", "event": "received"}, namespace=ns))
+    with use_namespace("shared"):
+        result = await engine.integrations.inject_event(tenant.id, "hooks", IntegrationEvent(type="received", data={}))
+    assert [t["namespace"] for t in result["triggers"]] == ["team-a"]
+
+
 # --------------------------------------------------------------------------- RBAC
 
 
@@ -231,6 +245,10 @@ async def test_oidc_rejects_bad_tokens(idp_world):
     engine, tenant, idp = idp_world
     with pytest.raises(Forbidden, match="domain"):
         await sign_in(engine, tenant, idp, {"sub": "x", "email": "eve@evil.test"})
+    with pytest.raises(Forbidden, match="domain"):  # an address the provider has not verified proves nothing
+        await sign_in(engine, tenant, idp, {"sub": "y", "email": "eve@acme.test", "email_verified": False})
+    denied = await engine.store.list_audit(tenant.id, action="auth.login", outcome="denied")
+    assert [e.actor for e in denied] == ["oidc:eve@acme.test", "oidc:eve@evil.test"]
     url = await engine.oidc.begin(tenant.id, "okta", "https://shoal.test/cb")
     state = parse_qs(urlparse(url).query)["state"][0]
     idp.codes["c1"] = {"sub": "x", "email": "eve@acme.test", "nonce": "wrong"}

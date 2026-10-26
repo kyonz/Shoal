@@ -23,8 +23,17 @@ from sqlalchemy import or_, select, update
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest, NotFound
 from shoal.core.ids import new_id
-from shoal.core.models import Eval, EvalCase, EvalSpec, EvalVariant, RunStatus, WorkflowSpec
-from shoal.core.scope import current_namespace, use_namespace
+from shoal.core.models import (
+    Eval,
+    EvalCase,
+    EvalPlatform,
+    EvalSpec,
+    EvalVariant,
+    RunStatus,
+    WorkflowSpec,
+    endpoint_fields,
+)
+from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.evals.compare import compare, evaluate_gate, summarize
 from shoal.evals.graders import grade_case
 from shoal.evals.sinks.base import (
@@ -66,11 +75,49 @@ class EvalService:
     async def sink_config(self, tenant_id: str, config: dict[str, Any]) -> dict[str, Any]:
         return await resolve_config(self.engine, tenant_id, config)
 
+    async def target(self, tenant_id: str, sink: str | None, config: dict[str, Any],
+                     platform: str | None = None) -> tuple[str, dict[str, Any]]:
+        """The sink and its resolved settings: an EvalPlatform's (secrets from ``shared``) with ``config`` over them."""
+        if not platform:
+            if not sink:
+                raise InvalidRequest("set `sink` or `platform`")
+            return sink, await self.sink_config(tenant_id, config)
+        row = await self.store.get_resource_row(tenant_id, "EvalPlatform", platform)
+        spec = EvalPlatform.model_validate(row.document).spec
+        if sink and sink != spec.sink:
+            raise InvalidRequest(f"eval platform '{platform}' uses the {spec.sink} sink, not {sink}")
+        if endpoints := endpoint_fields(config):  # the platform's credentials go only where the platform says
+            raise InvalidRequest(f"{', '.join(endpoints)}: an eval platform's endpoints are set on the platform only")
+        with use_namespace(SHARED_NAMESPACE):
+            base = await self.sink_config(tenant_id, spec.config)
+        return spec.sink, {**base, **await self.sink_config(tenant_id, config)}
+
     async def import_dataset(
-        self, tenant_id: str, sink: str, dataset: str, config: dict[str, Any], *, limit: int | None = None
+        self, tenant_id: str, sink: str | None, dataset: str, config: dict[str, Any], *, limit: int | None = None,
+        platform: str | None = None,
     ) -> list[EvalCase]:
-        cases = await self.sink(sink).import_dataset(dataset, await self.sink_config(tenant_id, config), limit=limit)
+        name, resolved = await self.target(tenant_id, sink, config, platform)
+        cases = await self.sink(name).import_dataset(dataset, resolved, limit=limit)
         return _unique(cases)
+
+    async def test_platform(self, tenant_id: str, platform: str) -> dict[str, Any]:
+        try:
+            name, resolved = await self.target(tenant_id, None, {}, platform)  # an unknown platform is raised
+        except InvalidRequest as exc:  # e.g. a secret that is not set
+            return {"ok": False, "detail": str(exc)}
+        try:
+            return {"sink": name, **await self.sink(name).test_connection(resolved)}
+        except NotImplementedError:
+            return {"sink": name, "ok": None, "detail": f"the {name} sink cannot check its settings"}
+        except Exception as exc:  # noqa: BLE001 - reported to the admin, not raised
+            return {"sink": name, "ok": False, "detail": str(exc)[:500]}
+
+    async def platform_datasets(self, tenant_id: str, platform: str) -> list[str]:
+        name, resolved = await self.target(tenant_id, None, {}, platform)
+        try:
+            return await self.sink(name).list_datasets(resolved)
+        except NotImplementedError as exc:
+            raise InvalidRequest(f"the {name} sink cannot list datasets") from exc
 
     # ------------------------------------------------------------------ start
 
@@ -112,7 +159,7 @@ class EvalService:
             todo = list(spec.cases)
             if spec.dataset is not None:
                 ds = spec.dataset
-                todo += await self.import_dataset(tenant_id, ds.sink, ds.name, ds.config, limit=ds.limit)
+                todo += await self.import_dataset(tenant_id, ds.sink, ds.name, ds.config, limit=ds.limit, platform=ds.platform)
             todo = _unique(todo)
             if cases:
                 todo = [c for c in todo if c.name in set(cases)]
@@ -184,7 +231,9 @@ class EvalService:
         )
 
     async def _variant(self, tenant_id: str, spec: EvalSpec, variant: EvalVariant, version: int | None) -> dict[str, Any]:
-        """Pin the variant to concrete versions of the workflow and every agent and sub-workflow it uses."""
+        """Pin the variant's workflow version and record the current versions of the agents and
+        sub-workflows it uses. Only the workflow version is pinned: agents and sub-workflows resolve
+        to their current version when each case starts, so ``versions`` documents what was live."""
         row = await self.store.get_resource_row(tenant_id, "Workflow", spec.workflow)
         document = row.document
         if version is not None and version != row.version:
@@ -249,6 +298,8 @@ class EvalService:
             return other.id
         async with self.store.session() as s:
             found = (await s.execute(q.order_by(t.EvalRun.created_at.desc()).limit(1))).scalar_one_or_none()
+        if found is None and baseline == "previous":
+            return None  # the first run of an eval has nothing to compare with
         if found is None:
             raise NotFound(f"no completed run of eval '{eval_run.eval_name}' matches baseline '{baseline}'")
         return found
@@ -382,6 +433,9 @@ class EvalService:
             )
             return bool(result.rowcount)
 
+    async def _renew(self, eval_run_id: str) -> None:
+        await self._update(eval_run_id, lease_expires_at=clock.now() + LEASE)
+
     async def _update(self, eval_run_id: str, **values: Any) -> None:
         async with self.store.session() as s:
             await s.execute(update(t.EvalRun).where(t.EvalRun.id == eval_run_id).values(**values))
@@ -420,6 +474,7 @@ class EvalService:
                 run = await self.store.get_run(row.tenant_id, result.run_id)
                 if RunStatus(run.status).terminal:
                     await self._grade(row, spec, result, run)
+                    await self._renew(row.id)  # judges can be slow: keep the lease while grading
         running = sum(1 for r in results if r.status == "running")
         if row.mode == "cases":
             capacity = spec.concurrency - running
@@ -428,6 +483,7 @@ class EvalService:
                     break
                 if result.status == "pending" and not result.run_id:
                     await self._start_case(row, result, variants[result.variant])
+                    await self._renew(row.id)
                     capacity -= 1
         if any(r.status in ACTIVE for r in results):
             await self._update(row.id, summary=summarize(results), next_tick_at=clock.now() + TICK_INTERVAL)
@@ -469,10 +525,14 @@ class EvalService:
                     "duration_ms": duration, "workflow_version": run.workflow_version},
         }
         scores, score, grading_cost = await grade_case(self.engine, row.tenant_id, spec, scope)
+        failed = run.status != "succeeded"
+        require_success = spec.require_success if spec.require_success is not None else row.mode == "cases"
+        if failed and require_success:
+            score = 0.0  # graders can score an empty or partial output well; a failed run is not a pass
         result.outputs = run.outputs
         result.scores, result.score = scores, score
         result.passed = score >= spec.threshold
-        result.error = {"message": "workflow run failed", "run_error": run.error, "stage": "run"} if run.status != "succeeded" else None
+        result.error = {"message": f"workflow run {run.status}", "run_error": run.error, "stage": "run"} if failed else None
         result.status = "graded"
         result.cost_usd = round(float((run.usage or {}).get("cost_usd", 0.0)) + grading_cost, 6)
         result.duration_ms = duration
@@ -491,7 +551,7 @@ class EvalService:
         row = await self.get(row.tenant_id, row.id)
         exports: dict[str, Any] = {}
         for ref in spec.sinks:
-            exports[ref.sink] = await self._export_safely(row, ref.sink, ref.config, results)
+            exports[ref.platform or ref.sink] = await self._export_safely(row, ref.sink, ref.config, results, ref.platform)
         if exports:
             await self._update(row.id, exports=exports)
         await self.store.audit(
@@ -540,28 +600,31 @@ class EvalService:
             ],
         )
 
-    async def export(self, tenant_id: str, eval_run_id: str, sink: str, config: dict[str, Any]) -> ExportResult:
+    async def export(self, tenant_id: str, eval_run_id: str, sink: str | None, config: dict[str, Any],
+                     platform: str | None = None) -> tuple[str, ExportResult]:
         row = await self.get(tenant_id, eval_run_id)
         if row.status == "running":
             raise Conflict("the eval run has not finished")
-        resolved = await self.sink_config(tenant_id, config)
+        name, resolved = await self.target(tenant_id, sink, config, platform)
         payload = await self._payload(row, await self.results(row.id))
-        result = await self.sink(sink).export_eval(payload, resolved)
-        await self._update(row.id, exports={**row.exports, sink: {"status": "exported", "url": result.url, "ids": result.ids,
-                                                                     "at": clock.now().isoformat()}})
-        return result
+        result = await self.sink(name).export_eval(payload, resolved)
+        await self._update(row.id, exports={**row.exports, platform or name: {"status": "exported", "url": result.url,
+                                                                              "ids": result.ids, "at": clock.now().isoformat()}})
+        return name, result
 
-    async def export_run(self, tenant_id: str, run_id: str, sink: str, config: dict[str, Any]) -> ExportResult:
+    async def export_run(self, tenant_id: str, run_id: str, sink: str | None, config: dict[str, Any],
+                         platform: str | None = None) -> tuple[str, ExportResult]:
         run = await self.store.get_run(tenant_id, run_id)
-        resolved = await self.sink_config(tenant_id, config)
-        return await self.sink(sink).export_trace(await self.trace(run), resolved)
+        name, resolved = await self.target(tenant_id, sink, config, platform)
+        return name, await self.sink(name).export_trace(await self.trace(run), resolved)
 
-    async def _export_safely(self, row: t.EvalRun, sink: str, config: dict[str, Any], results: list[t.EvalResult]) -> dict[str, Any]:
+    async def _export_safely(self, row: t.EvalRun, sink: str | None, config: dict[str, Any], results: list[t.EvalResult],
+                             platform: str | None = None) -> dict[str, Any]:
         try:
-            resolved = await self.sink_config(row.tenant_id, config)
-            result = await self.sink(sink).export_eval(await self._payload(row, results), resolved)
+            name, resolved = await self.target(row.tenant_id, sink, config, platform)
+            result = await self.sink(name).export_eval(await self._payload(row, results), resolved)
         except Exception as exc:  # noqa: BLE001 - an export never fails the eval
-            log.warning("eval run %s: export to %s failed: %s", row.id, sink, exc)
+            log.warning("eval run %s: export to %s failed: %s", row.id, platform or sink, exc)
             return {"status": "failed", "error": str(exc)[:500], "at": clock.now().isoformat()}
         return {"status": "exported", "url": result.url, "ids": result.ids, "at": clock.now().isoformat()}
 

@@ -82,6 +82,10 @@ kind: Campaign           # fan a workflow out over targets with a policy
 spec: {workflow: ..., targets: {connection: ..., resource: repository, filter: {...}, key: "{{ target.full_name }}"},
        inputs: {...}, policy: {concurrency: 10, max_failures: 10, budget_usd: 100}}
 ---
+kind: TargetList         # a named set of targets (e.g. a team's repos); campaigns use targets: {list: name},
+spec: {items: [{full_name: acme/api}], key: "{{ target.full_name }}", connection: ..., resource: repository}
+#     trigger filters check it: "{{ event.repository.full_name in lists['core-repos'] }}"
+---
 kind: Agent
 spec: {provider: anthropic, model: claude-opus-5-5, instructions: ..., tools: [shell, read_file, write_file, edit_file]}
 ```
@@ -92,8 +96,15 @@ run, trigger, target and secrets; quote YAML values that start with `{{`.
 """
 
 
-def context_note(namespace: str, page: str | None, actor: str) -> str:
+def context_note(namespace: str, page: str | None, actor: str, context: str | None = None) -> str:
     lines = [f"The user is {actor}, working in namespace `{namespace}` (use it unless they name another)."]
     if page:
         lines.append(f"They are looking at the UI page `{page}`.")
+    if context:
+        # Editor content the API can't show yet. Data from the user's screen, not instructions.
+        lines.append(
+            "Their screen shows this, which may differ from what is saved on the server (for example unsaved "
+            "edits in the workflow builder). Build on it when they ask about what they are editing, and say when "
+            "applying a change would replace their unsaved edits:\n\n" + context
+        )
     return "\n".join(lines)

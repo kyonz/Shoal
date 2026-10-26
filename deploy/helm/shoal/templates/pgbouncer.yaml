@@ -1,0 +1,89 @@
+{{- if and .Values.postgresql.enabled .Values.pgbouncer.enabled }}
+{{- $pb := .Values.pgbouncer }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "shoal.pgbouncer.fullname" . }}
+  labels:
+    {{- include "shoal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer
+spec:
+  ports:
+    - port: 5432
+      targetPort: pgbouncer
+      name: pgbouncer
+  selector:
+    {{- include "shoal.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "shoal.pgbouncer.fullname" . }}
+  labels:
+    {{- include "shoal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer
+spec:
+  replicas: {{ $pb.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "shoal.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: pgbouncer
+  template:
+    metadata:
+      labels:
+        {{- include "shoal.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: pgbouncer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70  # postgres in the image
+        runAsGroup: 70
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: pgbouncer
+          image: "{{ $pb.image.repository }}:{{ $pb.image.tag }}"
+          imagePullPolicy: {{ $pb.image.pullPolicy }}
+          ports:
+            - name: pgbouncer
+              containerPort: 5432
+          env:
+            - name: DB_HOST
+              value: {{ include "shoal.postgresql.fullname" . | quote }}
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "shoal.secretName" . }}, key: POSTGRES_PASSWORD}}
+            - name: DB_NAME
+              value: {{ .Values.postgresql.auth.database | quote }}
+            - name: AUTH_TYPE
+              value: scram-sha-256
+            - name: POOL_MODE
+              value: transaction
+            - name: MAX_CLIENT_CONN
+              value: {{ $pb.maxClientConn | quote }}
+            - name: DEFAULT_POOL_SIZE
+              value: {{ $pb.defaultPoolSize | quote }}
+            - name: MAX_DB_CONNECTIONS
+              value: {{ $pb.maxDbConnections | quote }}
+          readinessProbe:
+            tcpSocket: {port: pgbouncer}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: pgbouncer}
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            {{- toYaml $pb.resources | nindent 12 }}
+          volumeMounts:
+            - name: config  # the entrypoint writes pgbouncer.ini and userlist.txt here
+              mountPath: /etc/pgbouncer
+      volumes:
+        - name: config
+          emptyDir: {}
+{{- end }}

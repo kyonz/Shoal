@@ -108,6 +108,10 @@ def create_app(
         status = exc.status if exc.status and 400 <= exc.status < 500 else 502
         return _error(status, str(exc), retryable=exc.retryable)
 
+    @app.exception_handler(httpx.HTTPError)
+    async def network_error(_: Request, exc: httpx.HTTPError) -> JSONResponse:
+        return _error(502, f"{instance.title} is unreachable: {type(exc).__name__}: {exc}", retryable=True)
+
     @app.exception_handler(ValidationError)
     @app.exception_handler(RequestValidationError)
     async def validation_error(_: Request, exc: Exception) -> JSONResponse:

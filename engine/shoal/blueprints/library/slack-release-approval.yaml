@@ -1,0 +1,127 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: slack-release-approval
+  description: Ask for a version in Slack and hold the release for an approver's click
+spec:
+  title: Slack release approval
+  summary: '`/shoal ship <service>` asks which version to ship, waits for a release manager to approve it in Slack and
+    announces the decision. Call it from your deploy workflow as an approval gate.'
+  version: 1.0.0
+  status: featured
+  author: Shoal
+  tags:
+  - slack
+  - approvals
+  - release
+  categories:
+  - engineering
+  readme: |
+    1. Create a Slack connection and install the app (the connection page has the manifest and an Install button).
+    2. Adopt this blueprint, pick the channel and who may approve (`group:<name>`, a username or an email).
+    3. Type `/shoal ship api` in Slack. Shoal asks for the version and notes, then posts Approve / Reject buttons
+       for the approvers. The decision is announced in the channel.
+
+    The workflow's outputs are `approved`, `version` and `by`. To gate a real deploy, call it from your deploy
+    workflow with a `type: workflow` step and continue only when `approved` is true, or add your deploy step after
+    `approve`. A rejection or no answer within the wait ends the run without shipping.
+  params:
+    slack:
+      type: connection
+      integration: slack
+      description: Slack connection (the app must be in the channel).
+    channel:
+      type: string
+      default: '#deploys'
+      description: Where the approval request and the announcement go.
+    approvers:
+      type: string
+      default: group:release-managers
+      description: Who may approve, e.g. group:release-managers, a username or an email.
+    max_wait:
+      type: string
+      default: 4h
+      description: How long to wait for an approval before rejecting.
+  resources:
+  - kind: Workflow
+    metadata:
+      name: '{{ prefix }}release-approval'
+      description: Ask for a version in Slack and wait for an approval there.
+    spec:
+      inputs:
+        service:
+          type: string
+        version:
+          type: string
+          default: ''
+          description: Skip the question when the version is already known.
+      connections:
+        slack: '{{ params.slack }}'
+      steps:
+      - id: ask
+        type: action
+        if: '{{ not inputs.version }}'
+        action: slack.request_input
+        with:
+          channel: '{{ params.channel }}'
+          text: Which version of *{{ inputs.service }}* should we ship?
+          signal: release
+          fields:
+          - name: version
+            label: Version
+            placeholder: 1.4.2
+          - name: notes
+            label: Release notes
+            type: multiline
+            optional: true
+      - id: answer
+        type: wait
+        if: '{{ not inputs.version }}'
+        signal:
+          name: release
+        max_wait: 1d
+        on_timeout: fail
+      - id: chosen
+        type: set
+        needs:
+        - answer
+        values:
+          version: '{{ inputs.version or steps.answer.output.payload[''values''][''version''] }}'
+          notes: '{{ steps.answer.output.payload[''values''][''notes''] if steps.answer.output else '''' }}'
+      - id: approve
+        type: approval
+        message: |
+          Ship *{{ inputs.service }}* {{ steps.chosen.output.version }} to production?
+          {{ steps.chosen.output.notes }}
+        approvers:
+        - '{{ params.approvers }}'
+        max_wait: '{{ params.max_wait }}'
+        on_reject: continue
+        notify:
+        - integration: slack
+          to: '{{ params.channel }}'
+          with:
+            ask_comment: true
+      - id: announce
+        type: action
+        action: slack.post_message
+        with:
+          channel: '{{ params.channel }}'
+          text: "{{ ':rocket:' if steps.approve.output.approved else ':no_entry:' }} {{ inputs.service }} {{ steps.chosen.output.version\
+            \ }} {{ 'approved' if steps.approve.output.approved else 'not approved' }}{{ ' by ' ~ steps.approve.output.by\
+            \ if steps.approve.output.by else '' }}"
+      outputs:
+        approved: '{{ steps.approve.output.approved or false }}'
+        version: '{{ steps.chosen.output.version }}'
+        by: '{{ steps.approve.output.by }}'
+  - kind: Trigger
+    metadata:
+      name: '{{ prefix }}slack-ship'
+    spec:
+      workflow: '{{ prefix }}release-approval'
+      connection: '{{ params.slack }}'
+      event: slash_command
+      filter: '{{ event.args[0] == ''ship'' and event.args | length > 1 }}'
+      inputs:
+        service: '{{ event.args[1] }}'
+        version: '{{ event.args[2] if event.args | length > 2 else '''' }}'

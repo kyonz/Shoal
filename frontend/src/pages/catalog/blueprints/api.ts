@@ -54,6 +54,11 @@ export interface AdoptResult {
   dry_run: boolean;
 }
 
+export interface RemoveResult {
+  removed: { kind: string; name: string }[];
+  kept?: { kind: string; name: string; reason: string }[];
+}
+
 export const spec = (r: Resource) => r.spec as unknown as BlueprintSpec;
 
 export function isFeatured(s: BlueprintSpec) {
@@ -114,11 +119,26 @@ export function useUpdateAdoption(ns: string) {
 export function useRemoveAdoption(ns: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => rawJson<void>(`/v1/namespaces/${ns}/blueprint-adoptions/${id}`, { method: "DELETE" }),
+    mutationFn: (id: string) => rawJson<RemoveResult | undefined>(`/v1/namespaces/${ns}/blueprint-adoptions/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["blueprint-adoptions", ns] });
       void qc.invalidateQueries({ queryKey: ["resources"] });
     },
+  });
+}
+
+export interface DefaultBlueprint {
+  name: string;
+  version: string;
+  outcome: "created" | "updated" | "unchanged" | "kept";
+}
+
+/** Add the blueprints that ship with Shoal (new tenants already have them). */
+export function useInstallDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => rawJson<DefaultBlueprint[]>("/v1/blueprints/defaults", { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["resources"] }),
   });
 }
 
@@ -130,9 +150,11 @@ export const PLURAL_BY_KIND: Record<string, string> = {
   Connection: "connections",
   Trigger: "triggers",
   Campaign: "campaigns",
+  TargetList: "target-lists",
   Gateway: "gateways",
   ModelPolicy: "model-policies",
   Eval: "evals",
+  CloudIdentity: "cloud-identities",
 };
 
 export function resourceRef(r: AppliedResource | string): AppliedResource {

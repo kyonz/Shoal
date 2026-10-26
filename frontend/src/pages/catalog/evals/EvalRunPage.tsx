@@ -27,8 +27,9 @@ import {
   Th,
   Tr,
 } from "@/components/ui";
-import { isMissingEndpoint, isTerminal, pct, useCancelEvalRun, useEvalRun, type Comparison, type EvalResult } from "./api";
+import { isMissingEndpoint, isTerminal, pct, useCancelEvalRun, useCompare, useEvalRun, useEvalRuns, type Comparison, type EvalResult } from "./api";
 import { NewerServerNotice } from "./EvalExtension";
+import { ExportRunButton } from "./Platforms";
 
 function Delta({ value }: { value: number | null | undefined }) {
   if (value == null || !isFinite(value)) return <span className="text-faint">—</span>;
@@ -78,8 +79,16 @@ export default function EvalRunPage() {
   const variantNames = useMemo(() => [...new Set(results.map((x) => x.variant))], [results]);
   const activeVariant = variant || variantNames[0] || "";
   const multi = variantNames.length > 1;
-  const threshold = (evalRes.data?.spec?.threshold as number | undefined) ?? 0.8;
-  const diff: Comparison | undefined = r?.summary?.baseline_diff?.[activeVariant] ?? (multi ? r?.summary?.variant_diff?.[activeVariant] : undefined);
+  // the threshold this run was graded against, even if the eval has changed since
+  const threshold = r?.spec?.threshold ?? (evalRes.data?.spec?.threshold as number | undefined) ?? 0.8;
+  const [compareWith, setCompareWith] = useState("");
+  const others = useEvalRuns(ns, r?.eval_name);
+  const compared = useCompare(r?.id, compareWith || undefined);
+  const comparable = (others.data ?? []).filter((x) => x.id !== r?.id && x.status === "completed");
+  const diff: Comparison | undefined = compareWith
+    ? compared.data?.variants?.[activeVariant] ?? Object.values(compared.data?.variants ?? {})[0]
+    : r?.summary?.baseline_diff?.[activeVariant] ?? (multi ? r?.summary?.variant_diff?.[activeVariant] : undefined);
+  const against = compareWith || r?.baseline_id || "";
   const caseDiff = useMemo(() => Object.fromEntries((diff?.cases ?? []).map((c) => [c.case, c])), [diff]);
   const regressed = new Set(diff?.regressions ?? []);
   const rows = results.filter((x) => !multi || x.variant === activeVariant);
@@ -150,6 +159,8 @@ export default function EvalRunPage() {
             >
               Cancel
             </Button>
+          ) : done && canRun ? (
+            <ExportRunButton ns={ns} runId={r.id} evalSpec={evalRes.data?.spec} />
           ) : null
         }
       />
@@ -223,12 +234,12 @@ export default function EvalRunPage() {
         <Stat label={multi ? `Score · ${activeVariant}` : "Score"} value={pct(vs.score)} sub={`case threshold ${pct(threshold)}`} tone={vs.score != null && vs.score < threshold ? "bad" : "ok"} />
         <Stat label="Cases passed" value={rows.length ? `${nPass}/${rows.length}` : "—"} sub={`pass rate ${pct(vs.pass_rate)}${vs.errors ? ` · ${vs.errors} errors` : ""}`} />
         <Stat
-          label={r.baseline_id ? "vs baseline" : multi ? "vs first variant" : "vs baseline"}
+          label={compareWith ? "vs compared run" : r.baseline_id ? "vs baseline" : multi ? "vs first variant" : "vs baseline"}
           value={<Delta value={diff?.delta} />}
           sub={
-            r.baseline_id ? (
-              <Link className="hover:text-fg" to={nsPath(ns, "eval-runs", r.baseline_id)}>
-                {r.baseline_id.slice(-10)}
+            against ? (
+              <Link className="hover:text-fg" to={nsPath(ns, "eval-runs", against)}>
+                {against.slice(-10)}
                 {diff?.baseline?.workflow_version ? ` · v${diff.baseline.workflow_version}` : ""}
               </Link>
             ) : (
@@ -264,6 +275,16 @@ export default function EvalRunPage() {
           title="Cases"
           actions={
             <div className="flex items-center gap-2">
+              {done && comparable.length > 0 && (
+                <NativeSelect className="h-8 w-56" aria-label="Compare with" value={compareWith} onChange={(e) => setCompareWith(e.target.value)}>
+                  <option value="">{r.baseline_id ? "Compare with baseline" : "Compare with…"}</option>
+                  {comparable.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.id.slice(-8)} · {(x.variants?.length ?? 0) > 1 ? `${x.variants!.length} variants` : `v${x.workflow_version}`} · {pct(x.summary?.score)} · {relTime(x.created_at)}
+                    </option>
+                  ))}
+                </NativeSelect>
+              )}
               {multi && (
                 <NativeSelect className="h-8 w-40" value={activeVariant} onChange={(e) => setVariant(e.target.value)}>
                   {variantNames.map((v) => <option key={v} value={v}>{v}</option>)}
@@ -295,7 +316,7 @@ export default function EvalRunPage() {
                 <Th>Result</Th>
                 <Th className="text-right">Score</Th>
                 {graderNames.map((g) => <Th key={g} className="text-right">{g}</Th>)}
-                {diff && <Th className="text-right">Δ baseline</Th>}
+                {diff && <Th className="text-right">{compareWith ? "Δ compared" : "Δ baseline"}</Th>}
                 <Th className="text-right">Time</Th>
                 <Th className="text-right">Run</Th>
               </tr>
@@ -313,8 +334,8 @@ export default function EvalRunPage() {
                     {graderNames.map((n) => {
                       const g = c.scores?.[n];
                       return (
-                        <Td key={n} className={cn("text-right tabular-nums", g?.passed === false && "text-bad")} title={g?.reason as string | undefined}>
-                          {g ? pct(g.score) : "—"}
+                        <Td key={n} className={cn("text-right tabular-nums", g?.passed === false && "text-bad")} title={graderNote(g)}>
+                          {g ? (g.error ? "error" : pct(g.score)) : "—"}
                         </Td>
                       );
                     })}
@@ -360,8 +381,18 @@ export default function EvalRunPage() {
   );
 }
 
+/** Hover text for a grader cell: its error, or the judge's level and reasoning. */
+function graderNote(g: NonNullable<EvalResult["scores"]>[string] | undefined): string | undefined {
+  if (!g) return undefined;
+  if (typeof g.error === "string") return g.error;
+  const d = (g.detail ?? {}) as { level?: string; reasoning?: string; errors?: string[] };
+  if (d.reasoning) return d.level ? `${d.level}: ${d.reasoning}` : d.reasoning;
+  if (d.errors?.length) return d.errors.join("\n");
+  return undefined;
+}
+
 function CaseResult({ c }: { c: EvalResult }) {
-  if (c.status === "pending" || c.status === "running") return <StatusBadge status={c.status} />;
+  if (c.status === "pending" || c.status === "running" || c.status === "cancelled") return <StatusBadge status={c.status} />;
   if (c.passed)
     return (
       <span className="inline-flex items-center gap-1 text-ok">

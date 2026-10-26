@@ -32,9 +32,17 @@ def names(name: str, title: str | None = None) -> dict[str, str]:
     if not words or not words[0][0].isalpha():
         raise ValueError(f"integration name {name!r} must start with a letter, e.g. 'linear' or 'service-now'")
     snake = "_".join(w.lower() for w in words)
+    kebab = "-".join(w.lower() for w in words)
+    # Most specific first: the integration key is snake_case (a Python identifier and tool-name prefix), but
+    # header names, host names and resource names cannot contain '_', so those take the kebab-case form.
     return {
         "shoal_starter": f"shoal_{snake}",
-        "shoal-starter": "shoal-" + "-".join(w.lower() for w in words),
+        "shoal-starter": f"shoal-{kebab}",
+        "X-Starter-": "X-" + "-".join(w[:1].upper() + w[1:].lower() for w in words) + "-",
+        "x-starter-": f"x-{kebab}-",
+        "starter.example": f"{kebab}.example",
+        "starter-": f"{kebab}-",
+        "-starter": f"-{kebab}",
         "STARTER": snake.upper(),
         "Starter": title or "".join(w[:1].upper() + w[1:] for w in words),
         "starter": snake,

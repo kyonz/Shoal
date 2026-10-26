@@ -1,6 +1,6 @@
 # A script step (Python, no model needed) followed by a human approval.
 #   shoal apply -f examples/shared/sandboxes.yaml -f examples/triage-report/
-#   shoal run triage-report        # then approve the "publish" step on the run page in the UI
+#   shoal run triage-report --wait # then approve "publish" with `shoal approve <run id>` or in the UI
 apiVersion: shoal.dev/v1
 kind: Workflow
 metadata:
@@ -32,4 +32,5 @@ spec:
     - id: done
       type: set
       needs: [publish]
+      if: "{{ steps.publish.output.approved }}"
       values: {published: true}

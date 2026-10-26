@@ -27,8 +27,10 @@ There are two ways to use a remote integration:
   and ``token`` (and any settings the service needs); actions are called as
   ``remote.<action>`` on that connection.
 * **Registered** - an operator registers the service under its own key with
-  :func:`register_remote_integration`; it then appears in the catalogue like
-  a built-in (``linear.create_issue``) and tenants connect to it normally.
+  :func:`register_remote_integration` (or ``SHOAL_REMOTE_INTEGRATIONS``), or
+  a tenant admin registers it for their organisation as a ``CustomIntegration``
+  resource; it then appears in the catalogue like a built-in
+  (``linear.create_issue``) and people connect to it normally.
 """
 
 from __future__ import annotations
@@ -43,8 +45,10 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, create_model
 
 from shoal.integrations.base import (
+    CONNECTION_SCOPES,
     ActionDef,
     ConnectionContext,
+    ConnectionScope,
     EventDef,
     Integration,
     IntegrationError,
@@ -97,6 +101,12 @@ class RemoteManifest(BaseModel):
     webhooks: bool = Field(False, description="The service implements /webhooks/verify and /webhooks/parse.")
     test: bool = Field(False, description="The service implements /test.")
     webhook_instructions: str | None = None
+    auth: str | None = Field(None, description="How people authenticate to the service: token, oauth2, basic, none, ...")
+    connection_scopes: list[ConnectionScope] = Field(
+        default_factory=lambda: list(CONNECTION_SCOPES),
+        min_length=1,
+        description="Where connections may live: org (shared to namespaces) and/or namespace.",
+    )
 
     def action(self, name: str) -> RemoteAction | None:
         return next((a for a in self.actions if a.name == name), None)
@@ -398,6 +408,8 @@ class BoundRemoteIntegration(_RemoteBase):
             "description": m.description,
             "connection_schema": m.connection_schema,
             "secret_fields": list(m.secret_fields),
+            "connection_scopes": list(cls.connection_scopes),
+            "auth": m.auth,
             "actions": [
                 {
                     "name": a.name,
@@ -417,9 +429,21 @@ class BoundRemoteIntegration(_RemoteBase):
 
 
 def bind_remote(
-    manifest: RemoteManifest, url: str, token: str | None = None, *, timeout_seconds: float = 30.0
+    manifest: RemoteManifest,
+    url: str,
+    token: str | None = None,
+    *,
+    timeout_seconds: float = 30.0,
+    key: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    connection_scopes: list[ConnectionScope] | None = None,
 ) -> type[BoundRemoteIntegration]:
-    """Build an Integration class for one remote service from its manifest."""
+    """Build an Integration class for one remote service from its manifest (``key`` etc. override it)."""
+    if key or title or description:
+        manifest = manifest.model_copy(update={
+            "key": key or manifest.key, "title": title or manifest.title, "description": description or manifest.description,
+        })
     fields: dict[str, Any] = {f: (SecretStr | None, None) for f in manifest.secret_fields}
     connection_model = create_model(  # type: ignore[call-overload]
         f"{manifest.key.title().replace('-', '').replace('_', '')}RemoteConnection",
@@ -435,6 +459,7 @@ def bind_remote(
             "description": manifest.description,
             "connection_model": connection_model,
             "events": [EventDef(e.name, e.description, e.example) for e in manifest.events],
+            "connection_scopes": tuple(connection_scopes or manifest.connection_scopes),
             "manifest": manifest,
             "service_url": url.rstrip("/"),
             "service_token": token,

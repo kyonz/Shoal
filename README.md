@@ -72,8 +72,15 @@ Open <http://localhost:8080>. To add workers, run
 
 ### Kubernetes (Helm)
 
+No release image is published yet, so build the image and push it to a registry your cluster can
+pull from, then point the chart at it:
+
 ```sh
+docker build -f deploy/Dockerfile -t registry.example.com/shoal:0.1.0 .
+docker push registry.example.com/shoal:0.1.0
+
 helm install shoal deploy/helm/shoal -n shoal --create-namespace \
+  --set image.repository=registry.example.com/shoal --set image.tag=0.1.0 \
   --set config.publicUrl=https://shoal.example.com \
   --set ingress.enabled=true --set ingress.hosts[0].host=shoal.example.com \
   --set-json 'ingress.hosts[0].paths=[{"path":"/","pathType":"Prefix"}]'
@@ -176,10 +183,10 @@ approve the result:
 
 ```sh
 shoal apply -f examples/shared/sandboxes.yaml -f examples/triage-report/
-shoal run triage-report
+shoal run triage-report --wait     # prints the command to approve it: shoal approve <run id>
 ```
 
-Open the run in the UI to watch it live and approve it:
+Or open the run in the UI to watch it live and approve it there:
 
 <p align="center">
   <img src="docs/assets/screenshots/run-viewer.png" alt="A run waiting for approval in the Shoal run viewer" width="820">
@@ -188,7 +195,9 @@ Open the run in the UI to watch it live and approve it:
 **4. Bring in agents.** Set `ANTHROPIC_API_KEY` on the server, or store a key as a secret and add a
 gateway as in [`examples/shared/gateways.yaml`](examples/shared/gateways.yaml). Then try the full journeys: [`examples/jira-bugfix`](examples/jira-bugfix) turns a Jira ticket into a
 tested pull request, and [`examples/github-uplift`](examples/github-uplift) rolls a change out to
-every repository in a GitHub org. Both are in the UI's **Blueprints** catalogue, ready to install.
+every repository in a GitHub org. Both are in the UI's **Blueprints** catalogue, ready to install, next to
+Shoal's other [bundled blueprints](docs/blueprints/bundled.md): GitHub PR review, Slack bots and release approvals,
+a weekly AWS account report and a production quality eval.
 
 ## What a workflow looks like
 
@@ -214,7 +223,7 @@ spec:
       outputs:
         branch: {type: string}
     - id: review
-      type: approval                        # a durable human-in-the-loop gate
+      type: approval                        # a durable human-in-the-loop gate; rejecting stops the run
       message: "Open a PR for {{ steps.fix.output.branch }}?"
     - id: pr
       type: action
@@ -231,24 +240,25 @@ on the visual canvas. All three produce the same versioned resources.
 ## Features
 
 ### Workflows and runs
-- **Step types:** `agent`, `action`, `script`, `wait`, `approval`, `decide`, `grade`, `set` and `workflow` (sub-workflows, with `for_each` fan-out). Every step takes `if`, `retry`, `timeout`, `on_error`, and `needs` for parallel branches.
-- **Script steps** run deterministic work as code in Python, Node or shell, with typed inputs and validated outputs. Use them for glue that doesn't need a model: it's faster, cheaper and repeatable.
-- **Signals** send data into a running workflow from the API, the CLI (`shoal signal`) or a signed callback URL, so external systems can reply to a run that is waiting on them.
+- **Step types:** `agent`, `action`, `script`, `wait`, `approval`, `decide`, `grade`, `set` and `workflow` (sub-workflows, with `for_each` fan-out). Every step takes `if`, `retry`, `timeout`, `on_error`, and `needs` for parallel branches ([guide](docs/workflows/README.md)).
+- **Script steps** run deterministic work as code in Python, Node or shell, with typed inputs and validated outputs. Use them for glue that doesn't need a model: it's faster, cheaper and repeatable ([guide](docs/workflows/script-steps.md)).
+- **Signals** send data into a running workflow from the API, the CLI (`shoal signal`) or a signed callback URL, so external systems can reply to a run that is waiting on them ([guide](docs/runs/signals.md)).
 - **Durable executor** on Postgres: runs survive restarts and wait for days with no extra infrastructure. Database migrations run automatically. If you already operate Temporal, Shoal can use it to drive runs instead ([guide](docs/temporal.md)).
-- **Versioning** with change notes, diffs, rollback and pinned versions, and a live run viewer that streams every event.
+- **Versioning** with change notes, diffs, rollback and pinned versions, and a live run viewer that streams every event ([runs](docs/runs/README.md)).
 
 ### Agents
-- An **agent** is a model, a system prompt, skills (`SKILL.md`), tools, sub-agents, a sandbox profile and limits on turns, tokens, time and cost.
+- An **agent** is a model, a system prompt, skills (`SKILL.md`), tools, sub-agents, a sandbox profile and limits on turns, tokens, time and cost ([guide](docs/agents/README.md)).
 - Run agents on Shoal's own tool-use loop, as an external coding agent CLI inside the sandbox, or as a remote agent over **A2A**. Workflows can be published as A2A agents too.
-- **LLM gateways and model policies** are managed centrally per tenant: Anthropic and OpenAI-compatible APIs, directly or through LiteLLM, Portkey, OpenRouter and others, without clear-text credentials.
+- **LLM gateways and model policies** are managed centrally per tenant: Anthropic and OpenAI-compatible APIs, directly or through LiteLLM, Portkey, OpenRouter and others, without clear-text credentials ([guide](docs/agents/gateways.md)).
 - **MCP servers as tools:** connect any MCP server and its tools become workflow actions and agent tools.
-- **Cloud identities:** grant workflows and agents AWS IAM roles. Each step gets short-lived STS credentials through Shoal's own OIDC issuer or the deployment's role, with no stored cloud secrets, and every session is tagged with who started the run.
+- **Cloud identities:** grant workflows and agents AWS IAM roles. Each step gets short-lived STS credentials through Shoal's own OIDC issuer or the deployment's role, with no stored cloud secrets, and every session is tagged with who started the run ([guide](docs/cloud-identities.md)).
 - **Delegated credentials and workload identity**, so agents act with exactly the access the run allows.
 
 ### Sandboxes
 Every agent and script step runs in a sandbox: `local`, `docker`, `kubernetes`, `e2b`, Perplexity
 `space` (which suspends and wakes during long waits) or any provider that speaks the remote sandbox
-protocol. Sandbox profiles are per namespace, so one team can run on Kubernetes while another uses E2B.
+protocol. Sandbox profiles are per namespace, so one team can run on Kubernetes while another uses E2B
+([guide](docs/agents/sandboxes.md)).
 
 Everything above is a plugin: integrations, model providers, sandboxes, secret backends, eval sinks,
 decision providers, agent runtimes, cloud credential providers and skill sources all follow one pattern (a base
@@ -256,22 +266,24 @@ class, an entry point and a contract test), so new ones install without engine c
 ([guide](docs/plugins.md)).
 
 ### Integrations, campaigns and blueprints
-- **GitHub, Jira, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries. Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
+- **GitHub, Jira, Slack, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries ([GitHub](docs/github/README.md), [Jira](docs/jira/README.md) (its triggers can [register their own webhooks](docs/jira/webhooks.md)), [triggers](docs/runs/triggers.md)). Approvals and questions can go to Slack with buttons and forms, custom Block Kit messages can resume the run that posted them, and a channel can be wired to a workflow as a bot ([Slack guide](docs/slack/README.md)). Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
 - **Claude Code agents:** run Claude Code headless (`claude -p`) in a sandbox, with its events streamed into the run, on an API key or on each person's own Claude subscription, linked by signing in from the UI ([guide](docs/claude-code.md)).
-- **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes.
+- **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes ([guide](docs/connections/README.md#personal-credentials)).
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
-- **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking.
-- **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue.
+- **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking ([guide](docs/runs/campaigns.md)).
+- **Target lists** name a set of targets once (the repos a team owns), so campaigns can run over just those and trigger filters can check against them ([guide](docs/runs/campaigns.md#target-lists)).
+- **Blueprints** package workflows, agents and triggers so other teams can install and wire them up from the catalogue ([guide](docs/blueprints/README.md)). Every tenant starts with [Shoal's own](docs/blueprints/bundled.md) for the common scenarios.
 
 ### Quality
-- **Evals** score workflows against datasets, gate CI on regressions (`shoal eval run --fail-under`) and export results to Braintrust or Langfuse.
-- **Decisions and grading:** `decide` steps ask a model typed questions and branch on the answer and its confidence; `grade` steps score output against a rubric.
+- **Evals** score workflows against datasets, gate CI on regressions (`shoal eval run --fail-under`) and export results to Braintrust or Langfuse ([guide](docs/evals/README.md)).
+- **Decisions and grading:** `decide` steps ask a model typed questions and branch on the answer and its confidence; `grade` steps score output against a rubric ([guide](docs/agents/decisions.md)).
 
 ### The web UI
 A visual workflow builder, a live run viewer with approvals, integrations and connections, campaigns,
 the blueprint catalogue, an admin console, and built-in docs that always match the running version.
 An **assistant** (⌘J) on every page sets up workflows, triggers and campaigns, writes script steps
-and explains failed runs. It acts with your permissions, and you approve every change.
+and explains failed runs. It acts with your permissions, and you approve every change
+([guide](docs/assistant/README.md)).
 
 <table>
   <tr>
@@ -285,28 +297,44 @@ and explains failed runs. It acts with your permissions, and you approve every c
 </table>
 
 ### Governance
-- **Hard multi-tenancy** with namespaces, roles and bindings, users, groups and service accounts, OIDC single sign-on and SCIM provisioning.
+- **Hard multi-tenancy** with namespaces, roles and bindings, users, groups and service accounts, OIDC single sign-on and SCIM provisioning ([admin guide](docs/administration/README.md), [tenants](docs/administration/tenants.md)).
 - **Initiator attribution:** every run records who started it, and actions in external systems can run with that person's authority.
-- **Federation:** link tenants on separate deployments to a hub, so one organisation can see and run work across them (`shoal federation`).
-- Encrypted, write-only secrets and an audit log of every change.
+- **Federation:** link tenants on separate deployments to a hub, so one organisation can see and run work across them ([guide](docs/administration/federation.md)).
+- Encrypted, write-only [secrets](docs/connections/README.md#secrets) and an [audit log](docs/administration/README.md#audit-log) of every change.
 
 ### Operations
 One container image for the API, workers and CLI; docker compose and a Helm chart; Prometheus
-metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs`.
+metrics; health checks; and an OpenAPI spec with interactive docs at `/v1/docs` ([guide](docs/operations/README.md)).
 
 ## Documentation
 
+Every guide is also built into the web UI under **Docs**. Start at the [documentation index](docs/README.md).
+
 | Read | For |
 |---|---|
-| [Architecture](docs/architecture.md) | Concepts, the runtime, plugin contracts and the API surface |
-| [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
-| [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
-| [Skills](docs/skills.md) | Importing skills from marketplaces and keeping them up to date |
+| [Workflows](docs/workflows/README.md) | Writing workflows: [steps](docs/workflows/steps.md), [expressions](docs/workflows/expressions.md), [script steps](docs/workflows/script-steps.md), the [visual builder](docs/workflows/builder.md) and [versions](docs/workflows/versions.md) |
+| [Runs](docs/runs/README.md) | Following runs, [triggers](docs/runs/triggers.md), [approvals](docs/runs/approvals.md), [signals and waits](docs/runs/signals.md) and [campaigns and target lists](docs/runs/campaigns.md) |
+| [Agents](docs/agents/README.md) | Agents, tools and runtimes, [gateways and model policies](docs/agents/gateways.md), [decisions](docs/agents/decisions.md) and [sandboxes](docs/agents/sandboxes.md) |
 | [Claude Code agents](docs/claude-code.md) | Running Claude Code headless on an API key or each person's own Claude plan |
-| [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
+| [GitHub](docs/github/README.md) | Setting up GitHub, PR triggers, actions, and [attribution and merge governance](docs/github/attribution.md) |
+| [Jira](docs/jira/README.md) | Setting up Jira, issue triggers, actions and the bugfix journey |
+| [Slack](docs/slack/README.md) | Setting up Slack, approvals, interactive messages, channel bots and slash commands |
+| [Connections and secrets](docs/connections/README.md) | Connections, secrets, organisation connections and personal credentials |
+| [Cloud identities](docs/cloud-identities.md) | Short-lived AWS credentials for steps, without stored keys |
+| [Blueprints](docs/blueprints/README.md) | The catalogue, adopting and upgrading, publishing, and the [bundled blueprints](docs/blueprints/bundled.md) |
+| [Skills](docs/skills.md) | Skills, and importing them from marketplaces |
+| [Evals](docs/evals/README.md) | Scoring workflows, CI gates and eval platforms |
+| [Assistant](docs/assistant/README.md) | The in-app assistant |
+| [Administration](docs/administration/README.md) | The admin console, [access, sign-in and API keys](docs/administration/access.md), the audit log, [tenants](docs/administration/tenants.md) and [federation](docs/administration/federation.md) |
+| [Operations](docs/operations/README.md) | Workers, leases, scaling, health, metrics and settings |
 | [Deploying](deploy/README.md) | Container image, docker compose and Kubernetes |
+| [Scaling](docs/scaling.md) | Connection pooling, worker lanes, gateway limits and tenant quotas for busy deployments |
 | [Temporal](docs/temporal.md) | Driving runs with a Temporal cluster you already operate |
+| [CLI](docs/cli.md) | Connecting, applying resources, runs, signals, secrets, evals |
 | [Terraform provider](terraform-provider/docs/index.md) | Managing Shoal as code |
+| [Integrations](docs/integrations.md) | Building integrations with the SDK or the remote protocol |
+| [Plugins](docs/plugins.md) | Adding model providers, sandboxes, secret backends, eval sinks and other plugins, with contract tests |
+| [Architecture](docs/architecture.md) | Concepts, the runtime, plugin contracts and the API surface |
 | [Web UI](frontend/README.md) | Developing the frontend |
 | [Brand](docs/brand.md) | Logo, colours and how to use them |
 
@@ -317,7 +345,7 @@ engine/               Python engine: library, API server, worker and the `shoal`
 frontend/             React + TypeScript web UI
 terraform-provider/   Terraform provider for every Shoal resource
 deploy/               Dockerfile, docker compose and Helm chart
-examples/             Workflows, agents, triggers, campaigns and blueprints to start from
+examples/             Workflows, agents, triggers and campaigns to start from
 templates/            Starter project for a new integration
 scripts/              check.sh: build and test everything locally
 docs/                 Architecture and guides

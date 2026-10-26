@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from shoal.agents.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderUnavailable
+from shoal.agents.providers.base import (
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ProviderUnavailable,
+    retry_after_seconds,
+)
 
 if TYPE_CHECKING:
     from shoal.engine import Engine
@@ -75,12 +81,23 @@ def from_openai_message(message: dict[str, Any]) -> list[dict[str, Any]]:
 
 class OpenAICompatibleProvider(ModelProvider):
     name = "openai-compatible"
+    description = "Any OpenAI-compatible Chat Completions API: LiteLLM, Portkey, OpenRouter, vLLM, Ollama, ..."
 
     def __init__(self) -> None:
         self.transport: httpx.AsyncBaseTransport | None = None
+        self._client: httpx.AsyncClient | None = None
 
     def setup(self, engine: Engine) -> None:
         self.transport = engine.http_transport
+        self._client = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """One pooled client per process, so model calls reuse connections instead of a TLS handshake each."""
+        if self._client is None or self._client.is_closed:
+            limits = httpx.Limits(max_connections=None, max_keepalive_connections=100)
+            self._client = httpx.AsyncClient(timeout=600, transport=self.transport, limits=limits)
+        return self._client
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         cfg = request.config
@@ -101,12 +118,13 @@ class OpenAICompatibleProvider(ModelProvider):
                 for t in request.tools
             ]
         try:
-            async with httpx.AsyncClient(timeout=600, transport=self.transport) as client:
-                response = await client.post(f"{cfg['base_url'].rstrip('/')}/chat/completions", json=body, headers=headers)
+            response = await self.client.post(f"{cfg['base_url'].rstrip('/')}/chat/completions", json=body, headers=headers)
         except httpx.TransportError as exc:
             raise ProviderUnavailable(str(exc)) from exc
         if response.status_code == 429 or response.status_code >= 500:
-            raise ProviderUnavailable(f"{response.status_code}: {response.text[:500]}")
+            raise ProviderUnavailable(
+                f"{response.status_code}: {response.text[:500]}", retry_after=retry_after_seconds(response.headers)
+            )
         response.raise_for_status()
         data = response.json()
         choice = data["choices"][0]

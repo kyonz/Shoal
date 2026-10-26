@@ -38,6 +38,15 @@ export default function Login() {
     retry: false,
   });
 
+  // The instance-wide sign-in, when this deployment has one: sign in once for every tenant you belong to.
+  const instanceSso = useQuery({
+    queryKey: ["login-providers", "instance"],
+    queryFn: () => unwrap(client.GET("/v1/auth/providers", { params: { query: {} } })),
+    retry: false,
+    staleTime: Infinity,
+  });
+  const instanceProvider = instanceSso.data?.[0];
+
   if (signedIn) return <Navigate to={next} replace />;
 
   const startSso = (loginUrl: string) => {
@@ -76,6 +85,18 @@ export default function Login() {
           {callbackError && <ErrorNotice className="mb-4" error={`Sign-in failed: ${callbackError}`} />}
           {mode === "sso" ? (
             <div className="space-y-4">
+              {instanceProvider && (
+                <>
+                  <Button variant="primary" className="w-full justify-center" size="md" icon={<LogIn className="size-4" />} onClick={() => startSso(instanceProvider.login_url)}>
+                    Sign in with {instanceProvider.display_name}
+                  </Button>
+                  <div className="flex items-center gap-3 text-[11px] text-faint uppercase">
+                    <span className="h-px flex-1 bg-border" />
+                    or use your organisation's sign-in
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                </>
+              )}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -90,7 +111,7 @@ export default function Login() {
               >
                 <Field label="Organisation" description="Your tenant's short name, e.g. acme.">
                   <div className="flex gap-2">
-                    <Input autoFocus value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="acme" autoComplete="organization" />
+                    <Input autoFocus={!instanceProvider} value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="acme" autoComplete="organization" />
                     <Button type="submit" variant="secondary" icon={<ArrowRight className="size-4" />} aria-label="Continue" />
                   </div>
                 </Field>
@@ -109,7 +130,7 @@ export default function Login() {
                     </p>
                   )}
                   {providers.data.map((p) => (
-                    <Button key={p.name} variant="primary" className="w-full justify-center" size="md" icon={<LogIn className="size-4" />} onClick={() => startSso(p.login_url)}>
+                    <Button key={p.name} variant={instanceProvider ? "secondary" : "primary"} className="w-full justify-center" size="md" icon={<LogIn className="size-4" />} onClick={() => startSso(p.login_url)}>
                       Continue with {p.display_name}
                     </Button>
                   ))}

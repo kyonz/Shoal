@@ -10,12 +10,13 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
+from shoal.campaigns.target_lists import referenced_lists
 from shoal.core import clock
 from shoal.core.errors import NotFound
 from shoal.core.expressions import ExpressionError, render, truthy
 from shoal.core.ids import new_id
 from shoal.core.models import RunStatus, Trigger
-from shoal.core.scope import current_namespace, use_namespace
+from shoal.core.scope import SHARED_NAMESPACE, current_namespace, use_namespace
 from shoal.integrations.base import IntegrationEvent
 from shoal.store import tables as t
 
@@ -47,10 +48,17 @@ class TriggerService:
 
     # ------------------------------------------------------------------ evaluation
 
-    def evaluate(self, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
-        """Dry-run a trigger against an event: does it match, and with which inputs?"""
+    def evaluate(
+        self, trigger: Trigger, event: IntegrationEvent, lists: dict[str, list[str]] | None = None
+    ) -> dict[str, Any]:
+        """Dry-run a trigger against an event: does it match, and with which inputs?
+
+        ``lists`` holds the keys of the target lists the trigger's expressions name (see :meth:`check`).
+        """
         spec = trigger.spec
-        ctx = {"event": event.data, "event_type": event.type, "trigger": {"name": trigger.metadata.name}}
+        ctx = {
+            "event": event.data, "event_type": event.type, "trigger": {"name": trigger.metadata.name}, "lists": lists or {},
+        }
         if not fnmatch.fnmatch(event.type, spec.event):
             return {"matched": False, "reason": f"event type '{event.type}' does not match '{spec.event}'"}
         try:
@@ -61,6 +69,51 @@ class TriggerService:
         except ExpressionError as exc:
             return {"matched": False, "reason": f"expression error: {exc}", "error": True}
         return {"matched": True, "inputs": inputs, "dedupe_key": None if dedupe is None else str(dedupe)}
+
+    async def check(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
+        """:meth:`evaluate`, with the target lists the trigger's expressions name loaded first."""
+        spec = trigger.spec
+        names = referenced_lists([spec.filter, spec.inputs, spec.dedupe_key])
+        lists: dict[str, list[str]] = {}
+        if names and fnmatch.fnmatch(event.type, spec.event):
+            try:
+                lists = await self.engine.target_lists.keys(tenant_id, names)
+            except Exception as exc:
+                return {"matched": False, "reason": f"target list error: {exc}", "error": True}
+        return self.evaluate(trigger, event, lists)
+
+    async def integration_match(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> str | None:
+        """The connection integration's structured filters (``match``); None when the event passes."""
+        assert trigger.spec.connection is not None
+        try:
+            ctx = await self.engine.integrations.connection(tenant_id, trigger.spec.connection)
+        except NotFound:  # an injected or replayed event for a connection that is gone: only `match` needs it
+            return f"invalid match: connection '{trigger.spec.connection}' not found" if trigger.spec.match else None
+        model = ctx.integration.trigger_filter_model
+        options = None
+        if model is not None:
+            try:
+                options = model.model_validate(trigger.spec.match)
+            except ValueError as exc:
+                return f"invalid match: {exc}"
+        elif trigger.spec.match:
+            return f"invalid match: {ctx.integration.title} triggers take no `match` filters"
+        return await ctx.integration.trigger_matches(ctx, event, options)
+
+    async def _rate_limited(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent, delivery: t.TriggerDelivery) -> bool:
+        """Whether the trigger's rate limit is spent; records the rate key on the delivery."""
+        limit = trigger.spec.rate_limit
+        if limit is None:
+            return False
+        key = None
+        if limit.key:
+            key = str(render(limit.key, {"event": event.data, "event_type": event.type}))
+            delivery.detail = {**delivery.detail, "rate_key": key}
+        since = clock.now() - limit.per
+        recent = await self.engine.store.recent_deliveries(
+            tenant_id, current_namespace(), trigger.metadata.name, since=since, status="fired"
+        )
+        return sum(1 for d in recent if (d.detail or {}).get("rate_key") == key) >= limit.max
 
     async def _initiator(self, tenant_id: str, trigger: Trigger, event: IntegrationEvent) -> dict[str, Any]:
         """The person behind an event; for schedules and manual fires, whoever last changed the trigger."""
@@ -100,6 +153,8 @@ class TriggerService:
             spec = trigger.spec
             if not spec.enabled or spec.event == "schedule" or spec.connection != connection:
                 continue
+            if spec.webhook is not None:
+                continue  # registered triggers fire only from deliveries to their own URL (dispatch_registered)
             with use_namespace(row.namespace):
                 if connection_namespace is not None:
                     try:
@@ -108,11 +163,46 @@ class TriggerService:
                         conn_row = None
                     if conn_row is not None and conn_row.namespace != connection_namespace:
                         continue
-                outcome = self.evaluate(trigger, event)
+                    if conn_row is None and connection_namespace == SHARED_NAMESPACE and not await self._shared_with(
+                        tenant_id, connection, row.namespace
+                    ):
+                        continue  # an organisation connection that is not shared with this namespace
+                outcome = await self.check(tenant_id, trigger, event)
+                if outcome["matched"]:
+                    reason = await self.integration_match(tenant_id, trigger, event)
+                    if reason is not None:
+                        outcome = {"matched": False, "reason": reason, "error": reason.startswith("invalid match")}
                 if not outcome["matched"] and not outcome.get("error"):
                     continue
                 fired.append({**await self._fire(tenant_id, trigger, event, outcome), "namespace": row.namespace})
         return fired
+
+    async def _shared_with(self, tenant_id: str, connection: str, namespace: str) -> bool:
+        try:
+            shared = await self.engine.store.get_resource_row(
+                tenant_id, "Connection", connection, namespace=SHARED_NAMESPACE, fallback=False
+            )
+        except NotFound:
+            return True
+        allowed = (shared.document.get("spec") or {}).get("namespaces") or []
+        return not allowed or namespace in allowed
+
+    async def dispatch_registered(
+        self, tenant_id: str, namespace: str, trigger_name: str, event: IntegrationEvent, matches: bool = True
+    ) -> list[dict[str, Any]]:
+        """Fire the one trigger a registered webhook belongs to; ``matches`` is the integration's own check."""
+        with use_namespace(namespace):
+            try:
+                row = await self.engine.store.get_resource_row(tenant_id, "Trigger", trigger_name, namespace=namespace, fallback=False)
+            except NotFound:
+                return []
+            trigger = Trigger.model_validate(row.document)
+            if not trigger.spec.enabled or not matches:
+                return []
+            outcome = self.evaluate(trigger, event)
+            if not outcome["matched"] and not outcome.get("error"):
+                return []
+            return [{**await self._fire(tenant_id, trigger, event, outcome), "namespace": namespace}]
 
     async def _fire(
         self, tenant_id: str, trigger: Trigger, event: IntegrationEvent, outcome: dict[str, Any]
@@ -134,6 +224,10 @@ class TriggerService:
             delivery.detail["reason"] = outcome["reason"]
             await store.record_delivery(delivery)
             return {"trigger": name, "status": "error", "reason": outcome["reason"]}
+        if await self._rate_limited(tenant_id, trigger, event, delivery):
+            delivery.status, delivery.dedupe_key = "rate_limited", None
+            await store.record_delivery(delivery)
+            return {"trigger": name, "status": "rate_limited"}
         if not await store.record_delivery(delivery):
             return {"trigger": name, "status": "duplicate", "dedupe_key": delivery.dedupe_key}
 
@@ -152,7 +246,8 @@ class TriggerService:
             await store.update_delivery(delivery.id, detail=delivery.detail)
         if spec.overlap == "skip" and spec.workflow:
             active = await store.count_runs(
-                tenant_id, statuses=[RunStatus.pending, RunStatus.running, RunStatus.waiting], trigger_name=name
+                tenant_id, statuses=[RunStatus.pending, RunStatus.running, RunStatus.waiting], trigger_name=name,
+                namespace=current_namespace(),
             )
             if active:
                 await store.update_delivery(delivery.id, status="skipped", detail={**delivery.detail, "reason": "previous run still active"})
@@ -193,7 +288,7 @@ class TriggerService:
             id=new_id("evt"),
             data=data or {},
         )
-        outcome = self.evaluate(resource, event)
+        outcome = await self.check(tenant_id, resource, event)
         if not outcome["matched"]:
             return {"trigger": trigger_name, "status": "filtered", "reason": outcome["reason"]}
         return await self._fire(tenant_id, resource, event, outcome)
@@ -218,9 +313,14 @@ class TriggerService:
             if state.next_fire_at is not None:
                 await self.engine.store.set_trigger_next(state.id, None)
             return 0
-        if state.next_fire_at is None:
-            await self.engine.store.set_trigger_next(state.id, next_fire(spec.schedule, spec.timezone, now))
+        # A changed cron or time zone reschedules; the old next fire time belongs to the old schedule.
+        schedule = f"{spec.schedule} {spec.timezone}"
+        scheduled = (state.cursor or {}).get("schedule")
+        if state.next_fire_at is None or (scheduled is not None and scheduled != schedule):
+            await self.engine.store.set_trigger_next(state.id, next_fire(spec.schedule, spec.timezone, now), schedule=schedule)
             return 0
+        if scheduled is None:  # state from before schedules were recorded
+            await self.engine.store.set_trigger_next(state.id, state.next_fire_at, schedule=schedule)
         if state.next_fire_at > now:
             return 0
         upcoming = next_fire(spec.schedule, spec.timezone, now)
@@ -231,7 +331,7 @@ class TriggerService:
             id=f"{trigger.metadata.name}:{state.next_fire_at.isoformat()}",
             data={"scheduled_at": state.next_fire_at.isoformat(), "fired_at": now.isoformat(), "next_at": upcoming.isoformat()},
         )
-        outcome = self.evaluate(trigger, event)
+        outcome = await self.check(row.tenant_id, trigger, event)
         if not (outcome["matched"] or outcome.get("error")):
             return 0
         if outcome.get("dedupe_key") is None:

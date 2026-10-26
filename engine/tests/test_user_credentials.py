@@ -112,6 +112,19 @@ async def test_per_user_credential_waits_then_resumes(world):
     assert (await dana.get("/v1/me/credentials")).json() == []
 
 
+async def test_personal_credentials_need_access_to_the_namespace(world):
+    engine, tenant, admin, client = world
+    await engine.store.ensure_namespace(tenant, "secret-team")
+    await engine.store.apply_resource(tenant, doc("Connection", "echo", {
+        "integration": "echo", "secrets": {"token": "team-token"}, "credentials": "per_user"}), namespace="secret-team")
+    r = await admin.post("/v1/users", json={"username": "gil"})
+    await admin.post("/v1/role-bindings", json={"role": "editor", "subject_kind": "user", "subject_id": r.json()["id"], "namespace": "default"})
+    _, token = await engine.store.create_api_key(tenant, "gil-key", ["*"], owner_id=r.json()["id"])
+    gil = client(token)
+    assert (await gil.put("/v1/me/credentials/secret-team/echo", json={"values": {"token": "x"}})).status_code == 403
+    assert (await gil.post("/v1/me/credentials/secret-team/echo/oauth")).status_code == 403
+
+
 async def test_per_user_or_shared_falls_back(world):
     engine, tenant, admin, client = world
     await engine.store.apply_resource(tenant, doc("Connection", "echo", {
@@ -157,6 +170,17 @@ async def test_oauth_connect_and_refresh(world):
     r = await fay.get("/v1/oauth/callback", params={"code": "the-code", "state": query["state"][0]})
     assert r.status_code == 303 and "connected=default/echo" in r.headers["location"]
     assert (await fay.get("/v1/oauth/callback", params={"code": "x", "state": "forged"})).status_code == 401
+
+    # Fay's authorize link opened in someone else's browser must not file their account under Fay.
+    url = (await fay.post("/v1/me/credentials/default/echo/oauth")).json()["authorize_url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    victim = client("unused")
+    del victim.headers["Authorization"]
+    r = await victim.get("/v1/oauth/callback", params={"code": "the-code", "state": state})
+    assert r.status_code == 303 and "error=sign_in_required" in r.headers["location"]
+    assert issued == ["authorization_code"]  # the victim's code was never exchanged
+    refused = (await admin.get("/v1/audit", params={"action": "credential.oauth_refused"})).json()["items"]
+    assert refused and refused[0]["actor"] == "user:fay"
 
     run_id = await _run(engine, tenant, "user:fay")
     assert (await engine.store.get_step(run_id, "call")).output["token"] == "at-1"

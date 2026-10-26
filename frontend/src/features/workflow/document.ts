@@ -57,23 +57,44 @@ export function parseWorkflowYaml(text: string): ParsedWorkflow {
 }
 
 const DEFAULT_RETRY = { max_attempts: 1, backoff: "10s", backoff_factor: 2, max_backoff: "1h" };
+const STEP_DEFAULTS: [string, (v: unknown) => boolean][] = [
+  ["retry", (v) => JSON.stringify(v) === JSON.stringify(DEFAULT_RETRY)],
+  ["on_error", (v) => v === "fail"],
+  ["fail_on_error", (v) => v === true],
+];
 
-/** Remove server-filled defaults so version diffs show real changes only. */
-export function normalizeForDiff(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeForDiff);
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      if (k === "retry" && JSON.stringify(v) === JSON.stringify(DEFAULT_RETRY)) continue;
-      if (k === "on_error" && v === "fail") continue;
-      if (k === "fail_on_error" && v === true) continue;
-      if (["created_at", "updated_at", "version", "updated_by", "namespace", "annotations"].includes(k)) continue;
-      const n = normalizeForDiff(v);
-      if (n && typeof n === "object" && !Array.isArray(n) && !Object.keys(n).length) continue;
-      if (Array.isArray(n) && !n.length) continue;
-      out[k] = n;
-    }
+/**
+ * Drop the step defaults the server fills in, for versions saved before the
+ * API kept what was written. Only those exact keys on steps are touched:
+ * everything else (including empty lists such as `needs: []`) is meaningful.
+ */
+export function stripServerDefaults(spec: WorkflowSpecDoc): WorkflowSpecDoc {
+  const steps = (spec.steps ?? []).map((step) => {
+    const out: StepDoc = { ...step };
+    for (const [key, isDefault] of STEP_DEFAULTS) if (key in out && isDefault(out[key])) delete out[key];
     return out;
+  });
+  return { ...spec, steps };
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * `value` with its object keys in the order `like` uses (unknown keys last), and
+ * list items matched by `id` where they have one, so a diff against `like`
+ * shows changes rather than differences in key order.
+ */
+export function alignKeys(value: unknown, like: unknown): unknown {
+  if (Array.isArray(value)) {
+    const other = Array.isArray(like) ? like : [];
+    return value.map((item, i) => {
+      const id = isRecord(item) ? item.id : undefined;
+      const match = id !== undefined ? other.find((o) => isRecord(o) && o.id === id) : other[i];
+      return alignKeys(item, match);
+    });
   }
-  return value;
+  if (!isRecord(value)) return value;
+  const ref = isRecord(like) ? like : {};
+  const keys = [...Object.keys(ref).filter((k) => k in value), ...Object.keys(value).filter((k) => !(k in ref))];
+  return Object.fromEntries(keys.map((k) => [k, alignKeys(value[k], ref[k])]));
 }

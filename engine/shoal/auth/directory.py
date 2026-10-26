@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+import functools
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, TypeVar
 
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,21 @@ from shoal.store.store import Store
 from shoal.store.tables import utcnow
 
 HUB_SUBJECT_KINDS = ("hub_user", "hub_group")
+
+_F = TypeVar("_F", bound=Callable[..., Awaitable[Any]])
+
+
+def _changes_auth(fn: _F) -> _F:
+    """Mark a method that changes who may do what: cached principals in this process are dropped after it."""
+
+    @functools.wraps(fn)
+    async def wrapper(self: Directory, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await fn(self, *args, **kwargs)
+        finally:
+            self.store.auth_changed()
+
+    return wrapper  # type: ignore[return-value]
 
 
 class Directory:
@@ -90,22 +106,37 @@ class Directory:
             rows = (await s.execute(q.order_by(t.User.username).offset(offset).limit(limit))).scalars().all()
         return rows, total
 
+    @_changes_auth
     async def update_user(self, tenant_id: str, user_id: str, **values: Any) -> t.User:
-        await self.get_user(tenant_id, user_id)
+        user = await self.get_user(tenant_id, user_id)
         values["updated_at"] = utcnow()
+        renamed = user.kind == "user" and values.get("username") not in (None, user.username)
         async with self.session() as s:
             await s.execute(update(t.User).where(t.User.id == user_id).values(**values))
+            if renamed:  # personal credentials are keyed by actor; they follow the person
+                await s.execute(
+                    update(t.UserCredential)
+                    .where(t.UserCredential.tenant_id == tenant_id, t.UserCredential.owner == f"user:{user.username}")
+                    .values(owner=f"user:{values['username']}")
+                )
         if values.get("active") is False:
             await self._revoke_keys_of(tenant_id, user_id)
         return await self.get_user(tenant_id, user_id)
 
+    @_changes_auth
     async def delete_user(self, tenant_id: str, user_id: str) -> None:
-        await self.get_user(tenant_id, user_id)
+        user = await self.get_user(tenant_id, user_id)
         await self._revoke_keys_of(tenant_id, user_id)
         async with self.session() as s:
             await s.execute(delete(t.RoleBinding).where(t.RoleBinding.subject_kind == "user", t.RoleBinding.subject_id == user_id))
+            await s.execute(delete(t.GroupMember).where(t.GroupMember.user_id == user_id))
+            if user.kind == "user":  # so a later user with the same username does not inherit them
+                await s.execute(
+                    delete(t.UserCredential).where(t.UserCredential.tenant_id == tenant_id, t.UserCredential.owner == f"user:{user.username}")
+                )
             await s.execute(delete(t.User).where(t.User.id == user_id))
 
+    @_changes_auth
     async def _revoke_keys_of(self, tenant_id: str, user_id: str) -> None:
         async with self.session() as s:
             await s.execute(
@@ -148,6 +179,7 @@ class Directory:
             rows = (await s.execute(q.order_by(t.Group.display_name).offset(offset).limit(limit))).scalars().all()
         return rows, total
 
+    @_changes_auth
     async def update_group(self, tenant_id: str, group_id: str, **values: Any) -> t.Group:
         await self.get_group(tenant_id, group_id)
         values["updated_at"] = utcnow()
@@ -155,6 +187,7 @@ class Directory:
             await s.execute(update(t.Group).where(t.Group.id == group_id).values(**values))
         return await self.get_group(tenant_id, group_id)
 
+    @_changes_auth
     async def delete_group(self, tenant_id: str, group_id: str) -> None:
         await self.get_group(tenant_id, group_id)
         async with self.session() as s:
@@ -167,17 +200,35 @@ class Directory:
             q = select(t.GroupMember.user_id).where(t.GroupMember.group_id == group_id)
             return list((await s.execute(q)).scalars().all())
 
-    async def set_group_members(self, tenant_id: str, group_id: str, user_ids: list[str]) -> None:
+    async def check_members(self, tenant_id: str, user_ids: list[str], kind: str | None) -> None:
+        """Every id must be a user (of ``kind``, when given) in this tenant."""
+        wanted = set(user_ids)
+        if not wanted:
+            return
+        async with self.session() as s:
+            q = select(t.User.id).where(t.User.tenant_id == tenant_id, t.User.id.in_(wanted))
+            if kind is not None:
+                q = q.where(t.User.kind == kind)
+            unknown = wanted - set((await s.execute(q)).scalars().all())
+        if unknown:
+            raise InvalidRequest(f"unknown {kind or 'user'} id(s): {', '.join(sorted(unknown))}")
+
+    @_changes_auth
+    async def set_group_members(self, tenant_id: str, group_id: str, user_ids: list[str], *, kind: str | None = None) -> None:
         await self.get_group(tenant_id, group_id)
+        current = set(await self.group_members(group_id))
+        await self.check_members(tenant_id, [u for u in user_ids if u not in current], kind)
         async with self.session() as s:
             await s.execute(delete(t.GroupMember).where(t.GroupMember.group_id == group_id))
             for user_id in dict.fromkeys(user_ids):
                 s.add(t.GroupMember(tenant_id=tenant_id, group_id=group_id, user_id=user_id))
 
-    async def add_group_members(self, tenant_id: str, group_id: str, user_ids: list[str]) -> None:
+    @_changes_auth
+    async def add_group_members(self, tenant_id: str, group_id: str, user_ids: list[str], *, kind: str | None = None) -> None:
         current = set(await self.group_members(group_id))
-        await self.set_group_members(tenant_id, group_id, [*current, *user_ids])
+        await self.set_group_members(tenant_id, group_id, [*current, *user_ids], kind=kind)
 
+    @_changes_auth
     async def remove_group_members(self, tenant_id: str, group_id: str, user_ids: list[str]) -> None:
         current = await self.group_members(group_id)
         await self.set_group_members(tenant_id, group_id, [u for u in current if u not in set(user_ids)])
@@ -209,6 +260,7 @@ class Directory:
         if unknown:
             raise InvalidRequest(f"unknown permissions: {', '.join(unknown)}")
 
+    @_changes_auth
     async def put_role(self, tenant_id: str, name: str, permissions: list[str], description: str | None = None) -> RoleDef:
         if name in BUILTIN_ROLES:
             raise InvalidRequest(f"'{name}' is a built-in role and cannot be changed")
@@ -221,6 +273,7 @@ class Directory:
                 row.permissions, row.description, row.updated_at = permissions, description, utcnow()
         return RoleDef(name, description or "", tuple(permissions), builtin=False)
 
+    @_changes_auth
     async def delete_role(self, tenant_id: str, name: str) -> None:
         if name in BUILTIN_ROLES:
             raise InvalidRequest(f"'{name}' is a built-in role and cannot be deleted")
@@ -234,6 +287,7 @@ class Directory:
 
     # ------------------------------------------------------------------ bindings
 
+    @_changes_auth
     async def bind(
         self,
         tenant_id: str,
@@ -271,6 +325,7 @@ class Directory:
             s.add(binding)
         return binding
 
+    @_changes_auth
     async def unbind(self, tenant_id: str, binding_id: str) -> None:
         async with self.session() as s:
             result = await s.execute(delete(t.RoleBinding).where(t.RoleBinding.tenant_id == tenant_id, t.RoleBinding.id == binding_id))

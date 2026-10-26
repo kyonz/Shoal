@@ -1,7 +1,7 @@
 /** Helpers shared by the connect and campaign pages. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { diffLines } from "diff";
-import { AlertTriangle, Blocks, GitPullRequest, History, KeyRound, SquareKanban, Waypoints, Webhook } from "lucide-react";
+import { AlertTriangle, Blocks, GitPullRequest, History, KeyRound, MessagesSquare, SquareKanban, Waypoints, Webhook } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import YAML from "yaml";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/cn";
 import { humanize } from "@/components/forms/SchemaForm";
 import { relTime } from "@/lib/format";
 import { Badge, Button, Card, CardHeader, CodeEditor, CopyButton, Dialog, EmptyState, Field, Input, NativeSelect, Skeleton } from "@/components/ui";
+import { actorName } from "@/lib/actor";
 
 // --------------------------------------------------------------------------- errors
 
@@ -52,6 +53,7 @@ export function ErrorList({ error, className }: { error: unknown; className?: st
 const MARKS: Record<string, { icon: ReactNode; className: string }> = {
   github: { icon: <GitPullRequest />, className: "bg-[#24292f] text-white dark:bg-[#f0f3f6] dark:text-[#24292f]" },
   jira: { icon: <SquareKanban />, className: "bg-[#1868db] text-white" },
+  slack: { icon: <MessagesSquare />, className: "bg-[#4a154b] text-white" },
   webhook: { icon: <Webhook />, className: "bg-[#c2410c] text-white" },
   mcp: { icon: <Waypoints />, className: "bg-[#111827] text-white dark:bg-[#e5e7eb] dark:text-[#111827]" },
 };
@@ -211,7 +213,7 @@ export function VersionsPanel({ plural, ns, name, current }: { plural: Plural; n
           >
             <Badge tone={v.version === latest?.version ? "accent" : "neutral"}>v{v.version}</Badge>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs">{v.created_by ?? "unknown"}</span>
+              <span className="block truncate text-xs">{actorName(v.created_by)}</span>
               <span className="block text-[11px] text-faint">{relTime(v.created_at)}</span>
             </span>
           </button>

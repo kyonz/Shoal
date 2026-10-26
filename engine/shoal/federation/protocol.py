@@ -14,6 +14,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 from typing import Any
 
@@ -27,8 +28,8 @@ ENROLLMENT_PREFIX = "fedjoin_"
 ASSERTION_HEADER = "x-shoal-hub-assertion"
 ASSERTION_TTL = 60
 READ_METHODS = ("GET", "HEAD")
-# Read-only calls that use POST because they take a body.
-READ_POSTS = ("/resources/", "/schedule-preview")
+# Read-only calls that use POST because they take a body: connection resource queries.
+READ_POST = re.compile(r"^/v1/namespaces/[^/]+/connections/[^/]+/resources/[^/]+/query$")
 
 
 def effective_mode(requested: str, ceiling: str | None) -> str:
@@ -41,7 +42,7 @@ def effective_mode(requested: str, ceiling: str | None) -> str:
 def is_read(method: str, path: str) -> bool:
     if method.upper() in READ_METHODS:
         return True
-    return method.upper() == "POST" and path.endswith("/query") and any(p in path for p in READ_POSTS)
+    return method.upper() == "POST" and bool(READ_POST.match(path))
 
 
 def hash_token(token: str) -> str:

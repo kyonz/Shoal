@@ -1,5 +1,5 @@
 /** Per-kind presentation for the generic resource pages. */
-import { Bot, Boxes, Cloud, FlaskConical, Library, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Cloud, FlaskConical, Gauge, Library, ListChecks, Puzzle, Route, Server, Sparkles, Store, type LucideIcon } from "lucide-react";
 import type { Plural } from "@/api/hooks";
 import { nsPath } from "@/lib/ns";
 
@@ -83,6 +83,22 @@ export const KINDS: Record<string, KindConfig> = {
       return [s.provider, aws?.role_arn, s.trust].filter(Boolean).join(" · ") || undefined;
     },
   },
+  "target-lists": {
+    plural: "target-lists",
+    kind: "TargetList",
+    label: "Target lists",
+    singular: "target list",
+    icon: ListChecks,
+    blurb: "A named set of targets, such as the repositories a team owns, that campaigns run over and trigger filters check against.",
+    order: ["description", "key"],
+    hidden: ["items", "connection", "resource", "filter"],
+    template: { key: "{{ target.full_name }}", items: [{ full_name: "acme/api" }, { full_name: "acme/web" }] },
+    summary: (s) => {
+      const items = Array.isArray(s.items) ? `${s.items.length} listed` : null;
+      const lookup = s.connection ? `${items ? "looked up in" : "all"} ${s.resource} from ${s.connection}` : null;
+      return [items, lookup].filter(Boolean).join(" · ") || undefined;
+    },
+  },
   gateways: {
     plural: "gateways",
     kind: "Gateway",
@@ -116,7 +132,7 @@ export const KINDS: Record<string, KindConfig> = {
     icon: FlaskConical,
     blurb: "Datasets and graders that measure a workflow's quality so changes are scored, not assumed.",
     order: ["description", "workflow", "threshold", "concurrency", "cases", "graders"],
-    hidden: ["cases", "graders"],
+    hidden: ["cases", "graders", "sinks", "dataset"],
     template: {
       workflow: "",
       threshold: 0.8,
@@ -125,6 +141,22 @@ export const KINDS: Record<string, KindConfig> = {
     },
     summary: (s) =>
       [s.workflow, Array.isArray(s.cases) ? `${s.cases.length} cases` : null].filter(Boolean).join(" · ") || undefined,
+  },
+  "eval-platforms": {
+    plural: "eval-platforms",
+    kind: "EvalPlatform",
+    label: "Eval platforms",
+    singular: "eval platform",
+    icon: Gauge,
+    blurb: "Braintrust, Langfuse and other eval platforms, connected once for the whole organisation. Evals pick one by name to export results and import datasets; keys come from secrets in the shared namespace.",
+    order: ["description"],
+    hidden: ["sink", "config"],
+    template: { sink: "braintrust", config: { project: "", api_key_secret: "braintrust-api-key" } },
+    admin: true,
+    summary: (s) => {
+      const c = (s.config as { project?: string } | undefined) ?? {};
+      return [s.sink, c.project ? `project ${c.project}` : null].filter(Boolean).join(" · ") || undefined;
+    },
   },
   blueprints: {
     plural: "blueprints",
@@ -155,6 +187,18 @@ export const KINDS: Record<string, KindConfig> = {
     admin: true,
     template: { source: "git", title: "Public skills", config: { url: "https://github.com/anthropics/skills", ref: "main", path: "skills" } },
     summary: (s) => [s.source, (s.config as { url?: string } | undefined)?.url].filter(Boolean).join(" · ") || undefined,
+  },
+  "custom-integrations": {
+    plural: "custom-integrations",
+    kind: "CustomIntegration",
+    label: "Custom integrations",
+    singular: "custom integration",
+    icon: Puzzle,
+    blurb: "Integrations your organisation built: a remote service speaking the Shoal integration protocol, or an installed Python package. Shoal pulls their settings so teams connect them like a built-in.",
+    order: ["title", "source", "url", "token_secret", "package", "description", "connection_scopes", "namespaces", "enabled", "timeout_seconds", "allow_insecure"],
+    admin: true,
+    template: { source: "remote", url: "https://my-integration.example.com", token_secret: "my-integration-token" },
+    summary: (s) => [s.source, s.url ?? s.package, Array.isArray(s.connection_scopes) && s.connection_scopes.length === 1 ? `${s.connection_scopes[0]} only` : null].filter(Boolean).join(" · ") || undefined,
   },
 };
 

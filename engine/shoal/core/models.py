@@ -19,7 +19,7 @@ import re
 from datetime import timedelta
 from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from shoal.core.duration import Duration
 
@@ -132,6 +132,18 @@ class RetryPolicy(Model):
         return timedelta(seconds=min(seconds, self.max_backoff.total_seconds()))
 
 
+def _no_clear_text_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """Decision provider settings name secrets (``api_key_secret``); they never hold a credential literally."""
+    bad = [k for k in credential_fields(config)
+           if not k.endswith("_secret") and isinstance(config[k], str) and "{{" not in config[k]]
+    if bad:
+        raise ValueError(f"provider_config {bad} look like credentials; name a secret instead, e.g. api_key_secret")
+    return config
+
+
+DecisionConfig = Annotated[dict[str, Any], AfterValidator(_no_clear_text_keys)]
+
+
 class StepBase(Model):
     id: str = Field(pattern=STEP_ID_PATTERN)
     name: str | None = None
@@ -146,6 +158,9 @@ class StepBase(Model):
     type: ClassVar[str]
 
 
+AGENT_RESERVED_OUTPUTS = frozenset({"summary"})
+
+
 class AgentStep(StepBase):
     """Run an agent inside a sandbox until it returns the declared outputs."""
 
@@ -157,6 +172,14 @@ class AgentStep(StepBase):
     skills: list[str] = Field(default_factory=list, description="Extra skills for this step.")
     tools: list[str] = Field(default_factory=list, description="Extra tools for this step.")
     connections: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _no_reserved_outputs(self) -> AgentStep:
+        # The agent's finish tool always takes `summary`; a declared output of the same name could never be set.
+        reserved = AGENT_RESERVED_OUTPUTS & set(self.outputs)
+        if reserved:
+            raise ValueError(f"reserved output names: {sorted(reserved)} (every agent step already returns a summary)")
+        return self
 
 
 class ActionStep(StepBase):
@@ -264,18 +287,47 @@ class WaitStep(StepBase):
         return self
 
 
+class ApprovalNotify(Model):
+    """Also ask for the decision through an integration (e.g. Slack buttons); answers resolve the step."""
+
+    integration: str | None = Field(None, description="Integration key, e.g. 'slack' (or name a `connection`).")
+    connection: str | None = Field(None, description="Connection to use; defaults to the workflow's for the integration.")
+    to: str | None = Field(None, description="Where to ask: a channel ('#deploys', 'C0123') or a person ('U0123', an email). "
+                                             "Expressions allowed.")
+    with_: dict[str, Any] = Field(default_factory=dict, alias="with", description="Integration-specific options.")
+
+    @model_validator(mode="after")
+    def _target(self) -> ApprovalNotify:
+        if not (self.integration or self.connection):
+            raise ValueError("notify entries need an `integration` or a `connection`")
+        return self
+
+
 class ApprovalStep(StepBase):
-    """Human-in-the-loop gate resolved through the API or UI."""
+    """Human-in-the-loop gate resolved through the API, the UI or an integration (`notify`)."""
 
     type: Literal["approval"] = "approval"  # type: ignore[misc]
     message: str
-    approvers: list[str] = Field(default_factory=list)
+    approvers: list[str] = Field(
+        default_factory=list,
+        description="Who may decide, besides needing 'runs:approve': identity names, usernames, emails or "
+        "'group:<name>'. Empty: anyone with 'runs:approve'.",
+    )
+    notify: list[ApprovalNotify] = Field(default_factory=list, description="Ask through integrations too (Slack).")
     max_wait: Duration | None = None
     on_timeout: Literal["reject", "approve"] = "reject"
+    on_reject: Literal["fail", "continue"] = Field(
+        "fail",
+        description="'fail' ends the run when the step is rejected (or expires rejected); "
+        "'continue' succeeds with approved: false so later steps can branch on it.",
+    )
 
 
 class WorkflowCallStep(StepBase):
-    """Run another workflow as a child run, optionally once per item (fan-out)."""
+    """Run another workflow as a child run, optionally once per item (fan-out).
+
+    A failed child fails the step; with ``retry:``, a retry runs only the failed children again.
+    """
 
     type: Literal["workflow"] = "workflow"  # type: ignore[misc]
     workflow: str
@@ -314,7 +366,7 @@ class DecideStep(StepBase):
 
     type: Literal["decide"] = "decide"  # type: ignore[misc]
     provider: str | None = Field(None, description="Decision provider plugin (jev, llm); defaults to settings.")
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field(description="Text or JSON (expressions allowed) the questions are about.")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     min_confidence: float | None = Field(None, ge=0, le=1)
@@ -328,7 +380,7 @@ class GradeStep(StepBase):
 
     type: Literal["grade"] = "grade"  # type: ignore[misc]
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     subject: Any = Field(description="What to grade (expression).")
     instructions: str
     levels: list[str] = Field(min_length=2, description="Ordered rubric levels, worst first.")
@@ -356,6 +408,20 @@ Step = Annotated[
 class WorkflowDefaults(Model):
     agent: str | None = None
     sandbox: str | None = None
+
+
+MODEL_STEP_TYPES = frozenset({"agent", "decide", "grade"})
+
+
+def calls_models(node: Any) -> bool:
+    """Whether a workflow document (or any part of one) has a step that calls a model."""
+    if isinstance(node, dict):
+        if node.get("type") in MODEL_STEP_TYPES and "id" in node:
+            return True
+        return any(calls_models(v) for v in node.values())
+    if isinstance(node, list):
+        return any(calls_models(v) for v in node)
+    return False
 
 
 class WorkflowSpec(Model):
@@ -432,7 +498,7 @@ class ToolGuardSpec(Model):
     """Screen mutating tool calls with a decision model before they run (§7.5)."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "write_file", "edit_file", "*__*"],
         description="Glob patterns of tool names to screen.",
@@ -447,12 +513,13 @@ class AgentSpec(Model):
     description: str | None = None
     provider: str = "anthropic"
     model: str = "claude-opus-5-5"
-    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop or cli.")
+    runtime: str = Field("tool-loop", description="Agent runtime plugin: tool-loop, cli (a coding agent CLI in the sandbox) or a2a.")
     instructions: str = Field("", description="System prompt.")
     skills: list[str] = Field(default_factory=list)
     tools: list[str] = Field(
         default_factory=lambda: ["shell", "read_file", "write_file", "list_files"],
-        description="Built-in tools, integration actions ('github.create_pull_request', 'github.*').",
+        description="Built-in tools (shell, read_file, ...), integration actions ('github.create_pull_request', 'github.*') "
+        "and MCP servers ('mcp:<connection>' for all its tools, 'mcp:<connection>.<tool>' for one).",
     )
     subagents: list[str] = Field(default_factory=list, description="Agents this agent may delegate to.")
     credentials: list[str] = Field(
@@ -489,8 +556,12 @@ class SkillSpec(Model):
 
 
 class NetworkPolicy(Model):
-    egress: Literal["allow", "deny"] = "allow"
-    allow_hosts: list[str] = Field(default_factory=list)
+    """Enforced by the sandbox backend; a backend that cannot enforce a policy refuses to start the sandbox."""
+
+    egress: Literal["allow", "deny"] = Field("allow", description="'deny' blocks all outbound traffic.")
+    allow_hosts: list[str] = Field(
+        default_factory=list, description="Only these hosts may be reached (needs a backend that supports it, e.g. remote)."
+    )
 
 
 class SandboxProfileSpec(Model):
@@ -538,6 +609,10 @@ class ConnectionSpec(Model):
         description="Connection fields each person supplies (default: the fields in `secrets`).",
     )
     oauth: OAuthSpec | None = Field(None, description="Lets people connect with OAuth instead of pasting a token.")
+    namespaces: list[str] = Field(
+        default_factory=list,
+        description="Organisation connections only (stored in `shared`): the namespaces that may use it (empty: all).",
+    )
 
     @model_validator(mode="after")
     def _personal_fields(self) -> ConnectionSpec:
@@ -551,10 +626,29 @@ class TriageSpec(Model):
     """Semantic trigger filter: ask a decision model about the event before starting a run."""
 
     provider: str | None = None
-    provider_config: dict[str, Any] = Field(default_factory=dict)
+    provider_config: DecisionConfig = Field(default_factory=dict)
     state: Any = Field("{{ event }}", description="What the questions are about (expressions allowed).")
     questions: dict[str, DecisionQuestion] = Field(min_length=1)
     when: str = Field(description="Expression over `answers` (and `event`); fire only when true.")
+
+
+class TriggerRateLimit(Model):
+    """Fire at most ``max`` times per ``per``, overall or per ``key`` (e.g. per Slack user or channel)."""
+
+    max: int = Field(ge=1)
+    per: Duration
+    key: str | None = Field(None, description="Expression over `event`, e.g. '{{ event.user }}'; omitted, the whole trigger.")
+
+
+class TriggerWebhookSpec(Model):
+    """Have Shoal register the provider-side webhook that delivers this trigger's events, and keep it registered.
+
+    The integration derives what to register (provider event types, a provider-side filter such as JQL)
+    from this block and the trigger's ``event``. Each registered trigger gets its own callback URL and
+    signing secret, and only fires from deliveries to that URL.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 class TriggerSpec(Model):
@@ -571,10 +665,23 @@ class TriggerSpec(Model):
     overlap: Literal["allow", "skip"] = Field(
         "allow", description="'skip' does not fire while a run started by this trigger is still active."
     )
-    filter: str | None = Field(None, description="Expression over `event`; fire only when true.")
+    filter: str | None = Field(
+        None,
+        description="Expression over `event`; fire only when true. `lists['<name>']` holds the keys of a TargetList, "
+        "e.g. \"{{ event.repository.full_name in lists['core-repos'] }}\".",
+    )
+    match: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured filters the connection's integration understands (Slack: channels, mentioned, "
+        "contains, regex, users, groups, threads, ...). See the integration's `trigger_filter_schema`.",
+    )
+    rate_limit: TriggerRateLimit | None = None
     inputs: dict[str, Any] = Field(default_factory=dict, description="Workflow inputs (expressions).")
     dedupe_key: str | None = Field(None, description="Expression; events with a seen key are ignored.")
     triage: TriageSpec | None = None
+    webhook: TriggerWebhookSpec | None = Field(
+        None, description="Register the webhook with the provider (integration-specific settings, e.g. Jira `jql`)."
+    )
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -588,6 +695,35 @@ class TriggerSpec(Model):
                 raise ValueError("schedule triggers need a cron 'schedule'")
         elif not self.connection:
             raise ValueError("event triggers need a 'connection'")
+        if self.webhook is not None and self.event == "schedule":
+            raise ValueError("'webhook' registration only applies to event triggers")
+        return self
+
+
+class TargetListSpec(Model):
+    """A reusable, named set of targets (e.g. repositories) for campaigns and trigger filters.
+
+    - ``items`` alone: exactly these targets, as written.
+    - ``connection`` + ``resource`` alone: a saved query, resolved each time it is used.
+    - both: exactly the listed targets, each looked up through the query so it carries the
+      integration's details (a listed target the query does not return is reported missing).
+    """
+
+    description: str | None = None
+    connection: str | None = Field(None, description="Connection to query or look targets up through.")
+    resource: str | None = Field(None, description="Integration resource, e.g. 'repository'.")
+    filter: dict[str, Any] = Field(default_factory=dict, description="Query filter, e.g. {org: acme}.")
+    items: list[dict[str, Any]] | None = Field(
+        None, description="The targets, e.g. [{full_name: acme/api}]; with a connection, looked up by key."
+    )
+    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target, e.g. '{{ target.full_name }}'.")
+
+    @model_validator(mode="after")
+    def _check(self) -> TargetListSpec:
+        if self.items is None and not (self.connection and self.resource):
+            raise ValueError("a target list needs 'items', or 'connection' + 'resource' (or both)")
+        if bool(self.connection) != bool(self.resource):
+            raise ValueError("'connection' and 'resource' go together")
         return self
 
 
@@ -596,13 +732,15 @@ class TargetSelector(Model):
     resource: str | None = Field(None, description="Integration resource, e.g. 'repository'.")
     filter: dict[str, Any] = Field(default_factory=dict)
     items: list[dict[str, Any]] | None = Field(None, description="Static targets instead of a query.")
-    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target.")
+    list_: str | None = Field(None, alias="list", description="Name of a TargetList to use instead of items or a query.")
+    key: str = Field("{{ target.id }}", description="Expression giving a stable key per target (a list brings its own).")
     limit: int | None = Field(None, ge=1)
 
     @model_validator(mode="after")
     def _check(self) -> TargetSelector:
-        if self.items is None and not (self.connection and self.resource):
-            raise ValueError("targets need either 'items' or 'connection' + 'resource'")
+        sources = sum((self.items is not None, bool(self.connection and self.resource), bool(self.list_)))
+        if sources != 1:
+            raise ValueError("targets need exactly one of 'list', 'items', or 'connection' + 'resource'")
         return self
 
 
@@ -709,6 +847,20 @@ def credential_fields(values: dict[str, Any]) -> list[str]:
     return sorted(k for k in values if CREDENTIAL_NAME.search(k))
 
 
+class GatewayLimits(Model):
+    """Pacing for one gateway, shared by every worker. Calls over a limit wait (or use the next candidate)."""
+
+    max_concurrency: int | None = Field(None, ge=1, description="Model calls in flight at once.")
+    requests_per_minute: int | None = Field(None, ge=1)
+    tokens_per_minute: int | None = Field(None, ge=1, description="Input plus output tokens.")
+    max_wait: Duration = Field(timedelta(minutes=5), description="Longest a call waits for capacity before failing.")
+
+
+def endpoint_fields(values: dict[str, Any]) -> list[str]:
+    """Settings that choose where a request (and its credentials) goes: ``host``, ``url``, ``api_url``, ..."""
+    return sorted(k for k in values if k in ("host", "url") or k.endswith(("_url", "_host")))
+
+
 class GatewaySpec(Model):
     """How model requests reach a provider (direct API, LiteLLM, Portkey, OpenRouter, Bedrock, ...).
 
@@ -725,6 +877,7 @@ class GatewaySpec(Model):
         default_factory=dict, description="Header name to secret name (in `shared`), e.g. {x-portkey-api-key: portkey-key}."
     )
     config: dict[str, Any] = Field(default_factory=dict)
+    limits: GatewayLimits | None = Field(None, description="Rate and concurrency limits, e.g. your provider tier's.")
 
     @model_validator(mode="after")
     def _no_clear_text_credentials(self) -> GatewaySpec:
@@ -821,6 +974,48 @@ class SkillSourceSpec(Model):
         return self
 
 
+ConnectionScope = Literal["org", "namespace"]
+
+
+class CustomIntegrationSpec(Model):
+    """An integration the organisation registers itself: a remote service speaking the Shoal
+    integration protocol (``url``) or an installed Python package (``package``). Shoal pulls its
+    manifest (connection settings, auth, actions, resources, events) so connecting to it works like
+    a built-in. Tenant-wide and managed by tenant admins; the token is a secret in ``shared``."""
+
+    source: Literal["remote", "package"] = Field(description="remote: an HTTP service; package: an installed Python package.")
+    title: str | None = Field(None, description="Display name (defaults to the manifest's).")
+    description: str | None = None
+    url: str | None = Field(None, description="remote: base URL of the integration service (https).")
+    token_secret: str | None = Field(None, description="remote: secret in `shared` holding the bearer token Shoal presents.")
+    timeout_seconds: float = Field(30.0, gt=0, le=300)
+    allow_insecure: bool = Field(False, description="remote: permit plain http to a non-loopback host.")
+    package: str | None = Field(
+        None,
+        description="package: the installed plugin (entry point name in `shoal.integrations`), its distribution "
+        "(e.g. shoal-linear), or `module:Class` when the server allows importing integration modules.",
+    )
+    connection_scopes: list[ConnectionScope] = Field(
+        default_factory=list,
+        description="Where connections may live: `org` (shared to namespaces) and/or `namespace` (one team's). "
+        "Empty: whatever the integration declares; otherwise narrows it.",
+    )
+    namespaces: list[str] = Field(default_factory=list, description="Namespaces that may see and connect it (empty: all).")
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _source_fields(self) -> CustomIntegrationSpec:
+        if self.source == "remote" and not self.url:
+            raise ValueError("source: remote needs `url`")
+        if self.source == "package" and not self.package:
+            raise ValueError("source: package needs `package`")
+        if self.source == "remote" and self.package:
+            raise ValueError("`package` only applies to source: package")
+        if self.source == "package" and (self.url or self.token_secret):
+            raise ValueError("`url` and `token_secret` only apply to source: remote")
+        return self
+
+
 class EvalCase(Model):
     name: str
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -829,12 +1024,45 @@ class EvalCase(Model):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Carried to results and eval sinks.")
 
 
-class EvalDatasetRef(Model):
+class EvalPlatformSpec(Model):
+    """An eval platform connected once by an admin (tenant-wide, ``eval-platforms:manage``).
+
+    Evals point at it with ``platform: <name>`` instead of repeating sink settings.
+    Credentials are secret names in the tenant's ``shared`` namespace.
+    """
+
+    description: str | None = None
+    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    config: dict[str, Any] = Field(
+        default_factory=dict, description="Sink settings; credentials as secret names (api_key_secret, secret_key_secret)."
+    )
+
+    @model_validator(mode="after")
+    def _no_clear_text_credentials(self) -> EvalPlatformSpec:
+        leaked = [k for k in credential_fields(self.config) if not k.endswith("_secret")]
+        if leaked:
+            raise ValueError(f"config keys {leaked} look like credentials: store them as secrets and use <name>_secret")
+        return self
+
+
+class _PlatformOrSink(Model):
+    sink: str | None = Field(None, description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
+    platform: str | None = Field(None, description="An EvalPlatform; its sink and settings apply, `config` overrides them.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
+
+    @model_validator(mode="after")
+    def _one_target(self) -> _PlatformOrSink:
+        if bool(self.sink) == bool(self.platform):
+            raise ValueError("set exactly one of `sink` or `platform`")
+        if self.platform and (endpoints := endpoint_fields(self.config)):
+            raise ValueError(f"{', '.join(endpoints)}: an eval platform's endpoints are set on the platform only")
+        return self
+
+
+class EvalDatasetRef(_PlatformOrSink):
     """Cases imported from an eval platform (``shoal.eval_sinks`` plugin) each time the eval runs."""
 
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
     name: str = Field(description="Dataset name on the platform.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
     limit: int | None = Field(None, ge=1)
 
 
@@ -889,11 +1117,8 @@ class Grader(Model):
         return self
 
 
-class EvalSinkRef(Model):
+class EvalSinkRef(_PlatformOrSink):
     """Export each finished eval run (traces and scores) to an eval platform."""
-
-    sink: str = Field(description="Eval sink plugin, e.g. 'braintrust' or 'langfuse'.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Sink settings; secrets by name (api_key_secret).")
 
 
 class EvalGate(Model):
@@ -927,6 +1152,12 @@ class EvalSpec(Model):
     from_runs: EvalRunQuery | None = None
     graders: list[Grader] = Field(min_length=1)
     threshold: float = Field(0.8, ge=0, le=1, description="A case passes when its weighted score is at least this.")
+    require_success: bool | None = Field(
+        None,
+        description="A case whose workflow run did not succeed scores 0 and fails, whatever its graders say "
+        "(their scores are still recorded). Defaults to true for cases and false for from_runs, which picks "
+        "run statuses itself; set false to grade runs that are expected to fail.",
+    )
     concurrency: int = Field(5, ge=1)
     decision_provider: str | None = None
     gate: EvalGate = Field(default_factory=EvalGate)
@@ -1015,6 +1246,12 @@ class Campaign(ResourceBase):
     plural: ClassVar[str] = "campaigns"
 
 
+class TargetList(ResourceBase):
+    kind: Literal["TargetList"] = "TargetList"
+    spec: TargetListSpec
+    plural: ClassVar[str] = "target-lists"
+
+
 class Identity(ResourceBase):
     kind: Literal["Identity"] = "Identity"
     spec: IdentitySpec
@@ -1051,10 +1288,22 @@ class Eval(ResourceBase):
     plural: ClassVar[str] = "evals"
 
 
+class EvalPlatform(ResourceBase):
+    kind: Literal["EvalPlatform"] = "EvalPlatform"
+    spec: EvalPlatformSpec
+    plural: ClassVar[str] = "eval-platforms"
+
+
 class SkillSource(ResourceBase):
     kind: Literal["SkillSource"] = "SkillSource"
     spec: SkillSourceSpec
     plural: ClassVar[str] = "skill-sources"
+
+
+class CustomIntegration(ResourceBase):
+    kind: Literal["CustomIntegration"] = "CustomIntegration"
+    spec: CustomIntegrationSpec
+    plural: ClassVar[str] = "custom-integrations"
 
 
 AnyResource = Annotated[
@@ -1065,21 +1314,24 @@ AnyResource = Annotated[
     | Connection
     | Trigger
     | Campaign
+    | TargetList
     | Identity
     | CloudIdentity
     | Gateway
     | ModelPolicy
     | Blueprint
     | Eval
-    | SkillSource,
+    | SkillSource
+    | EvalPlatform
+    | CustomIntegration,
     Field(discriminator="kind"),
 ]
 
 RESOURCE_KINDS: dict[str, type[ResourceBase]] = {
     cls.model_fields["kind"].default: cls
     for cls in (
-        Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign,
-        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource,
+        Workflow, Agent, Skill, SandboxProfile, Connection, Trigger, Campaign, TargetList,
+        Identity, CloudIdentity, Gateway, ModelPolicy, Blueprint, Eval, SkillSource, EvalPlatform, CustomIntegration,
     )
 }
 KIND_BY_PLURAL: dict[str, str] = {cls.plural: kind for kind, cls in RESOURCE_KINDS.items()}

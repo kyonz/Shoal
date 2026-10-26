@@ -179,6 +179,18 @@ async def test_agent_step_with_scripted_provider(engine, tenant):
     assert isinstance(Agent, type)
 
 
+def test_agent_step_rejects_reserved_outputs():
+    import pytest
+    from pydantic import ValidationError
+
+    from shoal.core.models import AgentStep
+
+    # `summary` is always the agent's own summary, so an output of that name could never be filled.
+    with pytest.raises(ValidationError, match="reserved output names: \\['summary'\\]"):
+        AgentStep(id="a", prompt="p", outputs={"summary": {"type": "string"}})
+    assert AgentStep(id="a", prompt="p", outputs={"test_summary": {"type": "string"}}).outputs
+
+
 async def test_child_workflow_fan_out(engine, tenant):
     await engine.store.apply_resource(
         tenant.id,

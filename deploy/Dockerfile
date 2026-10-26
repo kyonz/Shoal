@@ -26,7 +26,7 @@ FROM python:${PYTHON_VERSION}-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
-ARG SHOAL_EXTRAS="--extra postgres --extra kubernetes --extra docker --extra temporal"
+ARG SHOAL_EXTRAS="--extra postgres --extra kubernetes --extra docker --extra temporal --extra jev"
 # Dependencies first: this layer is reused until uv.lock changes.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=engine/uv.lock,target=uv.lock \

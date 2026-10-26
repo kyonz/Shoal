@@ -1,0 +1,85 @@
+apiVersion: shoal.dev/v1
+kind: Blueprint
+metadata:
+  name: production-quality-eval
+  description: Grade a workflow's recent production runs and export the scores to Braintrust or Langfuse
+spec:
+  title: Production quality eval
+  summary: An LLM judge grades a workflow's recent runs against your rubric, fails under a score you choose and
+    exports every trace and score to your eval platform.
+  version: 1.0.0
+  status: published
+  author: Shoal
+  tags:
+  - evals
+  - braintrust
+  - langfuse
+  - quality
+  categories:
+  - quality
+  readme: |
+    1. A tenant admin connects Braintrust or Langfuse once (Admin > Eval platforms). Pick that platform here.
+    2. Adopt with the workflow to watch (in the namespace you adopt into) and a rubric that says what a good result is.
+    3. Run the eval from Evals (or `shoal eval run <name>`). It grades the workflow's runs from the last week,
+       without starting new ones, and exports the results to the platform. Each export links back to the run.
+
+    `fail_under` gates the eval run, so you can block promoting a new workflow version that scores worse.
+    Add expression or JSON schema graders next to the judge for checks that don't need a model.
+  params:
+    workflow:
+      type: string
+      description: Workflow whose runs are graded.
+    platform:
+      type: string
+      description: Eval platform (Braintrust or Langfuse) the results are exported to.
+    rubric:
+      type: string
+      default: The outputs fully and correctly do what the run's inputs asked, with no invented facts. Fail anything
+        incomplete, wrong or unsafe.
+      description: What the judge grades against.
+    window:
+      type: string
+      default: 7d
+      description: Grade runs created within this window.
+    limit:
+      type: number
+      default: 50
+      description: Grade at most this many runs per eval run.
+    fail_under:
+      type: number
+      default: 0.8
+      description: The eval run fails when the mean score is below this (0 to 1).
+  resources:
+  - kind: Eval
+    metadata:
+      name: '{{ prefix }}{{ params.workflow }}-quality'
+      description: LLM-judged quality of recent production runs.
+    spec:
+      description: Grades recent runs of {{ params.workflow }} and exports them to {{ params.platform }}.
+      workflow: '{{ params.workflow }}'
+      from_runs:
+        status:
+        - succeeded
+        - failed
+        since: '{{ params.window }}'
+        limit: '{{ params.limit }}'
+      graders:
+      - name: succeeded
+        type: expression
+        check: '{{ run.status == ''succeeded'' }}'
+        weight: 0.25
+      - name: quality
+        type: llm_judge
+        rubric: '{{ params.rubric }}'
+        levels:
+        - fail
+        - partial
+        - pass
+        subject:
+          inputs: '{{ inputs }}'
+          outputs: '{{ outputs }}'
+      threshold: 0.7
+      gate:
+        fail_under: '{{ params.fail_under }}'
+      sinks:
+      - platform: '{{ params.platform }}'

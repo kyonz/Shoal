@@ -40,7 +40,7 @@ export function SecretPicker({ ns, value, onChange }: { ns: string; value: unkno
 /** Gateway credentials live in the tenant's shared namespace. */
 export const SHARED_NS = "shared";
 
-function SharedSecretPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+export function SharedSecretPicker({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
   return (
     <div>
       <SecretPicker ns={SHARED_NS} value={value} onChange={onChange} />
@@ -221,8 +221,34 @@ export const sandboxExtension: EditorExtension = {
   widgets: () => ({
     backend: ({ value, onChange }) => <BackendSelect value={value} onChange={onChange} />,
   }),
-  sections: ({ spec, setSpec, canWrite }) => <BackendConfig spec={spec} setSpec={setSpec} readOnly={!canWrite} />,
+  sections: ({ spec, setSpec, canWrite }) => (
+    <>
+      <NetworkSupportWarning spec={spec} />
+      <BackendConfig spec={spec} setSpec={setSpec} readOnly={!canWrite} />
+    </>
+  ),
 };
+
+/** Mirrors the engine: a backend that cannot enforce the network policy refuses to start the sandbox. */
+function NetworkSupportWarning({ spec }: { spec: Record<string, unknown> }) {
+  const { data } = useSandboxBackends();
+  const backend = (spec.backend as string) ?? "local";
+  const controls = data?.find((b) => b.name === backend)?.network_controls;
+  const network = (spec.network as { egress?: string; allow_hosts?: string[] } | undefined) ?? {};
+  if (!controls) return null;
+  const hosts = (network.allow_hosts ?? []).length > 0;
+  const missing = hosts && !controls.includes("allow_hosts") ? "restrict egress to allowed hosts" : !hosts && network.egress === "deny" && !controls.includes("deny") ? "block egress" : null;
+  if (!missing) return null;
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-warn/25 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+      <TriangleAlert className="size-4 shrink-0" />
+      <span>
+        The <span className="font-mono">{backend}</span> backend can't {missing}, so steps using this profile will fail rather than run with open network
+        access. Pick a backend that supports it, or change the network policy.
+      </span>
+    </div>
+  );
+}
 
 function BackendSelect({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
   const { data } = useSandboxBackends();
@@ -254,6 +280,8 @@ function BackendConfig({ spec, setSpec, readOnly }: { spec: Record<string, unkno
     else delete next.config;
     setSpec(next);
   };
+  // A backend whose schema has no fields takes no settings: nothing to show unless some are set already.
+  if (schema && !Object.keys(schema.properties ?? {}).length && !Object.keys(config).length) return null;
   return (
     <Card>
       <CardHeader title={`${backend} settings`} description="Backend-specific configuration." />

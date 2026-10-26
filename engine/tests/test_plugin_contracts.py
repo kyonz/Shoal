@@ -30,6 +30,7 @@ BUILT_INS = [
     ("providers", "claude-code"), ("credentials", "aws"),
     ("skill_sources", "git"), ("skill_sources", "registry"),
     ("orchestrators", "builtin"), ("orchestrators", "temporal"),
+    ("dispatch_queues", "database"), ("dispatch_queues", "sqs"),
 ]
 
 
@@ -123,3 +124,28 @@ async def test_skill_source_contracts(engine, tmp_path):
     registry = RegistrySkillSource()
     ctx = SkillSourceContext(engine, "t", "registry", registry.config_model.model_validate({"url": "http://registry.test", "token": "tok"}), registry)
     await check_skill_source(registry, ctx)
+
+
+async def test_env_secrets_never_expose_shoal_settings(engine, tenant, monkeypatch):
+    env = engine.plugin("secrets", "env")
+    monkeypatch.setenv("SHOAL_SECRET_KEY", "the-master-key")
+    monkeypatch.setenv("SHOAL_SECRET_PROVIDERS", '["db","env"]')
+    monkeypatch.setenv("SHOAL_SECRET_SLACK_TOKEN", "shared")
+    assert await env.get(tenant.id, "key") is None
+    assert await env.get(tenant.id, "KEY") is None
+    assert await env.get(tenant.id, "providers") is None
+    assert await env.get(tenant.id, "slack-token") == "shared"
+    assert await engine.secrets.get(tenant.id, "key") is None
+    engine.settings.secret_env_shared = False  # an instance shared by several organisations
+    assert await env.get(tenant.id, "slack-token") is None
+    monkeypatch.setenv("SHOAL_SECRET_ACME__SLACK_TOKEN", "acme's own")
+    assert await env.get(tenant.id, "slack-token") == "acme's own"
+
+
+async def test_env_secret_names_cannot_reach_another_tenants_variables(engine, tenant, monkeypatch):
+    env = engine.plugin("secrets", "env")
+    neighbour = await engine.store.create_tenant("acme--ops")
+    monkeypatch.setenv("SHOAL_SECRET_ACME__OPS__TOKEN", "ops-only")
+    assert await env.get(neighbour.id, "token") == "ops-only"
+    for name in ("ops--token", "ops__token", "ops-_token"):
+        assert await env.get(tenant.id, name) is None  # tenant `acme`

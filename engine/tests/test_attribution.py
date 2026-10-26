@@ -9,7 +9,7 @@ from shoal.config import Settings
 from shoal.core import clock
 from shoal.core.models import parse_resource
 from shoal.engine import Engine
-from shoal.integrations.base import IntegrationEvent
+from shoal.integrations.base import IntegrationError, IntegrationEvent
 
 from .fakes import FakeGitHub, FakeJira, Router
 
@@ -99,6 +99,71 @@ async def test_qualified_approval_gates_merge(world):
     result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
     assert result["merged"] and result["governance"]["qualified_approvers"] == ["reviewer"]
     assert "shoal:merged-via-qualified-approval" in github.labels[(REPO, 1)]
+
+
+async def test_merge_is_pinned_to_the_reviewed_commit_and_waits_for_checks(world):
+    engine, tenant, github = world
+    github.collaborators[(REPO, "dana")] = "read"
+    await connect(engine, tenant)
+    dana = await initiator(engine, tenant, actor="user:dana@acme.test")
+    await call(engine, tenant, "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix"}, dana)
+    github.approve(REPO, 1, user="reviewer")
+
+    # Commits pushed after the approval were not reviewed: the approval no longer qualifies.
+    github.push(REPO, 1, "sha1-v2")
+    result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
+    assert not result["merged"] and result["governance"]["elevation"] == "awaiting_qualified_approval"
+
+    github.approve(REPO, 1, user="reviewer")
+    github.check_runs[(REPO, "sha1-v2")] = {"status": "in_progress", "conclusion": None}
+    result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
+    assert not result["merged"] and "checks are still running" in result["reason"]
+
+    github.check_runs.pop((REPO, "sha1-v2"))
+    result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, dana)
+    assert result["merged"]
+
+
+async def test_merge_refused_when_the_branch_moves_after_the_check(world):
+    engine, tenant, github = world
+    await connect(engine, tenant)
+    sam = await initiator(engine, tenant, github="sam")
+    github.collaborators[(REPO, "sam")] = "write"
+    await call(engine, tenant, "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix"}, sam)
+    github.approve(REPO, 1)
+    integration = engine.integrations.get("github")
+    original = integration.can_merge
+
+    async def check_then_push(ctx, p):
+        decision = await original(ctx, p)
+        github.push(REPO, 1, "sneaky")  # a commit lands between the check and the merge
+        return decision
+
+    integration.can_merge = check_then_push
+    try:
+        result = await call(engine, tenant, "merge_pull_request", {"repo": REPO, "number": 1}, sam)
+    finally:
+        del integration.can_merge
+    assert not result["merged"] and "409" in result["reason"]
+    assert github.merges == []
+
+
+async def test_the_step_that_opened_a_pr_cannot_certify_it(world):
+    engine, tenant, github = world
+    await connect(engine, tenant, require_merge_check=True)
+    sam = await initiator(engine, tenant, github="sam")
+
+    async def as_step(step, action, params):
+        return await engine.integrations.call(
+            tenant.id, f"github.{action}", params, connection="gh", initiator=sam, run_id="run-1", step_id=step
+        )
+
+    await as_step("author", "create_pull_request", {"repo": REPO, "title": "Fix", "head": "fix"})
+    verdict = {"repo": REPO, "number": 1, "verdict": "pass", "summary": "Looks fine to me"}
+    with pytest.raises(IntegrationError, match="cannot record its own merge check"):
+        await as_step("author", "set_merge_check", verdict)
+    assert github.statuses == {}
+    assert (await as_step("review", "set_merge_check", verdict))["state"] == "success"
 
 
 async def test_deny_elevation_and_owner_merges(world):

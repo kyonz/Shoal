@@ -20,6 +20,7 @@ import httpx
 from sqlalchemy import select
 
 from shoal import __version__
+from shoal.auth.directory import HUB_SUBJECT_KINDS
 from shoal.auth.rbac import Principal
 from shoal.core import clock
 from shoal.core.errors import Conflict, InvalidRequest, NotFound, Unauthorized
@@ -55,6 +56,7 @@ class FederationMember:
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self.app: Any = None  # the local API that forwarded calls run against
         self._running = False  # connectors run in the API process (tests drive poll_once themselves)
+        self.connector_errors: dict[str, str] = {}  # membership id -> why the last poll failed (this process)
 
     @property
     def store(self) -> Any:
@@ -80,6 +82,8 @@ class FederationMember:
                    grants: list[dict[str, Any]], actor: str) -> t.FederationMembership:
         if await self.membership(tenant_id) is not None:
             raise Conflict("this tenant already belongs to a hub; leave it first")
+        if await self.engine.federation.link_for_tenant(tenant_id) is not None:
+            raise Conflict("this tenant is federated from this deployment, so its data lives in a member; manage hub access there")
         if max_mode not in p.MODES or visibility not in p.VISIBILITIES:
             raise InvalidRequest(f"max_mode must be one of {p.MODES} and visibility one of {p.VISIBILITIES}")
         for ns in namespaces:
@@ -123,15 +127,32 @@ class FederationMember:
                     setattr(row, key, value)
         return row  # the hub hears about the new ceiling on the next poll
 
-    async def leave(self, tenant_id: str) -> None:
+    async def leave(self, tenant_id: str) -> dict[str, Any]:
+        """Stop the connector, tell the hub (best effort), and remove the roles hub people held here."""
         row = await self.membership(tenant_id)
         if row is None:
             raise NotFound("this tenant is not a federation member")
         task = self._tasks.pop(row.id, None)
         if task:
             task.cancel()
+        self.connector_errors.pop(row.id, None)
+        hub_notified = False
+        try:
+            secret = self.engine.secrets.cipher.decrypt(row.secret_ciphertext)
+            async with self._http(base_url=row.hub_url, timeout=10) as client:
+                r = await client.post("/v1/federation/leave", headers={"Authorization": f"Bearer {p.credential(row.link_id, secret)}"})
+            hub_notified = r.status_code < 300
+        except Exception as exc:  # the hub may be gone for good; leaving must still work
+            log.warning("federation: could not tell the hub this member left: %s", exc)
+        directory = self.engine.directory
+        removed = 0
+        for binding in await directory.list_bindings(tenant_id):
+            if binding.subject_kind in HUB_SUBJECT_KINDS:
+                await directory.unbind(tenant_id, binding.id)
+                removed += 1
         async with self.store.session() as s:
             await s.delete(await s.get(t.FederationMembership, row.id))
+        return {"hub_notified": hub_notified, "bindings_removed": removed}
 
     # ------------------------------------------------------------------ inbound authentication
 
@@ -206,13 +227,18 @@ class FederationMember:
                 except asyncio.CancelledError:
                     raise
                 except NotFound:
+                    self.connector_errors.pop(membership_id, None)
                     return  # left the hub
                 except Exception as exc:
                     unsent[:0] = responses
+                    if isinstance(exc, Unauthorized):  # revoked or replaced on the hub: no point retrying fast
+                        backoff = 60
+                    self.connector_errors[membership_id] = str(exc) or type(exc).__name__
                     log.warning("federation connector: %s; retrying in %.0fs", exc, backoff)
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 60)
                     continue
+                self.connector_errors.pop(membership_id, None)
                 for req in body.get("requests", []):
                     task = asyncio.create_task(serve(row, req))
                     inflight.add(task)
@@ -251,7 +277,7 @@ class FederationMember:
                 json={"responses": responses, "wait": wait, "limit": limit, "report": await self._report(row)},
             )
         if r.status_code in (401, 403):
-            raise Unauthorized(f"the hub rejected this member's link credential ({r.status_code})")
+            raise Unauthorized("the hub rejected this member's link credential: the link was revoked, or replaced by a new enrollment")
         r.raise_for_status()
         return r.json()
 
@@ -262,7 +288,23 @@ class FederationMember:
         }
 
     async def handle(self, row: t.FederationMembership, req: dict[str, Any]) -> dict[str, Any]:
-        """Apply this member's ceiling, then run the call against the local API."""
+        """Apply this member's ceiling, then run the call against the local API.
+
+        The ceiling is read afresh for every call, so lowering it applies to calls already
+        handed out on the current poll too. A failure still answers, so the hub isn't left waiting.
+        """
+        answer = {"id": req["id"]}
+        try:
+            async with self.store.session() as s:
+                current = await s.get(t.FederationMembership, row.id)
+            if current is None:
+                return answer | _problem(503, "federation_disconnected", "this deployment has left the hub")
+            return await self._handle(current, req)
+        except Exception:
+            log.exception("federation connector: failed to serve %s %s", req.get("method"), req.get("path"))
+            return answer | _problem(502, "federation_member_error", "the member deployment failed to handle this call")
+
+    async def _handle(self, row: t.FederationMembership, req: dict[str, Any]) -> dict[str, Any]:
         method, path = req["method"], req["path"]
         answer = {"id": req["id"]}
         mode = p.effective_mode(row.hub_mode or "read", row.max_mode)

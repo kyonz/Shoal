@@ -149,7 +149,7 @@ async def rpc(namespace: str, workflow: str, request: Request, ctx: CtxDep) -> A
                 try:
                     run = await ctx.engine.executor.start_run(
                         ctx.tenant_id, wf.metadata.name, _inputs(wf, message), started_by=ctx.actor, labels=labels,
-                        initiator=initiator,
+                        initiator=initiator, admit=True,
                     )
                 except ValueError as exc:
                     return _error(rpc_id, -32602, str(exc))
