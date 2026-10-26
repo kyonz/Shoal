@@ -6,7 +6,7 @@ import type { ParamDoc, WorkflowSpecDoc } from "@/features/workflow/types";
 import { ExpressionMap, ParamsEditor, ResourceSelect, Section } from "./fields";
 import { useBuilder } from "./store";
 
-export function WorkflowSettings({ isNew, issues, readOnly }: { isNew: boolean; issues: Issue[]; readOnly?: boolean }) {
+export function WorkflowSettings({ isNew, issues, readOnly, hint }: { isNew: boolean; issues: Issue[]; readOnly?: boolean; hint?: string }) {
   const spec = useBuilder((s) => s.spec);
   const meta = useBuilder((s) => s.meta);
   const { setSpec, setMeta, select } = useBuilder.getState();
@@ -38,7 +38,7 @@ export function WorkflowSettings({ isNew, issues, readOnly }: { isNew: boolean; 
         </div>
         <div>
           <div className="text-[13px] font-semibold">Workflow settings</div>
-          <div className="text-[11px] text-faint">{readOnly ? "You can view this workflow but not change it." : "Select a step on the canvas to edit it."}</div>
+          <div className="text-[11px] text-faint">{hint ?? (readOnly ? "You can view this workflow but not change it." : "Select a step on the canvas to edit it.")}</div>
         </div>
       </div>
       <ReadOnlyContext.Provider value={!!readOnly}>
