@@ -353,3 +353,26 @@ async def test_setup_instructions_cover_the_account_and_the_role(engine, admin):
     spec = identity(trust="ambient")["spec"]
     body = (await admin.post("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy", json={"spec": spec})).json()
     assert "put-role-policy" in body["account_setup"]["cli"] and "sts:ExternalId" in str(body["role_setup"]["policy"])
+
+
+async def test_private_issuers_get_public_hosting_instructions(engine, admin):
+    engine.settings.public_url = "http://192.168.86.100:8080"
+    engine.workload.issuer = "http://192.168.86.100:8080"
+    await admin.put("/v1/namespaces/default/cloud-identities/aws-prod", json={"spec": identity()["spec"]})
+    body = (await admin.get("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy")).json()
+    assert "does not have to be Shoal's own address" in body["notes"][0]
+    hosting = body["issuer_hosting"]
+    assert hosting["public"] is False and hosting["problem"] == "it is not HTTPS"
+    bucket, tunnel = hosting["options"]
+    commands = "\n".join(step["command"] for step in bucket["steps"])
+    assert "SHOAL_OIDC_ISSUER=https://shoal-oidc-123456789012.s3.eu-west-1.amazonaws.com" in commands
+    assert "curl -sf http://192.168.86.100:8080/.well-known/jwks.json" in commands
+    assert "s3://shoal-oidc-123456789012/.well-known/openid-configuration --content-type application/json" in commands
+    assert "LocationConstraint=eu-west-1" in commands
+    assert "cloudflared tunnel --url http://192.168.86.100:8080" in tunnel["steps"][0]["command"]
+
+    for issuer, public in (("https://10.0.0.5", False), ("https://shoal.lan", False), ("https://shoal.acme.com", True),
+                           ("https://my-bucket.s3.eu-west-1.amazonaws.com", True)):
+        engine.workload.issuer = issuer
+        body = (await admin.get("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy")).json()
+        assert body["issuer_hosting"]["public"] is public, issuer

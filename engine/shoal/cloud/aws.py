@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -249,6 +250,23 @@ def tag_value(value: str) -> str:
     return _TAG_CHARS.sub("-", value)[:256]
 
 
+def issuer_problem(issuer: str) -> str | None:
+    """Why AWS could not fetch the issuer's discovery document, or None if it looks public."""
+    parts = urlsplit(issuer)
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https":
+        return "it is not HTTPS"
+    if host in ("localhost",) or host.endswith((".local", ".internal", ".lan", ".home", ".localdomain")) or "." not in host:
+        return "it is a private name that the internet cannot resolve"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if address.is_private or address.is_loopback or address.is_link_local:
+        return "it is a private network address"
+    return None
+
+
 class AwsProvider:
     """``shoal.credentials`` plugin ``aws``."""
 
@@ -320,6 +338,78 @@ class AwsProvider:
             },
         )
 
+    def _issuer_hosting(self, issuer: str, acct: str, region: str, problem: str | None) -> dict[str, Any]:
+        """How to make the issuer reachable by AWS when Shoal itself is not public."""
+        shoal = self.engine.settings.public_url.rstrip("/")
+        bucket = f"shoal-oidc-{acct}"
+        bucket_url = f"https://{bucket}.s3.{region}.amazonaws.com"
+        upload = (
+            f"mkdir -p shoal-oidc && cd shoal-oidc\n"
+            f"curl -sf {shoal}/.well-known/openid-configuration -o openid-configuration\n"
+            f"curl -sf {shoal}/.well-known/jwks.json -o jwks.json\n"
+            f"grep -q '\"issuer\": *\"{bucket_url}\"' openid-configuration || echo 'issuer is not {bucket_url} yet: set SHOAL_OIDC_ISSUER and restart Shoal'\n"
+            f"aws s3 cp openid-configuration s3://{bucket}/.well-known/openid-configuration --content-type application/json\n"
+            f"aws s3 cp jwks.json s3://{bucket}/.well-known/jwks.json --content-type application/json"
+        )
+        read_policy = json.dumps({"Version": "2012-10-17", "Statement": [{
+            "Sid": "PublicOidcDocuments", "Effect": "Allow", "Principal": "*", "Action": "s3:GetObject",
+            "Resource": f"arn:aws:s3:::{bucket}/.well-known/*"}]}, indent=2)
+        return {
+            "public": problem is None,
+            "problem": problem,
+            "issuer": issuer,
+            "summary": "AWS checks Shoal's tokens by downloading two small public documents from the identity "
+                       "provider URL: <URL>/.well-known/openid-configuration and <URL>/.well-known/jwks.json. They "
+                       "hold only Shoal's public key. That URL is SHOAL_OIDC_ISSUER (by default Shoal's own address) "
+                       "and does not have to be where Shoal runs: you can publish copies anywhere public over HTTPS, "
+                       "such as an S3 bucket, while Shoal stays private and keeps signing tokens itself. Tokens name "
+                       "the issuer, so SHOAL_OIDC_ISSUER must be set to the same URL.",
+            "options": [
+                {
+                    "name": "S3 bucket (Shoal stays private)",
+                    "steps": [
+                        {"text": f"Create a bucket for the documents, e.g. {bucket} in {region}, and allow public reads "
+                                 "of the .well-known/ folder only. Nothing else in the bucket becomes public.",
+                         "command": f"aws s3api create-bucket --bucket {bucket} --region {region}"
+                                    + ("" if region == "us-east-1" else
+                                       f" --create-bucket-configuration LocationConstraint={region}")
+                                    + f"\naws s3api put-public-access-block --bucket {bucket} --public-access-block-configuration "
+                                    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false\n"
+                                    f"cat > read.json <<'EOF'\n{read_policy}\nEOF\n"
+                                    f"aws s3api put-bucket-policy --bucket {bucket} --policy file://read.json"},
+                        {"text": f"Point Shoal at it: set SHOAL_OIDC_ISSUER={bucket_url} on every Shoal server and "
+                                 "worker, and restart. Shoal's address doesn't change; only the issuer named in tokens does.",
+                         "command": f"SHOAL_OIDC_ISSUER={bucket_url}"},
+                        {"text": "Download the two documents from Shoal (they now name the bucket as issuer) and upload "
+                                 "them to the bucket. Run this anywhere that can reach both Shoal and AWS.",
+                         "command": upload},
+                        {"text": "Check AWS can read them, then use the bucket URL as the provider URL in step 1 "
+                                 "(this page shows it there once SHOAL_OIDC_ISSUER is set).",
+                         "command": f"curl -s {bucket_url}/.well-known/openid-configuration"},
+                        {"text": "Upload jwks.json again whenever the signing key changes (rotating SHOAL_SECRET_KEY or "
+                                 "SHOAL_IDENTITY_SIGNING_KEY); until then AWS rejects new tokens.",
+                         "command": ""},
+                    ],
+                },
+                {
+                    "name": "Tunnel (quick local testing)",
+                    "steps": [
+                        {"text": "Expose Shoal over HTTPS with a tunnel such as Cloudflare Tunnel or ngrok. AWS only "
+                                 "needs the two /.well-known paths, so restrict the tunnel to them where you can, since "
+                                 "it otherwise publishes Shoal's API.",
+                         "command": f"cloudflared tunnel --url {shoal}\n# or: ngrok http {urlsplit(shoal).port or 80}"},
+                        {"text": "Set SHOAL_OIDC_ISSUER to the tunnel's https URL and restart Shoal, then use that URL "
+                                 "as the provider URL in step 1.",
+                         "command": "SHOAL_OIDC_ISSUER=https://<your-tunnel-hostname>"},
+                        {"text": "Quick tunnels get a new hostname each time they start, and the identity provider and "
+                                 "trust policies name it, so use a named tunnel or reserved domain for anything that should "
+                                 "keep working.",
+                         "command": ""},
+                    ],
+                },
+            ],
+        }
+
     def trust_policy(self, request: IssueRequest, scope: str = "identity") -> dict[str, Any]:
         """The role's trust policy plus everything needed to set it up, with this deployment's real values.
 
@@ -371,14 +461,14 @@ class AwsProvider:
                  "meaning": "Only this cloud identity." if scope == "identity" else
                  f"Any cloud identity in the {request.namespace} namespace of this Shoal tenant."},
             ]
-            host_only = host.split("/", 1)[0]
-            if not issuer.startswith("https://"):
-                notes.append(f"AWS only accepts an HTTPS identity provider that it can reach from the internet, and {issuer} "
-                             "is not. Set SHOAL_OIDC_ISSUER to a public HTTPS URL that serves Shoal's "
-                             "/.well-known/openid-configuration and /.well-known/jwks.json (for example an S3 bucket or CDN).")
-            elif host_only in ("localhost", "127.0.0.1") or host_only.endswith((".local", ".internal", ".lan")):
-                notes.append(f"{issuer} looks private. AWS must fetch {issuer}/.well-known/openid-configuration from the "
-                             "internet; publish the two documents publicly and set SHOAL_OIDC_ISSUER if it cannot.")
+            host_only = (urlsplit(issuer).hostname or "").lower()
+            if reason := issuer_problem(issuer):
+                notes.append(
+                    f"AWS can't use {issuer} as the identity provider: {reason}. The provider URL does not have to be "
+                    "Shoal's own address: any public HTTPS URL that serves copies of Shoal's two identity documents "
+                    "works, while Shoal keeps signing tokens itself. See \"Make Shoal's identity documents public\" below."
+                )
+            result["issuer_hosting"] = self._issuer_hosting(issuer, acct, cfg.region, reason)
             account_setup = {
                 "title": "Connect the AWS account to Shoal (once per account)",
                 "summary": f"Add Shoal as an OpenID Connect identity provider in account {acct}. Every role in the account "

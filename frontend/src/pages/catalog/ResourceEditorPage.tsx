@@ -83,8 +83,8 @@ export interface EditorExtension {
   widgets?: (ctx: EditorContext) => Record<string, Widget>;
   /** Extra cards under the generic form (for fields listed in `hidden`). */
   sections?: (ctx: EditorContext) => ReactNode;
-  /** Extra tabs after History. */
-  tabs?: (ctx: EditorContext) => { value: string; label: ReactNode; content: ReactNode }[];
+  /** Extra tabs after History (only on saved resources unless `showOnNew`). */
+  tabs?: (ctx: EditorContext) => { value: string; label: ReactNode; content: ReactNode; showOnNew?: boolean }[];
   /** Extra header actions (e.g. "Run eval"). */
   actions?: (ctx: EditorContext) => ReactNode;
   /** Shown above the tabs (e.g. adoption badge, notices). */
@@ -339,7 +339,7 @@ export default function ResourceEditorPage({ plural, ext = {} }: { plural: strin
     setBaseline(JSON.stringify(d));
   };
   const ctx: EditorContext = { ns, plural, name, isNew, draft, spec: draft.spec, setSpec, resource: resource.data, canWrite, dirty, errors: errors.byField, replaceFrom };
-  const extraTabs = isNew ? [] : ext.tabs?.(ctx) ?? [];
+  const extraTabs = (ext.tabs?.(ctx) ?? []).filter((t) => !isNew || t.showOnNew);
   const meta = resource.data?.metadata;
 
   return (
