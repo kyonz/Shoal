@@ -37,7 +37,7 @@ export const STEP_TYPES: StepTypeInfo[] = [
     description: "Run an AI agent in a sandbox until it returns structured outputs.",
     icon: Bot,
     color: "#7c3aed",
-    defaults: () => ({ prompt: "", outputs: { summary: { type: "string" } } }),
+    defaults: () => ({ prompt: "", outputs: {} }),
     summary: (s) => (s.agent ? `${s.agent} · ` : "") + (first(s.prompt) || "No prompt yet"),
   },
   {

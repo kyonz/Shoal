@@ -179,15 +179,17 @@ async def test_agent_step_with_scripted_provider(engine, tenant):
     assert isinstance(Agent, type)
 
 
-def test_agent_step_rejects_reserved_outputs():
+def test_agent_step_reserved_outputs():
     import pytest
     from pydantic import ValidationError
 
     from shoal.core.models import AgentStep
 
-    # `summary` is always the agent's own summary, so an output of that name could never be filled.
-    with pytest.raises(ValidationError, match="reserved output names: \\['summary'\\]"):
-        AgentStep(id="a", prompt="p", outputs={"summary": {"type": "string"}})
+    # `summary` is always the agent's own string summary. Declaring it as a string (older editors did) is harmless and
+    # dropped; any other type could never be filled.
+    assert AgentStep(id="a", prompt="p", outputs={"summary": {"type": "string"}, "pr": {"type": "string"}}).outputs.keys() == {"pr"}
+    with pytest.raises(ValidationError, match="output 'summary' is reserved.*Rename this output"):
+        AgentStep(id="a", prompt="p", outputs={"summary": {"type": "object"}})
     assert AgentStep(id="a", prompt="p", outputs={"test_summary": {"type": "string"}}).outputs
 
 
