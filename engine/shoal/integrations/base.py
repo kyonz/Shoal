@@ -303,6 +303,14 @@ class Integration:
     def webhook_setup_instructions(self, url: str) -> str:
         return f"Send webhooks to {url}"
 
+    def webhook_setup_guide(self, url: str, config: Any, secrets_set: set[str]) -> dict[str, Any] | None:
+        """Exact connect details for the connection page: how deliveries are signed, and example requests.
+
+        ``config`` is the connection's non-secret settings as the connection model (None if they do not validate
+        alone); ``secrets_set`` names the secret fields the connection points at a secret. None shows only the instructions.
+        """
+        return None
+
     # --- webhook registration (optional; needs ``webhook_model``) ---------------
 
     async def register_webhook(self, ctx: ConnectionContext, registration: WebhookRegistration) -> dict[str, Any]:

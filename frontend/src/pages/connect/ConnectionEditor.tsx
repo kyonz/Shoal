@@ -15,6 +15,7 @@ import {
   Button,
   Card,
   CardHeader,
+  CopyButton,
   CopyField,
   EmptyState,
   Field,
@@ -252,6 +253,7 @@ export default function ConnectionEditor() {
                   )}
                 </div>
               </Card>
+              {!isNew && <WebhookGuide ns={ns} name={name} version={existing.data?.metadata.version} />}
             </TabsContent>
             <TabsContent value="yaml">
               <YamlPanel value={yaml.text} onChange={canWrite ? yaml.change : undefined} readOnly={!canWrite} error={yaml.error} />
@@ -273,7 +275,7 @@ export default function ConnectionEditor() {
           {!isNew && (existing.data?.spec as PersonalSpec | undefined)?.credentials && (existing.data?.spec as PersonalSpec).credentials !== "shared" && (
             <MyCredentialCard ns={ns} connection={name} spec={existing.data!.spec as PersonalSpec} />
           )}
-          {!isNew && <ConnectionSidebar ns={ns} name={name} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}
+          {!isNew && <ConnectionSidebar ns={ns} name={name} version={existing.data?.metadata.version} webhookUrl={existing.data?.status?.webhook_url as string | undefined} />}
           {!isNew && <ConnectionWebhooks ns={ns} name={name} />}
           {!isNew && existing.data?.spec.integration === "slack" && <SlackBots ns={ns} name={name} />}
         </aside>
@@ -370,16 +372,88 @@ function SharedWithCard({ value, onChange, disabled }: { value: string[]; onChan
   );
 }
 
-type WebhookSetup = { url: string; instructions: string; manifest?: Record<string, unknown>; install?: boolean; setup?: boolean };
+type WebhookExample = { title: string; description: string; command: string };
+type WebhookGuideSpec = {
+  method: string;
+  content_type: string;
+  signature_header: string;
+  signature: string;
+  token_header: string;
+  secret_set: boolean;
+  allow_unsigned: boolean;
+  accepts: string;
+  event_type: string;
+  examples: WebhookExample[];
+};
+type WebhookSetup = { url: string; instructions: string; manifest?: Record<string, unknown>; install?: boolean; setup?: boolean; guide?: WebhookGuideSpec };
 
-function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string; webhookUrl?: string }) {
-  const { can } = useAuth();
-  const [params, setParams] = useSearchParams();
-  const webhook = useQuery({
-    queryKey: ["connection-webhook", ns, name],
+/** The connection's webhook URL and setup details; keyed on the version so a save shows the new settings. */
+function useWebhookSetup(ns: string, name: string, version?: number) {
+  return useQuery({
+    queryKey: ["connection-webhook", ns, name, version],
     queryFn: () => rawJson<WebhookSetup>(`/v1/namespaces/${ns}/connections/${name}/webhook`),
     retry: false,
   });
+}
+
+/** Exactly how to send deliveries (integrations that describe it, like the generic webhook): signing and example curls. */
+function WebhookGuide({ ns, name, version }: { ns: string; name: string; version?: number }) {
+  const webhook = useWebhookSetup(ns, name, version);
+  const guide = webhook.data?.guide;
+  if (!webhook.data || !guide) return null;
+  const rejectsAll = !guide.secret_set && !guide.allow_unsigned;
+  return (
+    <Card>
+      <CardHeader title={<span className="flex items-center gap-1.5"><Webhook className="size-3.5" /> How to connect</span>} description="Exactly what a sender needs, for the saved settings (save after changing the secret or 'Allow unsigned')." />
+      <div className="space-y-4 p-4 text-[13px]">
+        <ol className="list-decimal space-y-3 pl-5 marker:text-muted">
+          <li className="space-y-1.5">
+            <p>
+              Send <code className="font-mono text-xs">{guide.method}</code> requests with a JSON body (<code className="font-mono text-xs">Content-Type: {guide.content_type}</code>) to:
+            </p>
+            <CopyField value={webhook.data.url} />
+          </li>
+          <li className="space-y-1">
+            <p>
+              Sign each delivery: put <code className="font-mono text-xs">{guide.signature}</code> in the <code className="font-mono text-xs">{guide.signature_header}</code> header.
+            </p>
+            <p className="text-xs text-muted">
+              Senders that cannot sign can send the secret itself in an <code className="font-mono">{guide.token_header}</code> header, or as <code className="font-mono">?token=</code> on the URL.
+            </p>
+          </li>
+          <li>
+            <p className="text-xs text-muted">{guide.event_type}</p>
+          </li>
+        </ol>
+        <div className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-xs", rejectsAll ? "border-warn/25 bg-warn-soft text-warn" : "border-border bg-subtle/60")}>
+          {rejectsAll ? <TriangleAlert className="mt-px size-3.5 shrink-0" /> : <CheckCircle2 className="mt-px size-3.5 shrink-0 text-ok" />}
+          <span>
+            <span className="font-medium">Accepts: </span>
+            {guide.accepts}
+          </span>
+        </div>
+        <div className="space-y-3">
+          {guide.examples.map((e) => (
+            <div key={e.title} className="space-y-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <div>
+                  <span className="font-medium">{e.title}</span> <span className="text-xs text-muted">{e.description}</span>
+                </div>
+                <CopyButton value={e.command} label="Copy" />
+              </div>
+              <pre className="overflow-x-auto rounded-lg border border-border bg-subtle/60 p-3 font-mono text-xs leading-relaxed">{e.command}</pre>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ConnectionSidebar({ ns, name, version, webhookUrl }: { ns: string; name: string; version?: number; webhookUrl?: string }) {
+  const { can } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const webhook = useWebhookSetup(ns, name, version);
   const install = useMutation({
     mutationFn: () => rawJson<{ authorize_url: string }>(`/v1/namespaces/${ns}/connections/${name}/install`, { method: "POST" }),
     onSuccess: (r) => window.location.assign(r.authorize_url),
@@ -474,7 +548,11 @@ function ConnectionSidebar({ ns, name, webhookUrl }: { ns: string; name: string;
           <div className="space-y-2 p-4">
             <CopyField value={url} />
             {webhook.data?.instructions && <p className="text-xs leading-relaxed break-all text-muted">{webhook.data.instructions}</p>}
-            <Badge tone="info">Signature-verified with the webhook secret</Badge>
+            {webhook.data?.guide?.allow_unsigned ? (
+              <Badge tone="warn">Unsigned deliveries accepted</Badge>
+            ) : (
+              <Badge tone="info">Signature-verified with the webhook secret</Badge>
+            )}
           </div>
         </Card>
       )}

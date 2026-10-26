@@ -541,8 +541,11 @@ async def connection_webhook(namespace: str, name: str, ctx: CtxDep) -> dict[str
         conn = await _connection(ctx, namespace, name)
     integration = await ctx.engine.integrations.resolve(ctx.tenant_id, conn.spec.integration, namespace=namespace)
     out: dict[str, Any] = {"url": url, "instructions": integration.webhook_setup_instructions(url)}
-    manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name,
-                                          config=_plain_config(integration, conn))
+    config = _plain_config(integration, conn)
+    guide = integration.webhook_setup_guide(url, config, set(conn.spec.secrets))
+    if guide is not None:
+        out["guide"] = guide
+    manifest = integration.setup_manifest(url, ctx.engine.integrations.install_redirect_uri, name, config=config)
     if manifest is not None:
         out["manifest"] = manifest
     out["install"] = bool(integration.install_fields)

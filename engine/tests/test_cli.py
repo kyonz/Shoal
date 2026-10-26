@@ -514,5 +514,7 @@ def test_connection_webhook_url(cli, tenant_key):
     assert shown.exit_code == 0, shown.output
     url = json.loads(shown.stdout)["url"]
     assert "/v1/hooks/" in url
-    assert url in cli(*auth, "connections", "webhook-url", "hooks").output.replace("\n", "")
+    table = cli(*auth, "connections", "webhook-url", "hooks").output
+    assert url in table.replace("\n", "")
+    assert "# Unsigned" in table and f"curl -sS -X POST '{url}'" in table
     assert cli(*auth, "connections", "webhook-url", "missing").exit_code != 0
