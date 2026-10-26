@@ -36,6 +36,7 @@ URL = re.compile(r"https://[^\s\x07\x1b]+/oauth/authorize\?[^\s\x07\x1b]+")
 TOKEN = re.compile(r"sk-ant-oat[0-9]*-[A-Za-z0-9_\-]{20,}")
 FAILURE = re.compile(r"(OAuth error[^\r\n]*|Invalid code[^\r\n]*|Login failed[^\r\n]*)")
 TTL = 600.0
+ENTER_DELAY = 0.3
 
 
 def plain(raw: str) -> str:
@@ -113,7 +114,10 @@ class ClaudeLogins:
         if not code or any(c in code for c in "\r\n\x03\x04\x1b"):
             raise InvalidRequest("paste the code exactly as claude.ai shows it")
         try:
-            os.write(login.fd, code.encode() + b"\r")
+            # The CLI reads a burst of input as a paste, where Enter is a newline, so Enter goes separately.
+            os.write(login.fd, code.encode())
+            await asyncio.sleep(ENTER_DELAY)
+            os.write(login.fd, b"\r")
             text = await self._read_until(login, lambda out: TOKEN.search(plain(out)) is not None or FAILURE.search(plain(out)) is not None)
             if (token := TOKEN.search(plain(text))) is None:
                 failure = FAILURE.search(plain(text))

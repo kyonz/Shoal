@@ -32,9 +32,12 @@ if sys.argv[1:2] == ["setup-token"]:
     print("Browser didn't open? Use the url below to sign in")
     print("\x1b]8;;https://claude.com/cai/oauth/authorize?code=true&state=abc\x07https://claude.com/cai/oauth/authorize?code=true&state=abc\x1b]8;;\x07")
     print("Paste\x1b[8Gcode here if prompted >", flush=True)
-    code = sys.stdin.readline().strip()
+    import tty
+    tty.setraw(0)  # like the real (Ink) prompt: raw keys, and a burst of input is a paste
+    code = ""
+    while (chunk := os.read(0, 4096).decode()) != "\r":
+        code += chunk.replace("\r", "\n")  # an Enter inside a paste is a newline, not a submit
     print("Your token:\n" + "TOKEN" if code == "good#code" else "OAuth error: Invalid code. Please make sure the full code was copied", flush=True)
-    sys.stdin.readline()
     sys.exit(0)
 prompt = sys.stdin.read()
 record = {"args": sys.argv[1:], "prompt": prompt,
