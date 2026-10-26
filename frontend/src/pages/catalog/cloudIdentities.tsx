@@ -1,18 +1,31 @@
 /** Cloud identities: in-page AWS role setup (trust policy, namespace binding) and a Test button. */
 import { useQuery } from "@tanstack/react-query";
 import { FlaskConical, TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { rawJson } from "@/api/client";
-import { Button, Card, CardHeader, CodeEditor, CopyButton, Segmented } from "@/components/ui";
+import { Button, Card, CardHeader, CodeEditor, CopyButton, CopyField, Segmented } from "@/components/ui";
 import type { EditorContext, EditorExtension } from "./ResourceEditorPage";
 
 type Scope = "identity" | "namespace";
 
-interface SetupStep {
+type Method = "console" | "cli" | "terraform";
+
+interface Instructions {
   title: string;
-  detail: string;
-  command: string;
+  summary: string;
+  console: string[];
+  cli: string;
+  terraform: string;
+}
+
+interface AccountSetup extends Instructions {
+  values: { label: string; value: string }[];
+}
+
+interface RoleSetup extends Instructions {
+  policy: Record<string, unknown>;
+  explain: { field: string; value: string; meaning: string }[];
 }
 
 interface TrustPolicy {
@@ -21,9 +34,9 @@ interface TrustPolicy {
   trust: string;
   scope: Scope;
   role_arn: string;
-  issuer?: string;
-  policy: Record<string, unknown>;
-  steps: SetupStep[];
+  role_name: string;
+  account_setup: AccountSetup;
+  role_setup: RoleSetup;
   notes: string[];
 }
 
@@ -54,8 +67,34 @@ function Command({ value }: { value: string }) {
   );
 }
 
+function HowTo({ setup, method }: { setup: Instructions; method: Method }) {
+  if (method === "console")
+    return (
+      <ol className="list-decimal space-y-1 pl-5">
+        {setup.console.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ol>
+    );
+  return <Command value={method === "cli" ? setup.cli : setup.terraform} />;
+}
+
+function Step({ n, title, summary, children }: { n: number; title: string; summary?: string; children: ReactNode }) {
+  return (
+    <section className="space-y-2 border-t border-border pt-4 first:border-t-0 first:pt-0">
+      <div className="flex items-baseline gap-2">
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-semibold text-accent">{n}</span>
+        <h3 className="font-medium">{title}</h3>
+      </div>
+      {summary && <p className="text-muted">{summary}</p>}
+      {children}
+    </section>
+  );
+}
+
 function SetupGuide({ ctx }: { ctx: EditorContext }) {
   const [scope, setScope] = useState<Scope>("identity");
+  const [method, setMethod] = useState<Method>("console");
   const name = ctx.draft.name || "new-identity";
   const spec = useDebounced(JSON.stringify(ctx.spec), 400);
   const { data, error } = useQuery({
@@ -67,63 +106,98 @@ function SetupGuide({ ctx }: { ctx: EditorContext }) {
       }),
     retry: false,
   });
-  const policy = data ? JSON.stringify(data.policy, null, 2) : "";
+  const policy = data ? JSON.stringify(data.role_setup.policy, null, 2) : "";
   return (
     <Card>
       <CardHeader
-        title="Set up the role in AWS"
-        description="Shoal never stores AWS keys. The role trusts Shoal, and each step gets a short-lived session tagged with its namespace, workflow, run and the person who started it."
+        title="Set up AWS"
+        description="Shoal never stores AWS keys. Your AWS account trusts Shoal, the role trusts that connection, and each step gets a short-lived session tagged with its namespace, workflow, run and the person who started it."
       />
       <div className="space-y-4 p-4 text-sm">
-        <div className="space-y-2">
-          <div className="font-medium">Who may assume the role</div>
-          <Segmented<Scope>
-            value={scope}
-            onChange={setScope}
-            options={[
-              { value: "identity", label: "Only this identity", title: "The trust policy names this identity exactly" },
-              { value: "namespace", label: `Any identity in ${ctx.ns}`, title: "Bind the role to this Shoal namespace" },
-            ]}
-          />
-          <p className="text-muted">
-            {scope === "identity"
-              ? "The safest choice: the role can only be used through this one cloud identity."
-              : `The role can be used by any cloud identity in the ${ctx.ns} namespace, and only for runs in ${ctx.ns}. Namespace admins can then register more identities for it without changing AWS.`}
-          </p>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted">Who may assume the role</div>
+            <Segmented<Scope>
+              value={scope}
+              onChange={setScope}
+              options={[
+                { value: "identity", label: "Only this identity", title: "The trust policy names this identity exactly" },
+                { value: "namespace", label: `Any identity in ${ctx.ns}`, title: "Bind the role to this Shoal namespace" },
+              ]}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted">Show instructions for</div>
+            <Segmented<Method>
+              value={method}
+              onChange={setMethod}
+              options={[
+                { value: "console", label: "AWS console" },
+                { value: "cli", label: "AWS CLI" },
+                { value: "terraform", label: "Terraform" },
+              ]}
+            />
+          </div>
         </div>
+        <p className="text-muted">
+          {scope === "identity"
+            ? "The safest choice: the role can only be used through this one cloud identity."
+            : `The role can be used by any cloud identity in the ${ctx.ns} namespace, and only for runs in ${ctx.ns}. Namespace admins can then register more identities for it without changing AWS.`}
+        </p>
+        {data?.notes.map((note) => (
+          <p key={note} className="flex items-start gap-2 text-warn">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {note}
+          </p>
+        ))}
         {error ? (
           <p className="text-muted">Fill in the role ARN and region to see the setup steps. ({error instanceof Error ? error.message : String(error)})</p>
         ) : data ? (
-          <>
-            <ol className="space-y-3">
-              {data.steps.map((step, i) => (
-                <li key={step.title} className="space-y-1.5">
-                  <div className="font-medium">
-                    {i + 1}. {step.title}
-                  </div>
-                  <p className="text-muted">{step.detail}</p>
-                  {step.command && <Command value={step.command} />}
-                  {step.detail.includes("trust.json") && (
-                    <div className="space-y-1.5 pt-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium">trust.json</span>
-                        <CopyButton value={policy} label="Copy" />
-                      </div>
-                      <CodeEditor value={policy} language="json" readOnly minHeight="180px" maxHeight="420px" onChange={() => undefined} />
-                      <p className="text-muted">
-                        {data.trust === "web_identity" ? "Subject" : "ExternalId"}: <code className="font-mono text-xs">{data.subject}</code>
-                      </p>
+          <div className="space-y-4">
+            <Step n={1} title={data.account_setup.title} summary={data.account_setup.summary}>
+              <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+                {data.account_setup.values.map((v) => (
+                  <Fragment key={v.label}>
+                    <span className="text-xs text-muted">{v.label}</span>
+                    <CopyField value={v.value} />
+                  </Fragment>
+                ))}
+              </div>
+              <HowTo setup={data.account_setup} method={method} />
+            </Step>
+            <Step n={2} title={data.role_setup.title} summary={data.role_setup.summary}>
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Trust policy for {data.role_name}</span>
+                <CopyButton value={policy} label="Copy" />
+              </div>
+              <CodeEditor value={policy} language="json" readOnly minHeight="180px" maxHeight="420px" onChange={() => undefined} />
+              <details className="rounded-lg border border-border p-2">
+                <summary className="cursor-pointer text-xs font-medium">What each part means</summary>
+                <dl className="mt-2 space-y-2">
+                  {data.role_setup.explain.map((e) => (
+                    <div key={e.field}>
+                      <dt className="font-mono text-xs">{e.field}</dt>
+                      <dd className="text-muted">{e.meaning}</dd>
                     </div>
-                  )}
-                </li>
-              ))}
-            </ol>
-            {data.notes.map((note) => (
-              <p key={note} className="flex items-start gap-2 text-warn">
-                <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {note}
-              </p>
-            ))}
-          </>
+                  ))}
+                </dl>
+              </details>
+              <HowTo setup={data.role_setup} method={method} />
+            </Step>
+            <Step
+              n={3}
+              title="Give the role only the permissions the workflows need"
+              summary="Attach managed or inline permission policies to the role as usual. Session tags can narrow them further, e.g. a condition on aws:PrincipalTag/shoal:namespace or aws:PrincipalTag/shoal:workflow."
+            >
+              <Command value={`aws iam attach-role-policy --role-name ${data.role_name} --policy-arn <policy ARN>`} />
+            </Step>
+            <Step
+              n={4}
+              title="Grant workflows, save, then Test"
+              summary="List the workflows (and optionally agents) that may use this identity under Allow, save, and choose Test at the top of the page. Test assumes the role once, as a run would, and throws the credentials away."
+            >
+              {null}
+            </Step>
+          </div>
         ) : null}
       </div>
     </Card>

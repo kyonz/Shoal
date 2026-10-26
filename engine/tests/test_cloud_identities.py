@@ -329,3 +329,27 @@ async def test_test_button_assumes_the_role_and_explains_failures(engine, admin)
     tenant = (await engine.store.get_tenant_by_slug("acme")).id
     outcomes = [e.outcome for e in await engine.store.list_audit(tenant, action="cloud-identity.tested")]
     assert sorted(outcomes) == ["failure", "success"]
+
+
+async def test_setup_instructions_cover_the_account_and_the_role(engine, admin):
+    engine.settings.oidc_issuer = None
+    engine.workload.issuer = "https://shoal.acme.com"
+    await admin.put("/v1/namespaces/default/cloud-identities/aws-prod", json={"spec": identity()["spec"]})
+    body = (await admin.get("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy")).json()
+    account = body["account_setup"]
+    values = {v["label"]: v["value"] for v in account["values"]}
+    assert values["Provider URL"] == "https://shoal.acme.com" and values["Audience"] == "sts.amazonaws.com"
+    assert values["Provider ARN (after creation)"] == "arn:aws:iam::123456789012:oidc-provider/shoal.acme.com"
+    assert "--url https://shoal.acme.com" in account["cli"] and "thumbprint" in account["cli"]
+    assert 'aws_iam_openid_connect_provider" "shoal"' in account["terraform"]
+    assert not body["notes"]  # a public https issuer needs no warning
+
+    role = body["role_setup"]
+    assert role["policy"] == body["policy"]
+    assert "update-assume-role-policy --role-name deploy" in role["cli"]
+    assert "${aws_iam_openid_connect_provider.shoal.arn}" in role["terraform"]
+    assert {e["field"] for e in role["explain"]} >= {"Principal.Federated", "shoal.acme.com:sub", "shoal.acme.com:aud"}
+
+    spec = identity(trust="ambient")["spec"]
+    body = (await admin.post("/v1/namespaces/default/cloud-identities/aws-prod/trust-policy", json={"spec": spec})).json()
+    assert "put-role-policy" in body["account_setup"]["cli"] and "sts:ExternalId" in str(body["role_setup"]["policy"])
