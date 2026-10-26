@@ -27,7 +27,7 @@ export function useClaudeGateways(enabled: boolean) {
   return useQuery({ queryKey: KEY, queryFn: () => rawJson<ClaudeGateway[]>("/v1/me/claude-code"), enabled, retry: false });
 }
 
-function useRefresh() {
+export function useRefresh() {
   const qc = useQueryClient();
   return () => {
     void qc.invalidateQueries({ queryKey: KEY });
@@ -115,13 +115,14 @@ export function ClaudeSubscriptions({ focus }: { focus?: string | null }) {
   );
 }
 
-function LinkDialog({ gateway, onClose, onLinked }: { gateway: string; onClose: () => void; onLinked: () => void }) {
+export function LinkDialog({ gateway, onClose, onLinked, shared = false }: { gateway: string; onClose: () => void; onLinked: () => void; shared?: boolean }) {
+  const base = (g: string) => (shared ? `/v1/claude-code/gateways/${encodeURIComponent(g)}/account` : `/v1/me/claude-code/${encodeURIComponent(g)}`);
   const [how, setHow] = useState<"browser" | "token">("browser");
   const [login, setLogin] = useState<{ login_id: string; url: string } | null>(null);
   const [code, setCode] = useState("");
   const [token, setToken] = useState("");
   const done = () => {
-    toast.success(`Linked your Claude subscription to ${gateway}. Runs waiting for it carry on by themselves.`);
+    toast.success(shared ? `Signed ${gateway} in: every call through it now uses this Claude account.` : `Linked your Claude subscription to ${gateway}. Runs waiting for it carry on by themselves.`);
     onLinked();
     onClose();
   };
@@ -147,8 +148,8 @@ function LinkDialog({ gateway, onClose, onLinked }: { gateway: string; onClose: 
     <Dialog
       open
       onOpenChange={(o) => !o && close()}
-      title="Link your Claude subscription"
-      description={`Claude Code runs you start through ${gateway} will use your own plan. Sign-in happens on claude.ai; Shoal never sees your password.`}
+      title={shared ? "Sign the gateway in to Claude" : "Link your Claude subscription"}
+      description={shared ? `Every call through ${gateway}, for everyone, will use the Claude account you sign in with. Sign-in happens on claude.ai; Shoal never sees your password.` : `Claude Code runs you start through ${gateway} will use your own plan. Sign-in happens on claude.ai; Shoal never sees your password.`}
       footer={
         how === "token" ? (
           <Button onClick={() => paste.mutate()} disabled={token.trim().length < 20} loading={paste.isPending}>

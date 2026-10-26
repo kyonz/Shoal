@@ -7,12 +7,15 @@ The ``SHOAL_ADMIN_TOKEN`` stays as a break-glass credential with the same rights
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from shoal.api.deps import SESSION_COOKIE, CtxDep, InstanceReaderCtxDep, SystemCtxDep
+from shoal.api.routers.assistant import INSTANCE_SETTING_KEY, AssistantSettingsIn, instance_assistant
 from shoal.api.schemas import (
     AccountDetail,
     AccountMembership,
@@ -291,3 +294,41 @@ async def test_orchestrator(body: TemporalSettings, ctx: SystemCtxDep) -> Any:
     except InvalidRequest as exc:  # e.g. a secret that is not set
         return TemporalCheck(ok=False, detail=str(exc))
     return await check_temporal(connection)
+
+
+# --------------------------------------------------------------------------- assistant (instance admins)
+
+
+class InstanceAssistantOut(BaseModel):
+    server: dict[str, str] = Field(description="SHOAL_ASSISTANT_* on this server.")
+    instance: dict[str, str] = Field(description="What is saved here; tenants inherit it unless their admins override it.")
+    effective: dict[str, str] = Field(description="What a tenant without its own setting uses.")
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+
+
+async def _assistant_status(ctx: Any) -> InstanceAssistantOut:
+    s = ctx.engine.settings
+    server = {"gateway": s.assistant_gateway, "model": s.assistant_model, "effort": s.assistant_effort}
+    row = await ctx.engine.store.get_instance_setting(INSTANCE_SETTING_KEY)
+    instance = await instance_assistant(ctx.engine)
+    return InstanceAssistantOut(server=server, instance=instance, effective={**server, **instance},
+                                updated_by=row.updated_by if row else None, updated_at=row.updated_at if row else None)
+
+
+@router.get("/v1/instance/assistant", tags=["instance"], response_model=InstanceAssistantOut,
+            summary="The assistant's gateway, model and effort for every tenant that does not set its own")
+async def get_instance_assistant(ctx: InstanceReaderCtxDep) -> Any:
+    return await _assistant_status(ctx)
+
+
+@router.put("/v1/instance/assistant", tags=["instance"], response_model=InstanceAssistantOut,
+            summary="Set the assistant's gateway, model and effort for every tenant (overrides SHOAL_ASSISTANT_*)")
+async def put_instance_assistant(body: AssistantSettingsIn, ctx: SystemCtxDep) -> Any:
+    own = body.model_dump(exclude_none=True)
+    if own:
+        await ctx.engine.store.put_instance_setting(INSTANCE_SETTING_KEY, own, actor=ctx.actor)
+    else:
+        await ctx.engine.store.delete_instance_setting(INSTANCE_SETTING_KEY)
+    await ctx.engine.store.audit(None, ctx.actor, "instance.assistant", "assistant", **own)
+    return await _assistant_status(ctx)

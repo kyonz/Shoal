@@ -59,9 +59,11 @@ Your conversation stays in your browser, per tenant, and is sent with each messa
 
 ## Configuration
 
-Admins pick the assistant's gateway, model and effort for their organisation in **Admin → Assistant**
-(`PUT /v1/assistant/settings`, needs `tenant:manage`). Anything they leave blank falls back to the
-server's environment variables, which operators set:
+Instance admins set the assistant's gateway, model and effort for every organisation in
+**Instance → Assistant** (`PUT /v1/instance/assistant`). Organisation admins can choose their own in
+**Admin → Assistant** (`PUT /v1/assistant/settings`, needs `tenant:manage`). An organisation's
+choice wins, then the instance's, and anything neither sets falls back to the server's
+environment variables, which operators set:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

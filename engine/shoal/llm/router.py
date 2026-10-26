@@ -223,6 +223,12 @@ class ModelRouter:
         if effort:
             config["effort"] = effort
         provider = self.engine.plugin("providers", provider_name)
+        if resource is not None and provider_name == "claude-code" and spec.config.get("mode") == "shared_account":
+            from shoal.agents.claude_code import shared_account_token
+
+            # One Claude account for every caller: decisions, graders and service accounts too.
+            config.pop("api_key", None)
+            config["oauth_token"] = await shared_account_token(self.engine, tenant_id, gateway, spec, redactor)
         return ModelTarget(gateway, provider_name, provider, model, config, rule, limits=limits, limit_scope=tenant_id)
 
     async def _secret(self, tenant_id: str, gateway: str, name: str, redactor: Redactor | None) -> str:
