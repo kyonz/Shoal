@@ -72,6 +72,16 @@ The cloud identity page (**Set up AWS**) walks through this with your real value
 
 The issuer must be HTTPS and reachable from the internet, because AWS fetches `/.well-known/openid-configuration` and `/.well-known/jwks.json` from it. The page warns when it isn't.
 
+**When Shoal isn't reachable from the internet.** The provider URL doesn't have to be Shoal's own address. It is whatever `SHOAL_OIDC_ISSUER` says. The two documents only hold Shoal's public key, so you can publish copies anywhere public over HTTPS while Shoal stays private and keeps signing tokens itself. The **AWS setup** tab shows these steps with your values filled in:
+
+1. Create an S3 bucket (for example `shoal-oidc-<account id>`) whose `.well-known/` folder is publicly readable.
+2. Set `SHOAL_OIDC_ISSUER=https://<bucket>.s3.<region>.amazonaws.com` on every Shoal server and worker, then restart. Tokens name the issuer, so it must match.
+3. Download `/.well-known/openid-configuration` and `/.well-known/jwks.json` from Shoal. After the restart they name the bucket as issuer. Upload them to `s3://<bucket>/.well-known/` with `--content-type application/json`.
+4. Use the bucket URL as the provider URL in step 1.
+5. Upload `jwks.json` again after rotating `SHOAL_SECRET_KEY` or `SHOAL_IDENTITY_SIGNING_KEY`.
+
+For quick local testing you can instead expose Shoal through a tunnel such as `cloudflared tunnel --url http://<shoal>:8080` or `ngrok`, and set `SHOAL_OIDC_ISSUER` to the tunnel's HTTPS URL. AWS only needs the two `/.well-known` paths. Quick tunnels change hostname on every start, and the identity provider and trust policies name it, so use a named tunnel for anything that should keep working.
+
 For `ambient` trust this step instead gives the deployment's own role an inline policy that allows `sts:AssumeRole`, `sts:TagSession` and `sts:SetSourceIdentity` on the target role.
 
 **2. Set the role's trust policy** (role assumption). Use the generated policy exactly. With `web_identity` it looks like this:

@@ -28,6 +28,14 @@ interface RoleSetup extends Instructions {
   explain: { field: string; value: string; meaning: string }[];
 }
 
+interface IssuerHosting {
+  public: boolean;
+  problem: string | null;
+  issuer: string;
+  summary: string;
+  options: { name: string; steps: { text: string; command: string }[] }[];
+}
+
 interface TrustPolicy {
   identity: string;
   subject: string;
@@ -36,6 +44,7 @@ interface TrustPolicy {
   role_arn: string;
   role_name: string;
   account_setup: AccountSetup;
+  issuer_hosting?: IssuerHosting;
   role_setup: RoleSetup;
   notes: string[];
 }
@@ -79,7 +88,7 @@ function HowTo({ setup, method }: { setup: Instructions; method: Method }) {
   return <Command value={method === "cli" ? setup.cli : setup.terraform} />;
 }
 
-function Step({ n, title, summary, children }: { n: number; title: string; summary?: string; children: ReactNode }) {
+function Step({ n, title, summary, children }: { n: ReactNode; title: string; summary?: string; children: ReactNode }) {
   return (
     <section className="space-y-2 border-t border-border pt-4 first:border-t-0 first:pt-0">
       <div className="flex items-baseline gap-2">
@@ -89,6 +98,24 @@ function Step({ n, title, summary, children }: { n: number; title: string; summa
       {summary && <p className="text-muted">{summary}</p>}
       {children}
     </section>
+  );
+}
+
+function HostingOptions({ hosting }: { hosting: IssuerHosting }) {
+  const [option, setOption] = useState(hosting.options[0]?.name ?? "");
+  const current = hosting.options.find((o) => o.name === option) ?? hosting.options[0];
+  return (
+    <div className="space-y-3">
+      <Segmented<string> value={current?.name ?? ""} onChange={setOption} options={hosting.options.map((o) => ({ value: o.name, label: o.name }))} />
+      <ol className="list-decimal space-y-3 pl-5">
+        {current?.steps.map((step) => (
+          <li key={step.text} className="space-y-1.5">
+            <p>{step.text}</p>
+            {step.command && <Command value={step.command} />}
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -153,6 +180,11 @@ function SetupGuide({ ctx }: { ctx: EditorContext }) {
           <p className="text-muted">Fill in the role ARN and region to see the setup steps. ({error instanceof Error ? error.message : String(error)})</p>
         ) : data ? (
           <div className="space-y-4">
+            {data.issuer_hosting && !data.issuer_hosting.public && (
+              <Step n={<TriangleAlert className="size-3" />} title="First: make Shoal's identity documents public" summary={data.issuer_hosting.summary}>
+                <HostingOptions hosting={data.issuer_hosting} />
+              </Step>
+            )}
             <Step n={1} title={data.account_setup.title} summary={data.account_setup.summary}>
               <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
                 {data.account_setup.values.map((v) => (
@@ -163,6 +195,15 @@ function SetupGuide({ ctx }: { ctx: EditorContext }) {
                 ))}
               </div>
               <HowTo setup={data.account_setup} method={method} />
+              {data.issuer_hosting?.public && (
+                <details className="rounded-lg border border-border p-2">
+                  <summary className="cursor-pointer text-xs font-medium">Host the identity documents somewhere else (e.g. an S3 bucket)</summary>
+                  <div className="mt-2 space-y-3">
+                    <p className="text-muted">{data.issuer_hosting.summary}</p>
+                    <HostingOptions hosting={data.issuer_hosting} />
+                  </div>
+                </details>
+              )}
             </Step>
             <Step n={2} title={data.role_setup.title} summary={data.role_setup.summary}>
               <div className="flex items-center justify-between">
