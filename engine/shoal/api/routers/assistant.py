@@ -36,7 +36,11 @@ class Decision(BaseModel):
 
 
 class ChatIn(BaseModel):
-    namespace: str = "default"
+    namespace: str = Field("default", description="The namespace the user is in now.")
+    previous_namespace: str | None = Field(
+        None, max_length=200,
+        description="The namespace the conversation last worked in; when it differs, the assistant is told of the switch.",
+    )
     messages: list[ChatMessage] = Field(default_factory=list, max_length=400,
                                         description="The history exactly as the previous response returned it.")
     message: str | None = Field(None, max_length=20000, description="The user's new message.")
@@ -55,7 +59,7 @@ class PendingAction(BaseModel):
     summary: str
     method: str
     path: str
-    namespace: str | None = None
+    namespace: str | None = Field(None, description="Where the change lands; null for tenant-wide calls.")
     query: dict[str, Any] = Field(default_factory=dict)
     body: Any = None
     yaml: str | None = None
@@ -142,6 +146,8 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
     if not (body.message or body.decisions or body.messages):
         raise InvalidRequest("send a message")
     tenant = ctx.tenant_id
+    tenant_row = await ctx.engine.store.get_tenant(tenant)
+    tenant_name = tenant_row.name or tenant_row.slug
     if not ModelRouter.permitted(config.model, await ctx.engine.models.policy(tenant, DEFAULT_POLICY)):
         raise Forbidden(f"model '{config.model}' is not permitted by the tenant's model policy")
     try:
@@ -171,7 +177,7 @@ async def chat(body: ChatIn, request: Request, ctx: CtxDep) -> ChatOut:
             ModelClient([target]), api, request.app.openapi(), namespace=namespace,
             actor=ctx.principal.display_name or ctx.actor, page=body.page, context=body.context,
             max_turns=settings.assistant_max_turns,
-            auto_approve=body.auto_approve,
+            auto_approve=body.auto_approve, tenant=tenant_name, previous_namespace=body.previous_namespace,
         )
         try:
             result = await assistant.chat(

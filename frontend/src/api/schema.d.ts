@@ -454,6 +454,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/instance/assistant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The assistant's gateway, model and effort for every tenant that does not set its own */
+        get: operations["get_instance_assistant_v1_instance_assistant_get"];
+        /** Set the assistant's gateway, model and effort for every tenant (overrides SHOAL_ASSISTANT_*) */
+        put: operations["put_instance_assistant_v1_instance_assistant_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/providers": {
         parameters: {
             query?: never;
@@ -1933,9 +1951,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Whether the assistant is enabled, and its model */
+        /** Whether the assistant is enabled, and its gateway and model */
         get: operations["assistant_info_v1_assistant_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assistant/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Choose the assistant's gateway, model and effort for this tenant */
+        put: operations["put_assistant_settings_v1_assistant_settings_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2044,6 +2079,92 @@ export interface paths {
         post?: never;
         /** Revoke a person's credential */
         delete: operations["revoke_credential_v1_users__username__credentials__namespace___connection__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/claude-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Claude Code gateways and whether I have linked my subscription */
+        get: operations["my_gateways_v1_me_claude_code_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/claude-code/{gateway}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Link my Claude subscription with a token from `claude setup-token` */
+        put: operations["put_token_v1_me_claude_code__gateway__token_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/claude-code/{gateway}/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start signing in to my Claude subscription from the browser */
+        post: operations["start_login_v1_me_claude_code__gateway__login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/claude-code/{gateway}/login/{login_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish signing in with the code claude.ai showed */
+        post: operations["finish_login_v1_me_claude_code__gateway__login__login_id__post"];
+        /** Cancel a sign-in */
+        delete: operations["cancel_login_v1_me_claude_code__gateway__login__login_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/claude-code/{gateway}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unlink my Claude subscription */
+        delete: operations["unlink_v1_me_claude_code__gateway__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4216,6 +4337,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/claude-code/gateways/{gateway}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether a shared-account gateway is signed in */
+        get: operations["get_account_v1_claude_code_gateways__gateway__account_get"];
+        put?: never;
+        post?: never;
+        /** Sign the shared account out */
+        delete: operations["delete_account_v1_claude_code_gateways__gateway__account_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/claude-code/gateways/{gateway}/account/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Sign the gateway's shared account in with a token */
+        put: operations["put_account_token_v1_claude_code_gateways__gateway__account_token_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/claude-code/gateways/{gateway}/account/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start signing the gateway's shared account in */
+        post: operations["start_account_login_v1_claude_code_gateways__gateway__account_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/claude-code/gateways/{gateway}/account/login/{login_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish signing the shared account in */
+        post: operations["finish_account_login_v1_claude_code_gateways__gateway__account_login__login_id__post"];
+        /** Cancel signing the shared account in */
+        delete: operations["cancel_account_login_v1_claude_code_gateways__gateway__account_login__login_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4477,6 +4668,51 @@ export interface components {
             gateway: string;
             /** Model */
             model: string;
+            /** Effort */
+            effort: string;
+            /**
+             * Server
+             * @description The server's values (SHOAL_ASSISTANT_*).
+             */
+            server?: {
+                [key: string]: string;
+            };
+            /**
+             * Instance
+             * @description What instance admins set in the instance console.
+             */
+            instance?: {
+                [key: string]: string;
+            };
+            /**
+             * Defaults
+             * @description What applies where the tenant sets nothing: the instance setting, else the server's.
+             */
+            defaults?: {
+                [key: string]: string;
+            };
+            /**
+             * Overrides
+             * @description What the tenant's admins set in the admin console.
+             */
+            overrides?: {
+                [key: string]: string;
+            };
+        };
+        /** AssistantSettingsIn */
+        AssistantSettingsIn: {
+            /**
+             * Gateway
+             * @description Gateway resource or provider plugin; null inherits.
+             */
+            gateway?: string | null;
+            /**
+             * Model
+             * @description Model name; null inherits.
+             */
+            model?: string | null;
+            /** Effort */
+            effort?: ("low" | "medium" | "high" | "xhigh" | "max") | null;
         };
         /** AuditOut */
         AuditOut: {
@@ -4621,9 +4857,15 @@ export interface components {
         ChatIn: {
             /**
              * Namespace
+             * @description The namespace the user is in now.
              * @default default
              */
             namespace: string;
+            /**
+             * Previous Namespace
+             * @description The namespace the conversation last worked in; when it differs, the assistant is told of the switch.
+             */
+            previous_namespace?: string | null;
             /**
              * Messages
              * @description The history exactly as the previous response returned it.
@@ -4689,6 +4931,39 @@ export interface components {
              * @description 'max_turns' when the assistant ran out of turns for this message.
              */
             stopped?: string | null;
+        };
+        /** ClaudeCodeGatewayOut */
+        ClaudeCodeGatewayOut: {
+            /** Gateway */
+            gateway: string;
+            /** Description */
+            description: string | null;
+            /**
+             * Mode
+             * @description api_key, subscription (each person's own Claude plan) or shared_account (one account for everyone).
+             */
+            mode: string;
+            /**
+             * Problem
+             * @description Why the gateway cannot run yet, when it cannot.
+             */
+            problem?: string | null;
+            /**
+             * Linked
+             * @description Subscription mode: whether you have linked your Claude subscription.
+             */
+            linked: boolean;
+            /** Linked At */
+            linked_at?: unknown;
+            /** Expires At */
+            expires_at?: unknown;
+            /** Terms */
+            terms?: string | null;
+        };
+        /** CodeIn */
+        CodeIn: {
+            /** Code */
+            code: string;
         };
         /** CredentialIn */
         CredentialIn: {
@@ -5248,6 +5523,34 @@ export interface components {
             /** Ref */
             ref?: string | null;
         };
+        /** InstanceAssistantOut */
+        InstanceAssistantOut: {
+            /**
+             * Server
+             * @description SHOAL_ASSISTANT_* on this server.
+             */
+            server: {
+                [key: string]: string;
+            };
+            /**
+             * Instance
+             * @description What is saved here; tenants inherit it unless their admins override it.
+             */
+            instance: {
+                [key: string]: string;
+            };
+            /**
+             * Effective
+             * @description What a tenant without its own setting uses.
+             */
+            effective: {
+                [key: string]: string;
+            };
+            /** Updated By */
+            updated_by?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** JoinIn */
         JoinIn: {
             /** Hub Url */
@@ -5380,6 +5683,18 @@ export interface components {
              * @enum {string}
              */
             mode: "read" | "read_write";
+        };
+        /** LoginOut */
+        LoginOut: {
+            /** Login Id */
+            login_id: string;
+            /**
+             * Url
+             * @description Open this, sign in to Claude, and paste the code it shows into finish.
+             */
+            url: string;
+            /** Expires In */
+            expires_in: number;
         };
         /** LoginProvider */
         LoginProvider: {
@@ -5731,7 +6046,10 @@ export interface components {
             method: string;
             /** Path */
             path: string;
-            /** Namespace */
+            /**
+             * Namespace
+             * @description Where the change lands; null for tenant-wide calls.
+             */
             namespace?: string | null;
             /** Query */
             query?: {
@@ -6183,6 +6501,25 @@ export interface components {
              */
             session: string;
             tenant: components["schemas"]["TenantOut"] | null;
+        };
+        /** SharedAccountOut */
+        SharedAccountOut: {
+            /** Gateway */
+            gateway: string;
+            /** Mode */
+            mode: string;
+            /**
+             * Secret
+             * @description The shared secret that holds the account's token.
+             */
+            secret: string;
+            /** Signed In */
+            signed_in: boolean;
+            /**
+             * Note
+             * @default Shared account mode runs every call through this gateway, for everyone in the organisation, on the one Claude account an admin signed in. Anthropic's terms do not allow one person's Free, Pro or Max plan to be used by more than one individual, so keep it to single-person instances and testing.
+             */
+            note: string;
         };
         /** SignalIn */
         SignalIn: {
@@ -6651,6 +6988,14 @@ export interface components {
              * @description Managed by a member deployment through federation.
              */
             federated: boolean;
+        };
+        /** TokenIn */
+        TokenIn: {
+            /**
+             * Token
+             * @description The token `claude setup-token` printed.
+             */
+            token: string;
         };
         /** TriggerTestIn */
         TriggerTestIn: {
@@ -7777,6 +8122,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TemporalCheck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_instance_assistant_v1_instance_assistant_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceAssistantOut"];
+                };
+            };
+        };
+    };
+    put_instance_assistant_v1_instance_assistant_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssistantSettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceAssistantOut"];
                 };
             };
             /** @description Validation Error */
@@ -11584,6 +11982,39 @@ export interface operations {
             };
         };
     };
+    put_assistant_settings_v1_assistant_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssistantSettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     chat_v1_assistant_chat_post: {
         parameters: {
             query?: never;
@@ -11774,6 +12205,183 @@ export interface operations {
                 username: string;
                 namespace: string;
                 connection: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_gateways_v1_me_claude_code_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeCodeGatewayOut"][];
+                };
+            };
+        };
+    };
+    put_token_v1_me_claude_code__gateway__token_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TokenIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_login_v1_me_claude_code__gateway__login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finish_login_v1_me_claude_code__gateway__login__login_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_login_v1_me_claude_code__gateway__login__login_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unlink_v1_me_claude_code__gateway__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
             };
             cookie?: never;
         };
@@ -17179,6 +17787,200 @@ export interface operations {
                         [key: string]: unknown;
                     };
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_v1_claude_code_gateways__gateway__account_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_account_v1_claude_code_gateways__gateway__account_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_account_token_v1_claude_code_gateways__gateway__account_token_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TokenIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_account_login_v1_claude_code_gateways__gateway__account_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finish_account_login_v1_claude_code_gateways__gateway__account_login__login_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_account_login_v1_claude_code_gateways__gateway__account_login__login_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gateway: string;
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -221,3 +221,47 @@ async def test_unsaved_editor_content_reaches_the_model(api):
     assert r.status_code == 200, r.text
     assert draft in script.requests[0].system
     assert "may differ from what is saved" in script.requests[0].system
+
+
+async def test_namespace_switch_is_followed_and_changes_say_where(api):
+    r = await api.put("/v1/namespaces/ops", json={})
+    assert r.status_code in (200, 201), r.text
+    script = play(
+        [tool("apply_resources", {"yaml": HELLO_YAML, "summary": "Create workflow word-count"}, "t1")],
+        [{"type": "text", "text": "Not now."}],
+        [tool("apply_resources", {"yaml": HELLO_YAML, "summary": "Create workflow word-count"}, "t2"),
+         tool("api_call", {"method": "POST", "path": "/v1/namespaces/ops/workflows/word-count/runs",
+                           "body": {"inputs": {"text": "a b"}}, "summary": "Run word-count"}, "t3")],
+        [{"type": "text", "text": "Done in `ops`."}],
+    )
+    r = await api.post("/v1/assistant/chat", json={"message": "make a word counter", "namespace": "default"})
+    out = r.json()
+    assert out["pending"][0]["namespace"] == "default"
+    assert "tenant Acme, namespace `default`" in script.requests[0].system
+    # the tool call is pinned to the namespace the card showed
+    assert out["messages"][-1]["content"][0]["input"]["namespace"] == "default"
+
+    # the user switched to ops and replies instead of approving
+    r = await api.post("/v1/assistant/chat", json={"messages": out["messages"], "message": "do it in here instead",
+                                                    "namespace": "ops", "previous_namespace": "default"})
+    assert r.status_code == 200, r.text
+    turn = script.requests[1].messages[-1]["content"]
+    assert [b["type"] for b in turn] == ["tool_result", "text", "text"]
+    assert turn[1]["text"].startswith("[Shoal: namespace changed]") and "`default` to `ops`" in turn[1]["text"]
+    assert "namespace `ops`" in script.requests[1].system
+
+    r = await api.post("/v1/assistant/chat", json={"messages": r.json()["messages"], "message": "go",
+                                                    "namespace": "ops", "previous_namespace": "ops"})
+    out = r.json()
+    assert isinstance(script.requests[2].messages[-1]["content"], str)  # no note without a switch
+    assert {p["id"]: p["namespace"] for p in out["pending"]} == {"t2": "ops", "t3": "ops"}
+
+    # approving after switching away still applies where the card said
+    r = await api.post("/v1/assistant/chat", json={"messages": out["messages"], "namespace": "default",
+                                                    "previous_namespace": "ops",
+                                                    "decisions": {"t2": {"approve": True}, "t3": {"approve": True}}})
+    assert r.status_code == 200, r.text
+    results = script.last_results()
+    assert '"namespace": "ops"' in results["t2"]["content"] and '"namespace": "ops"' in results["t3"]["content"]
+    assert (await api.get("/v1/namespaces/ops/workflows/word-count")).status_code == 200
+    assert (await api.get("/v1/namespaces/default/workflows/word-count")).status_code == 404

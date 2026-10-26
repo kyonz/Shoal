@@ -14,6 +14,7 @@ a decision per action, and the loop executes the approved ones and carries on.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
@@ -22,7 +23,7 @@ import httpx
 import yaml
 
 from shoal.agents.providers.base import ModelRequest, ToolDef
-from shoal.assistant.prompt import SYSTEM, context_note
+from shoal.assistant.prompt import SYSTEM, context_note, namespace_changed
 from shoal.core.errors import InvalidRequest
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ MAX_RESULT_CHARS = 24_000
 BLOCKED_PREFIXES = ("/v1/assistant", "/v1/auth", "/v1/hooks", "/scim", "/v1/federation/enroll")
 MUTATING_TOOLS = frozenset({"apply_resources", "api_call"})
 DECLINED = "The user declined this action."
+_NS_PATH = re.compile(r"^/v1/namespaces/([^/?]+)")
 
 _PATH = {"type": "string", "description": "API path starting with /v1/, e.g. /v1/namespaces/default/workflows"}
 TOOLS = [
@@ -137,12 +139,16 @@ class Assistant:
 
     def __init__(self, model: ModelClient, api: httpx.AsyncClient, openapi: dict[str, Any], *,
                  namespace: str, actor: str, page: str | None = None, context: str | None = None, max_turns: int = 16,
-                 max_tokens: int = 16000, auto_approve: bool = False):
+                 max_tokens: int = 16000, auto_approve: bool = False, tenant: str | None = None,
+                 previous_namespace: str | None = None):
         self.model = model
         self.api = api
         self.openapi = openapi
         self.namespace = namespace
-        self.system = f"{SYSTEM}\n# Context\n\n{context_note(namespace, page, actor, context)}\n"
+        self.system = f"{SYSTEM}\n# Context\n\n{context_note(namespace, page, actor, context, tenant)}\n"
+        # Set when the user switched namespace since the last turn; told to the model in this turn.
+        self.switched = namespace_changed(previous_namespace, namespace) \
+            if previous_namespace and previous_namespace != namespace else None
         self.max_turns = max_turns
         self.max_tokens = max_tokens
         self.auto_approve = auto_approve
@@ -165,6 +171,8 @@ class Assistant:
                     note = (decision or {}).get("note") or ("The user sent a new message instead." if message else "")
                     results.append(_result(call["id"], f"{DECLINED} {note}".strip(), error=True))
             content: list[dict[str, Any]] = results
+            if self.switched:
+                content.append({"type": "text", "text": self.switched})
             if message:
                 content.append({"type": "text", "text": message})
             last = messages[-1]
@@ -173,7 +181,9 @@ class Assistant:
             else:
                 messages.append({"role": "user", "content": content})
         elif message:
-            messages.append({"role": "user", "content": message})
+            messages.append({"role": "user", "content": [{"type": "text", "text": self.switched},
+                                                         {"type": "text", "text": message}]
+                             if self.switched else message})
         elif not messages or messages[-1]["role"] != "user":
             raise InvalidRequest("send a message")
 
@@ -217,6 +227,8 @@ class Assistant:
         try:
             if call["name"] == "apply_resources":
                 ns = args.get("namespace") or self.namespace
+                # Pin the namespace the card shows, so approving after a namespace switch applies it there.
+                call.setdefault("input", {})["namespace"] = ns
                 status, body = await self._request("POST", "/v1/apply", query={"namespace": ns, "dry_run": "true"},
                                                    content=str(args.get("yaml", "")), yaml_body=True)
                 if status >= 400:
@@ -227,7 +239,8 @@ class Assistant:
             if method not in ("POST", "PUT", "PATCH", "DELETE"):
                 return {"error": "api_call is for POST, PUT, PATCH or DELETE; use api_get to read"}
             path = _check_path(args.get("path", ""))
-            return {**base, "method": method, "path": path, "query": args.get("query") or {}, "body": args.get("body")}
+            return {**base, "method": method, "path": path, "namespace": _call_namespace(path, args.get("query")),
+                    "query": args.get("query") or {}, "body": args.get("body")}
         except ValueError as exc:
             return {"error": str(exc)}
 
@@ -256,6 +269,11 @@ class Assistant:
                 return _result(call["id"], f"unknown tool {name}", error=True)
         except ValueError as exc:
             return _result(call["id"], str(exc), error=True)
+        if name in MUTATING_TOOLS:
+            # Where the change landed, so the reply can tell the user.
+            ns = query["namespace"] if name == "apply_resources" else _call_namespace(args.get("path", ""), args.get("query"))
+            where = {"namespace": ns} if ns else {"scope": "tenant-wide"}
+            return _result(call["id"], {"status": status, **where, "body": body}, error=status >= 400)
         return _result(call["id"], {"status": status, "body": body}, error=status >= 400)
 
     async def _request(self, method: str, path: str, *, query: dict[str, Any] | None = None,
@@ -321,6 +339,15 @@ def _result(tool_use_id: str, content: Any, *, error: bool = False) -> dict[str,
     if error:
         block["is_error"] = True
     return block
+
+
+def _call_namespace(path: str, query: Any) -> str | None:
+    """The namespace an API call acts in: the /v1/namespaces/{ns}/ path segment, else a namespace query parameter."""
+    match = _NS_PATH.match(unquote(path or ""))
+    if match:
+        return match.group(1)
+    value = query.get("namespace") if isinstance(query, dict) else None
+    return str(value) if value else None
 
 
 def _kinds(text: str) -> list[dict[str, str]]:
