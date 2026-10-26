@@ -9,7 +9,10 @@ import { ApiError } from "@/api/client";
 import { AuthProvider } from "@/lib/auth";
 import { FEDERATION_DISCONNECTED, FEDERATION_REVOKED, federationCode, noteFederationError, noteSuccess } from "@/lib/federation";
 import { ConfirmProvider, TooltipProvider } from "@/components/ui";
+import { recoverFromStaleChunks } from "@/lib/stale";
 import App from "./App";
+
+recoverFromStaleChunks();
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: noteFederationError, onSuccess: noteSuccess }),

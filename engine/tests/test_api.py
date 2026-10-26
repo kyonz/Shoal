@@ -601,3 +601,22 @@ async def test_target_list_resolve_and_preview(admin):
     assert r.status_code == 422
     r = await admin.get("/v1/namespaces/default/target-lists/nope/resolve")
     assert r.status_code == 404
+
+
+async def test_ui_cache_headers(engine, tmp_path):
+    """index.html is revalidated so a redeploy is picked up; hashed chunks are immutable; a gone chunk is a 404."""
+    (tmp_path / "ui" / "assets").mkdir(parents=True)
+    (tmp_path / "ui" / "index.html").write_text("<html></html>")
+    (tmp_path / "ui" / "assets" / "Overview-abc123.js").write_text("export default 1")
+    engine.settings.static_dir = str(tmp_path / "ui")
+    app = create_app(engine=engine)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shoal.test") as client:
+        for path in ("/", "/admin", "/ns/default/overview"):
+            r = await client.get(path)
+            assert r.status_code == 200 and r.text == "<html></html>"
+            assert r.headers["cache-control"] == "no-cache"
+        r = await client.get("/assets/Overview-abc123.js")
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+        r = await client.get("/assets/Overview-old999.js")
+        assert r.status_code == 404
