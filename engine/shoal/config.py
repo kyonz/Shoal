@@ -257,6 +257,10 @@ class Settings(BaseSettings):
             ipaddress.ip_network(proxy, strict=False)  # raises on a typo at start-up, not on every request
         return value
 
+    claude_code_cli: str = Field(
+        "claude", description="Claude Code CLI the API server runs for browser sign-in to a Claude subscription (claude setup-token)."
+    )
+
     audit_retention_days: int = Field(400, ge=0, description="Delete audit entries older than this (0 keeps them forever).")
     run_event_retention_days: int = Field(
         400, ge=0, description="Delete run events older than this once their run has finished (0 keeps them forever)."

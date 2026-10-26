@@ -26,7 +26,7 @@ resource that selects the plugin (a SandboxProfile's `config`, a Gateway's `conf
 | `shoal.secrets` | `SecretProvider` | Where secret values are read from (and written to, when `writable`) | `check_secret_provider` | |
 | `shoal.eval_sinks` | `EvalSink` | Exports eval results and traces to an eval platform; imports datasets | `check_eval_sink` | |
 | `shoal.decision_providers` | `DecisionProvider` | Answers typed questions (choice, score, boolean) | `check_decision_provider` | |
-| `shoal.agent_runtimes` | `AgentRuntime` | Runs an agent: tool loop, CLI agent, remote agent | | Any A2A agent via `a2a` |
+| `shoal.agent_runtimes` | `AgentRuntime` | Runs an agent: tool loop, CLI agent, Claude Code, remote agent | | Any A2A agent via `a2a` |
 | `shoal.credentials` | `CredentialProvider` | Issues short-lived cloud credentials for a CloudIdentity | | |
 | `shoal.orchestrators` | `Orchestrator` | Drives runs: the built-in Postgres executor, or Temporal | | |
 | `shoal.dispatch_queues` | `DispatchQueue` | Tells workers a run is due: the runs table itself, Amazon SQS, or your queue | `check_dispatch_queue` | |
@@ -89,7 +89,10 @@ map.
 ## Agent runtimes and cloud credentials
 
 Agent runtimes receive an `AgentInvocation` (agent, prompt, tools, sandbox, model client) and
-return an `AgentResult` whose outputs match the step's schema. Cloud credential providers issue
+return an `AgentResult` whose outputs match the step's schema. `claude-code`
+(`shoal/agents/claude_code.py`) is the reference for a runtime that brings its own agent loop:
+it signs in through a Gateway of the same type and streams the CLI's events into the run; see
+[Claude Code agents](claude-code.md). Cloud credential providers issue
 an STS-style session for a `CloudIdentity`. See `shoal/cloud/aws.py`.
 
 ## Skill sources (`shoal.skill_sources`)

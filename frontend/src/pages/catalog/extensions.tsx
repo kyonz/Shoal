@@ -9,6 +9,7 @@ import { useCan } from "@/lib/auth";
 import { nsPath } from "@/lib/ns";
 import { Button, Card, CardHeader, CodeEditor, EmptyState, Field, Input, NativeSelect } from "@/components/ui";
 import { JsonField, KeyValueInput, SchemaForm } from "@/components/forms/SchemaForm";
+import { ClaudeCodeGatewaySection } from "./ClaudeCodeGateway";
 import type { EditorContext, EditorExtension } from "./ResourceEditorPage";
 import { looksLikeCredential } from "./kinds";
 import { Combo, MarkdownEditor, ModelCombo, ResourceMultiPicker, ResourcePicker, ToolsPicker, useProviders, useSandboxBackends } from "./widgets";
@@ -60,6 +61,7 @@ export const agentExtension: EditorExtension = {
       <NativeSelect value={(value as string) ?? "tool-loop"} onChange={(e) => onChange(e.target.value === "tool-loop" ? undefined : e.target.value)}>
         <option value="tool-loop">tool-loop — Shoal's own model ↔ tools loop</option>
         <option value="cli">cli — run a coding agent CLI in the sandbox</option>
+        <option value="claude-code">claude-code — Claude Code (claude -p) through a claude-code gateway</option>
         <option value="a2a">a2a — delegate to a remote A2A agent</option>
       </NativeSelect>
     ),
@@ -359,7 +361,12 @@ export const gatewayExtension: EditorExtension = {
     type: ({ value, onChange }) => <ProviderSelect value={value} onChange={onChange} />,
     api_key_secret: ({ value, onChange }) => <SharedSecretPicker value={value} onChange={onChange} />,
   }),
-  sections: (ctx) => <GatewayHeaders ctx={ctx} />,
+  sections: (ctx) => (
+    <>
+      {ctx.spec.type === "claude-code" && <ClaudeCodeGatewaySection ctx={ctx} />}
+      <GatewayHeaders ctx={ctx} />
+    </>
+  ),
 };
 
 function GatewayHeaders({ ctx }: { ctx: EditorContext }) {

@@ -64,6 +64,7 @@ slack = "shoal.integrations.slack:SlackIntegration"
 anthropic = "shoal.agents.providers.anthropic:AnthropicProvider"
 scripted = "shoal.agents.providers.scripted:ScriptedProvider"
 openai-compatible = "shoal.agents.providers.openai_compat:OpenAICompatibleProvider"
+claude-code = "shoal.agents.claude_code:ClaudeCodeGatewayProvider"
 
 [project.entry-points."shoal.decision_providers"]
 llm = "shoal.decisions.llm:LLMDecisionProvider"
@@ -81,6 +82,7 @@ registry = "shoal.skills.registry:RegistrySkillSource"
 tool-loop = "shoal.agents.tool_loop:ToolLoopRuntime"
 cli = "shoal.agents.cli_runtime:CliRuntime"
 a2a = "shoal.agents.a2a_runtime:A2ARuntime"
+claude-code = "shoal.agents.claude_code:ClaudeCodeRuntime"
 
 [project.entry-points."shoal.orchestrators"]
 builtin = "shoal.runtime.orchestrator:BuiltinOrchestrator"

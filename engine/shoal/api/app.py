@@ -35,6 +35,7 @@ from shoal.api.routers import (
     assistant,
     auth,
     blueprints,
+    claude_code,
     credentials,
     evals,
     federation,
@@ -403,7 +404,7 @@ def create_app(
         expose_headers=["Location", "X-Request-Id"],
     )
     for module in (system, instance, auth, hooks, scim, federation, admin, runs, evals, a2a, blueprints, skill_sources, assistant,
-                   credentials, resources):
+                   credentials, claude_code, resources):
         app.include_router(module.router)
     if engine.settings.static_dir:
         _mount_frontend(app, engine.settings.static_dir)

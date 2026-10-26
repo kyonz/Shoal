@@ -267,6 +267,7 @@ class, an entry point and a contract test), so new ones install without engine c
 
 ### Integrations, campaigns and blueprints
 - **GitHub, Jira, Slack, MCP, webhooks and schedules** are built in, each with triggers, actions and metadata queries ([GitHub](docs/github/README.md), [Jira](docs/jira/README.md) (its triggers can [register their own webhooks](docs/jira/webhooks.md)), [triggers](docs/runs/triggers.md)). Approvals and questions can go to Slack with buttons and forms, custom Block Kit messages can resume the run that posted them, and a channel can be wired to a workflow as a bot ([Slack guide](docs/slack/README.md)). Write your own in Python with the SDK and test kit, or in any language with the remote protocol ([guide](docs/integrations.md)).
+- **Claude Code agents:** run Claude Code headless (`claude -p`) in a sandbox, with its events streamed into the run, on an API key or on each person's own Claude subscription, linked by signing in from the UI ([guide](docs/claude-code.md)).
 - **Per-user credentials:** a connection can use a shared credential or each person's own token or OAuth sign-in. A step that needs someone's credential waits for them to connect, then resumes ([guide](docs/connections/README.md#personal-credentials)).
 - **Skill marketplaces:** import `SKILL.md` skills from git repositories, registries or any skill source plugin, with version labels, upgrade diffs and rollback ([guide](docs/skills.md)).
 - **Campaigns** fan one workflow out over many targets (every repo in an org) with concurrency, budgets, rate limits and progress tracking ([guide](docs/runs/campaigns.md)).
@@ -314,6 +315,7 @@ Every guide is also built into the web UI under **Docs**. Start at the [document
 | [Workflows](docs/workflows/README.md) | Writing workflows: [steps](docs/workflows/steps.md), [expressions](docs/workflows/expressions.md), [script steps](docs/workflows/script-steps.md), the [visual builder](docs/workflows/builder.md) and [versions](docs/workflows/versions.md) |
 | [Runs](docs/runs/README.md) | Following runs, [triggers](docs/runs/triggers.md), [approvals](docs/runs/approvals.md), [signals and waits](docs/runs/signals.md) and [campaigns and target lists](docs/runs/campaigns.md) |
 | [Agents](docs/agents/README.md) | Agents, tools and runtimes, [gateways and model policies](docs/agents/gateways.md), [decisions](docs/agents/decisions.md) and [sandboxes](docs/agents/sandboxes.md) |
+| [Claude Code agents](docs/claude-code.md) | Running Claude Code headless on an API key or each person's own Claude plan |
 | [GitHub](docs/github/README.md) | Setting up GitHub, PR triggers, actions, and [attribution and merge governance](docs/github/attribution.md) |
 | [Jira](docs/jira/README.md) | Setting up Jira, issue triggers, actions and the bugfix journey |
 | [Slack](docs/slack/README.md) | Setting up Slack, approvals, interactive messages, channel bots and slash commands |
